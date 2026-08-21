@@ -1,0 +1,25 @@
+# Varda — a dimensional modeling profile for LinkML
+# https://github.com/varda-project/varda
+#
+# Submit this file as `varda/.htaccess` to https://github.com/perma-id/w3id.org
+# Only the redirect targets below ever change; the IRIs they serve are
+# permanent and are embedded in published schemas.
+
+Options +FollowSymLinks
+RewriteEngine on
+
+# --- Machine-readable -------------------------------------------------------
+# A tool asking for YAML gets the profile source, so that
+# `imports: - https://w3id.org/varda` can resolve over the network.
+
+RewriteRule ^varda\.yaml$ https://raw.githubusercontent.com/varda-project/varda/main/src/varda/profile/varda.yaml [R=302,L]
+
+RewriteCond %{HTTP_ACCEPT} (text/yaml|application/yaml|text/x-yaml) [NC]
+RewriteRule ^$ https://raw.githubusercontent.com/varda-project/varda/main/src/varda/profile/varda.yaml [R=302,L]
+
+# --- Human-readable ---------------------------------------------------------
+# Everything else is documentation. Terms resolve to their anchor on the
+# reference page, so https://w3id.org/varda/role lands on the `role` entry.
+
+RewriteRule ^$ https://varda-project.github.io/varda/ [R=302,L]
+RewriteRule ^(.*)$ https://varda-project.github.io/varda/$1 [R=302,L]
