@@ -45,8 +45,8 @@ comment, 418 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 11 annotations, 5 enums — and 87 tests in
-1,300 lines.
+Plus `profile/varda.yaml` — 11 annotations, 5 enums — and 89 tests in
+1,333 lines.
 
 ### The four seams
 
@@ -110,6 +110,18 @@ difference between machines nothing in either repository explains.
 `varda.toml` overrides everything, because the repository can see itself and
 an upstream cannot.
 
+**I10 — The profile namespace never changes.** The schema `id` is
+`https://w3id.org/varda` and the `varda:` prefix expands to
+`https://w3id.org/varda/`. Both are copied into the `prefixes:` block of
+every model anyone writes and into every RDF graph generated from one, so
+changing either silently invalidates every model in the wild.
+
+A w3id.org IRI is used rather than a hostname this project owns precisely so
+that the *target* can move while the *identifier* does not — a domain can
+lapse or be sold, and a lapsed domain baked into published schemas is
+unrecoverable. Redirects live in `w3id/.htaccess`; changing where the IRI
+points needs no change to the package. *`test_profile_namespace_is_pinned`*
+
 **I9 — The typed boundary holds.** `model.py` is the wall along the untyped
 LinkML runtime; everything it returns is a concrete type. `mypy --strict`
 passes, and `warn_return_any` is the rule doing the work. Do not switch it
@@ -171,9 +183,39 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 ```
 
 `run_all.sh` is the gate. It runs, in order: `ruff check`, `ruff format
---check`, `mypy --strict`, `pytest`, then `varda check` and `varda generate`
-against `examples/retail.yaml`. All five must pass. There is no
-"warnings are fine" mode.
+--check`, `actionlint`, `mypy --strict`, `pytest`, then `varda check
+--strict` and `varda generate` against `examples/retail.yaml`, then
+regenerates and diffs the two trees to prove output is deterministic. All
+must pass. There is no "warnings are fine" mode.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull
+request, in five parallel jobs:
+
+| Job | What it does |
+| --- | --- |
+| `lint` | `ruff check` and `ruff format --check`, as separate steps so a failure says which |
+| `types` | `mypy --strict`. One interpreter only — `python_version` is pinned to 3.11, so a matrix would repeat one answer |
+| `test` | `pytest` on 3.11, 3.12 and 3.13 on Linux, plus 3.12 on macOS and Windows |
+| `gate` | `./run_all.sh` — the same script run locally |
+| `package` | builds, `twine check --strict`, asserts the profile and `py.typed` are in the wheel, then installs the wheel in a clean venv and runs the CLI from it |
+
+The `gate` job invoking `run_all.sh` rather than restating its steps is
+deliberate: CI and the local gate cannot drift apart, and anything added to
+one is added to both. When `varda verify` lands in 0.2 it goes in
+`run_all.sh` and CI picks it up with no change to the workflow.
+
+The two extra `test` cells are for path handling, not for language
+differences. This package walks parent directories looking for `varda.toml`
+and joins POSIX-style artifact paths, so a separator bug is plausible on
+Windows in a way a 3.13-only language bug is not.
+
+The `package` job's wheel check earns its place: the profile is data, and
+setuptools will happily build a wheel without it if `package-data` is
+misconfigured. That failure appears only for someone who `pip install`ed —
+every rule fires "unknown annotation" because the vocabulary is not
+there — and never for anyone working from a source checkout.
 
 ### House rules
 
@@ -208,10 +250,39 @@ Name reserved on PyPI as `varda`. Repository `varda-project/varda`, docs at
 `varda-project.readthedocs.io` — the bare `varda` GitHub org and
 readthedocs subdomain are held by an unrelated bioinformatics project.
 
-```console
-python -m build && twine upload dist/*
-```
+Releases go out through `.github/workflows/release.yml`, triggered by
+publishing a GitHub release. It re-runs the whole gate, checks the tag
+agrees with the version in `pyproject.toml`, builds, and uploads via **PyPI
+Trusted Publishing** — no API token is stored in the repository. A token in
+repository secrets is a long-lived credential granting upload rights to
+anyone who can run a workflow; OIDC issues one scoped to this workflow and
+valid for minutes.
 
-Before the first real release: reserve the PyPI name with a `0.0.0`
-placeholder if it is not already taken. It is the only part of this that
-somebody else can take while the work is in progress.
+The gate runs again at release time rather than trusting an earlier green
+CI run, because publishing is the one irreversible action here: a version
+cannot be re-uploaded to PyPI once it exists, even after a yank.
+
+`workflow_dispatch` publishes to TestPyPI, which is worth exercising before
+the first real upload.
+
+**One-time setup on PyPI**, at
+<https://pypi.org/manage/account/publishing/> — add a pending publisher for
+project `varda`, owner `varda-project`, repository `varda`, workflow
+`release.yml`, environment `pypi`. Until that exists the release workflow
+fails at the upload step, which is the intended behaviour rather than a
+surprise. Attaching required reviewers to the `pypi` environment in
+repository settings puts a human between a merged tag and a permanent
+upload.
+
+### Before the first real release
+
+1. **Reserve the PyPI name** with a `0.0.0` placeholder. It is the only part
+   of this that somebody else can take while the work is in progress.
+2. **Register the w3id namespace** — open a pull request against
+   <https://github.com/perma-id/w3id.org> adding `varda/.htaccess`, using the
+   file prepared in `w3id/`. Until it merges `https://w3id.org/varda`
+   returns 404. Nothing in the package depends on it resolving — the profile
+   is read from the installed package, never over the network — so this is
+   not a release blocker, but it is what lets somebody follow the IRI to find
+   out what `varda:additivity` means.
+3. **Set up Trusted Publishing** on PyPI, as above.

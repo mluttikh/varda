@@ -1,0 +1,25 @@
+version: 2
+
+# Actions are pinned to major tags (`@v4`), which still float within a major
+# version. Dependabot is what turns "eventually broken by a v5" into a pull
+# request that says so.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: deps
+    # The runtime dependency is deliberately a single lower bound
+    # (`linkml-runtime>=1.9`). Grouping the dev tools keeps their routine
+    # bumps to one pull request a month instead of four.
+    groups:
+      dev-tools:
+        patterns: ["ruff", "mypy", "pytest", "types-*", "build", "twine"]

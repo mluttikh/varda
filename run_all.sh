@@ -12,6 +12,10 @@ step "ruff check"
 step "ruff format --check"
 "$PY/ruff" format --check .
 
+step "actionlint"
+"$PY/actionlint" .github/workflows/*.yml
+echo "workflows ok"
+
 step "mypy --strict"
 "$PY/mypy"
 

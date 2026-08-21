@@ -1,0 +1,127 @@
+name: Release
+
+# Publishes to PyPI via Trusted Publishing (OIDC) — no API token is stored in
+# this repository. See the setup note at the bottom of this file; the first
+# release will fail without it, and that failure is the intended behaviour
+# rather than a surprise.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Where to publish
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+permissions:
+  contents: read
+
+jobs:
+
+  verify:
+    name: verify and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e ".[dev]" build twine
+
+      # Publishing is the one irreversible step in this repository: a version
+      # cannot be re-uploaded to PyPI once it exists, even after a yank. So
+      # the whole gate runs again here rather than trusting that CI passed on
+      # some earlier commit.
+      - name: ./run_all.sh
+        run: PY="$(dirname "$(command -v python)")" ./run_all.sh
+
+      # A tag that disagrees with the version in the package produces a
+      # release whose name and contents differ — discoverable only by someone
+      # who installs it and wonders why the version is wrong.
+      - name: tag matches package version
+        if: github.event_name == 'release'
+        run: |
+          python - <<'PY'
+          import os, sys, tomllib
+          with open("pyproject.toml", "rb") as fh:
+              declared = tomllib.load(fh)["project"]["version"]
+          tag = os.environ["TAG"].removeprefix("v")
+          if tag != declared:
+              sys.exit(f"tag {tag!r} != pyproject version {declared!r}")
+          print(f"tag and version agree: {declared}")
+          PY
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+
+      - name: build
+        run: python -m build
+
+      - name: twine check
+        run: twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    name: publish to TestPyPI
+    needs: verify
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/varda
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    name: publish to PyPI
+    needs: verify
+    if: github.event_name == 'release' || inputs.target == 'pypi'
+    runs-on: ubuntu-latest
+    # Attach required reviewers to this environment in repository settings to
+    # put a human between a merged tag and a permanent upload.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/varda
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+# ---------------------------------------------------------------------------
+# One-time setup, on PyPI rather than here
+#
+# At https://pypi.org/manage/account/publishing/ add a pending publisher:
+#
+#     PyPI project name   varda
+#     Owner               varda-project
+#     Repository name     varda
+#     Workflow name       release.yml
+#     Environment name    pypi
+#
+# Repeat at https://test.pypi.org/manage/account/publishing/ with environment
+# name `testpypi` to use the workflow_dispatch path.
+#
+# Trusted Publishing is used instead of an API token because a token in
+# repository secrets is a long-lived credential that grants upload rights to
+# anyone who can run a workflow. OIDC issues a token scoped to this one
+# workflow, valid for minutes.
+# ---------------------------------------------------------------------------

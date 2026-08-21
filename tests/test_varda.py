@@ -45,7 +45,7 @@ def build(tmp_path: pathlib.Path, classes: dict[str, Any]) -> DimensionalModel:
         "name": "t",
         "prefixes": {
             "linkml": "https://w3id.org/linkml/",
-            "varda": "https://varda-project.org/profile/varda/",
+            "varda": "https://w3id.org/varda/",
         },
         "default_prefix": "t",
         "default_range": "string",
@@ -1298,3 +1298,36 @@ def test_config_is_found_by_searching_upward(
     deep = tmp_path / "a" / "b" / "c"
     deep.mkdir(parents=True)
     assert registry.find_config(deep) == tmp_path / "varda.toml"
+
+
+# ---------------------------------------------------------------------------
+# The namespace — the one identifier that can never change
+# ---------------------------------------------------------------------------
+
+
+def test_profile_namespace_is_pinned() -> None:
+    """The profile IRI is permanent, and this test says so out loud.
+
+    It is copied into the `prefixes:` block of every model anyone writes and
+    into every RDF graph generated from one, so changing it silently
+    invalidates every model in the wild. A w3id.org identifier is used
+    precisely so the redirect target can move without the identifier moving;
+    if a future change wants a different target, it belongs in the w3id
+    `.htaccess`, not here.
+
+    This assertion is not testing behaviour. It is a tripwire, so that
+    changing the namespace has to be deliberate.
+    """
+    view = registry.varda_extension().profile_view
+    assert view is not None
+    assert str(view.schema.id) == "https://w3id.org/varda"
+    assert view.schema.prefixes["varda"].prefix_reference == (
+        "https://w3id.org/varda/"
+    )
+
+
+def test_example_declares_the_same_namespace() -> None:
+    """The shipped example must not drift from the profile it annotates."""
+    model = DimensionalModel.load(RETAIL)
+    declared = model.view.schema.prefixes["varda"].prefix_reference
+    assert str(declared) == "https://w3id.org/varda/"
