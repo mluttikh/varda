@@ -9,7 +9,7 @@ description: >-
 
 prefixes:
   linkml: https://w3id.org/linkml/
-  varda: https://varda-project.org/profile/varda/
+  varda: https://w3id.org/varda/
   retail: https://example.org/retail/
 default_prefix: retail
 default_range: string

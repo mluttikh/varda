@@ -1,5 +1,9 @@
 # Varda
 
+[![CI](https://github.com/varda-project/varda/actions/workflows/ci.yml/badge.svg)](https://github.com/varda-project/varda/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/varda)](https://pypi.org/project/varda/)
+[![Python](https://img.shields.io/pypi/pyversions/varda)](https://pypi.org/project/varda/)
+
 **Dimensional modeling for [LinkML](https://linkml.io).**
 
 Varda is a *profile* of LinkML: a small vocabulary that lets you say a class

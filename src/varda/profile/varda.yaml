@@ -1,4 +1,17 @@
-id: https://varda-project.org/profile/varda
+# The identifier is a w3id.org permanent IRI, resolved by the W3C Permanent
+# Identifier Community Group to wherever Varda's documentation currently
+# lives. It is deliberately not a hostname this project owns.
+#
+# The reason is that this IRI is copied into the `prefixes:` block of every
+# model anyone writes, and into every RDF graph generated from one. It can
+# therefore never change. A domain can lapse, be sold, or outlive the
+# organisation that registered it, and a lapsed domain baked into published
+# schemas is unrecoverable. w3id separates the identifier, which is
+# permanent, from the redirect target, which is a one-line change.
+#
+# LinkML itself does the same: `https://w3id.org/linkml/` redirects into
+# GitHub Pages. Registered at github.com/perma-id/w3id.org.
+id: https://w3id.org/varda
 name: varda
 version: 0.1.0
 title: The Varda profile — dimensional modeling vocabulary for LinkML
@@ -29,7 +42,7 @@ description: >-
 license: https://creativecommons.org/publicdomain/zero/1.0/
 prefixes:
   linkml: https://w3id.org/linkml/
-  varda: https://varda-project.org/profile/varda/
+  varda: https://w3id.org/varda/
 default_prefix: varda
 default_range: string
 imports:
