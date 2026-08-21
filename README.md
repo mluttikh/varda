@@ -11,7 +11,7 @@ LinkML tool — `gen-pydantic`, `gen-owl`, `gen-json-schema` — will read it
 happily and ignore what it does not understand.
 
 ```yaml
-FactSale:
+FctSale:
   annotations:
     varda:role: fact
     varda:fact_type: transaction

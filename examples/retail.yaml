@@ -179,7 +179,7 @@ classes:
           varda:additivity: non_additive
           varda:unit: ratio
 
-  FactSale:
+  FctSale:
     description: A line on a sales receipt.
     annotations:
       varda:role: fact
@@ -242,7 +242,7 @@ classes:
           varda:additivity: non_additive
           varda:unit: EUR
 
-  FactInventory:
+  FctInventory:
     description: Stock position, measured at the close of each day.
     annotations:
       varda:role: fact

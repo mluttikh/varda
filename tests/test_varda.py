@@ -117,7 +117,7 @@ def test_example_is_clean() -> None:
     ("logical", "expected"),
     [
         ("DimCustomer", "dim_customer"),
-        ("FactSale", "fact_sale"),
+        ("FctSale", "fct_sale"),
         ("already_snake", "already_snake"),
         ("HTTPRequest", "httprequest"),
         ("Dim2Store", "dim2_store"),
@@ -252,7 +252,7 @@ def test_v103_fact_without_grain(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {"varda:role": "fact"},
                 "attributes": {
                     "d_key": {
@@ -274,7 +274,7 @@ def test_v104_grain_is_a_phrase(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {"varda:role": "fact", "varda:grain": "daily"},
                 "attributes": {
                     "d_key": {
@@ -326,7 +326,7 @@ def test_v107_fact_without_foreign_key(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -351,7 +351,7 @@ def test_v108_foreign_key_without_target(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -372,7 +372,7 @@ def test_v109_foreign_key_target_missing(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -396,7 +396,7 @@ def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactA": {
+            "FctA": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -407,12 +407,12 @@ def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
                         "range": "integer",
                         "annotations": {
                             "varda:role": "foreign_key",
-                            "varda:references": "FactB",
+                            "varda:references": "FctB",
                         },
                     }
                 },
             },
-            "FactB": {
+            "FctB": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per other thing that happened",
@@ -438,7 +438,7 @@ def test_v111_fact_without_type(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -463,7 +463,7 @@ def test_v112_surrogate_key_on_a_fact(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -529,7 +529,7 @@ def test_v203_semi_additive_over_is_not_a_key(
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -593,7 +593,7 @@ def test_v206_fact_without_measures(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -619,7 +619,7 @@ def test_v206_silent_when_declared_factless(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FactX": {
+            "FctX": {
                 "annotations": {
                     "varda:role": "fact",
                     "varda:grain": "one row per thing that happened",
@@ -952,7 +952,7 @@ def test_sql_is_deterministic() -> None:
 
 def test_sql_orders_dimensions_before_facts() -> None:
     sql = generate_sql(DimensionalModel.load(RETAIL))
-    assert sql.index("dim_customer (") < sql.index("fact_sale (")
+    assert sql.index("dim_customer (") < sql.index("fct_sale (")
 
 
 def test_sql_emits_foreign_keys() -> None:
