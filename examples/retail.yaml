@@ -1,0 +1,280 @@
+id: https://example.org/retail
+name: retail
+title: A retail star schema
+description: >-
+  A worked example exercising every part of the Varda core: two facts of
+  different temporal shapes, four dimensions across three slowly-changing
+  types, a degenerate dimension, a bridge resolving a many-to-many, and one
+  measure of each additivity class.
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  varda: https://varda-project.org/profile/varda/
+  retail: https://example.org/retail/
+default_prefix: retail
+default_range: string
+imports:
+  - linkml:types
+
+classes:
+
+  DimDate:
+    description: The calendar, one row per day.
+    annotations:
+      varda:role: dimension
+      varda:scd: type_0
+    attributes:
+      date_key:
+        description: Surrogate key, conventionally YYYYMMDD.
+        range: integer
+        required: true
+        annotations:
+          varda:role: surrogate_key
+      calendar_date:
+        description: The day this row describes.
+        range: date
+        required: true
+        annotations:
+          varda:role: natural_key
+      day_of_week:
+        range: string
+        annotations:
+          varda:role: attribute
+      fiscal_quarter:
+        range: string
+        annotations:
+          varda:role: attribute
+
+  DimCustomer:
+    description: A purchasing party, versioned as its attributes change.
+    annotations:
+      varda:role: dimension
+      varda:scd: type_2
+    attributes:
+      customer_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: surrogate_key
+      customer_id:
+        description: The identifier the source system uses.
+        required: true
+        annotations:
+          varda:role: natural_key
+      customer_name:
+        annotations:
+          varda:role: attribute
+      country:
+        annotations:
+          varda:role: attribute
+      valid_from:
+        description: Start of this version's validity window.
+        range: datetime
+        required: true
+        annotations:
+          varda:role: attribute
+      valid_to:
+        description: End of this version's validity window; open if null.
+        range: datetime
+        annotations:
+          varda:role: attribute
+      is_current:
+        range: boolean
+        required: true
+        annotations:
+          varda:role: attribute
+
+  DimProduct:
+    description: A sellable item.
+    annotations:
+      varda:role: dimension
+      varda:scd: type_1
+    attributes:
+      product_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: surrogate_key
+      sku:
+        required: true
+        annotations:
+          varda:role: natural_key
+      product_name:
+        annotations:
+          varda:role: attribute
+      brand:
+        annotations:
+          varda:role: attribute
+
+  DimStore:
+    description: A physical or online point of sale.
+    annotations:
+      varda:role: dimension
+      varda:scd: type_1
+    attributes:
+      store_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: surrogate_key
+      store_code:
+        required: true
+        annotations:
+          varda:role: natural_key
+      store_name:
+        annotations:
+          varda:role: attribute
+      region:
+        annotations:
+          varda:role: attribute
+
+  DimSegment:
+    description: A marketing segment a customer may belong to.
+    annotations:
+      varda:role: dimension
+      varda:scd: type_1
+    attributes:
+      segment_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: surrogate_key
+      segment_code:
+        required: true
+        annotations:
+          varda:role: natural_key
+      segment_name:
+        annotations:
+          varda:role: attribute
+
+  BridgeCustomerSegment:
+    description: >-
+      Resolves the many-to-many between customers and segments. Weighted,
+      because a customer belonging to three segments must not be counted
+      three times in a segment rollup.
+    annotations:
+      varda:role: bridge
+      varda:grain: one row per customer per segment they belong to
+    attributes:
+      customer_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimCustomer
+      segment_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimSegment
+      allocation_factor:
+        description: >-
+          The share of this customer attributable to this segment. The
+          factors for one customer sum to 1.
+        range: decimal
+        required: true
+        annotations:
+          varda:role: measure
+          varda:additivity: non_additive
+          varda:unit: ratio
+
+  FactSale:
+    description: A line on a sales receipt.
+    annotations:
+      varda:role: fact
+      varda:fact_type: transaction
+      varda:grain: one row per product per line of a sales receipt
+    attributes:
+      date_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimDate
+      customer_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimCustomer
+      product_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimProduct
+      store_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimStore
+      order_number:
+        description: >-
+          The receipt identifier. A degenerate dimension: it groups the lines
+          of one transaction but has no attributes of its own.
+        required: true
+        annotations:
+          varda:role: degenerate_dimension
+      quantity:
+        range: integer
+        required: true
+        annotations:
+          varda:role: measure
+          varda:additivity: additive
+          varda:unit: count
+      net_amount:
+        description: Line total after discount, excluding tax.
+        range: decimal
+        required: true
+        annotations:
+          varda:role: measure
+          varda:additivity: additive
+          varda:unit: EUR
+      unit_price:
+        description: >-
+          Price of one unit. Non-additive: summing prices across lines
+          produces a number with no meaning.
+        range: decimal
+        annotations:
+          varda:role: measure
+          varda:additivity: non_additive
+          varda:unit: EUR
+
+  FactInventory:
+    description: Stock position, measured at the close of each day.
+    annotations:
+      varda:role: fact
+      varda:fact_type: periodic_snapshot
+      varda:grain: one row per product per store per day
+    attributes:
+      date_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimDate
+      product_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimProduct
+      store_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimStore
+      quantity_on_hand:
+        description: >-
+          Units in stock at close of business. Semi-additive: summing across
+          stores gives total stock, summing across days gives nonsense.
+        range: integer
+        required: true
+        annotations:
+          varda:role: measure
+          varda:additivity: semi_additive
+          varda:semi_additive_over: date_key
+          varda:unit: count

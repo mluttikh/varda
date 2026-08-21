@@ -1,0 +1,170 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "varda"
+version = "0.1.0"
+description = "Dimensional modelling for LinkML — a profile, its rules, and the generators that hang off it"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = [
+    "linkml",
+    "dimensional-modelling",
+    "star-schema",
+    "kimball",
+    "data-warehouse",
+    "data-mart",
+    "metadata",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Code Generators",
+    "Typing :: Typed",
+]
+
+# Only linkml-runtime. The full `linkml` distribution pulls a large tree in
+# order to provide generators, and Varda's generators are hand-written against
+# the model layer rather than against LinkML's generator framework. A minimal
+# dependency set is most of what makes this installable inside somebody else's
+# pipeline without an argument.
+dependencies = ["linkml-runtime>=1.9"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "mypy>=1.11", "ruff>=0.6", "pyyaml>=6", "types-PyYAML>=6"]
+
+[project.urls]
+Homepage = "https://github.com/varda-project/varda"
+Documentation = "https://varda-project.readthedocs.io"
+Source = "https://github.com/varda-project/varda"
+
+[project.scripts]
+varda = "varda.cli:main"
+
+[project.entry-points."varda.extensions"]
+# Extensions register here. Varda itself does not — it is built in, so that
+# the core is present even when nothing else is installed.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Ships the type information. An extension author's own type checker then sees
+# the boundary Varda maintains: `model.py` is the wall built along the untyped
+# LinkML runtime, and everything it returns is a concrete type.
+[tool.setuptools.package-data]
+varda = ["py.typed", "profile/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/varda", "tests"]
+strict = true
+
+# LinkML ships no `py.typed`, so every object out of `SchemaView` is `Any`.
+# That is not a defect to suppress and forget: it is the boundary of the typed
+# world, and `varda/model.py` is the wall built along it.
+#
+# `warn_return_any` is the rule doing the work. It fires whenever an `Any`
+# escapes into a signature claiming something specific, which is exactly the
+# mistake this arrangement exists to catch. Do not switch it off to make a
+# stubborn line pass.
+[[tool.mypy.overrides]]
+module = ["linkml_runtime.*", "jsonasobj2"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 80
+extend-exclude = ["out"]
+
+[tool.ruff.lint]
+select = [
+    "A",    # flake8-builtins
+    "ARG",  # unused-function-argument
+    "B",    # flake8-bugbear
+    "BLE",  # flake8-blind-except
+    "C4",   # comprehensions
+    "C90",  # mccabe
+    "D",    # pydocstyle
+    "E",    # pycodestyle
+    "EM",   # flake8-errmsg
+    "ERA",  # eradicate
+    "F",    # pyflakes
+    "FA",   # flake8-future-annotations
+    "FLY",  # flynt
+    "FURB", # refurb
+    "G",    # flake8-logging-format
+    "I",    # isort
+    "ICN",  # flake8-import-conventions
+    "INP",  # flake8-no-pep420
+    "ISC",  # flake8-implicit-str-concat
+    "LOG",  # flake8-logging
+    "N",    # pep8-naming
+    "PERF", # Perflint
+    "PGH",  # pygrep-hooks
+    "PIE",  # flake8-pie
+    "PLC",  # pylint-convention
+    "PLE",  # pylint-error
+    "PLR",  # pylint-refactor
+    "PLW",  # pylint-warning
+    "PT",   # flake8-pytest-style
+    "PTH",  # flake8-use-pathlib
+    "PYI",  # flake8-pyi
+    "Q",    # flake8-quotes
+    "RET",  # flake8-return
+    "RSE",  # flake8-raise
+    "RUF",  # ruff-specific
+    "S",    # flake8-bandit
+    "SIM",  # flake8-simplify
+    "SLF",  # flake8-self
+    "T10",  # flake8-debugger
+    "T20",  # flake8-print
+    "TCH",  # flake8-type-checking
+    "TID",  # flake8-tidy-imports
+    "UP",   # pyupgrade
+    "W",    # pycodestyle
+    "YTT",  # flake8-2020
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**" = [
+    "D103",    # undocumented-public-function
+    "PLR2004", # magic-value-comparison
+    "S101",    # assert
+    "SLF001",  # private-member-access
+    # INP001 wants an `__init__.py` here. Adding one would make `tests` a
+    # package, which changes how pytest imports these modules and breaks the
+    # `sys.path` insertion in `conftest.py` that makes the extension fixture
+    # importable the way an installed extension would be. The rule exists to
+    # catch source accidentally left as a namespace package; a pytest test
+    # directory is not that.
+    "INP001",
+]
+
+# Three deviations, each specific to this codebase rather than to taste.
+#
+# T201 in the CLI: a command-line tool's output *is* `print`. Routing it
+# through a logger to satisfy the rule would make the thing worse at its job.
+"src/varda/cli.py" = ["T201"]
+#
+# D102 in the model layer: `model.py` is mostly one-line property wrappers,
+# and the only docstring they could carry is the property name restated. The
+# class docstrings carry the meaning; the accessors do not need one each.
+"src/varda/model.py" = ["D102"]
+#
+# D103 in the rules: every rule registers a human-readable title in its
+# decorator, and `varda rules` prints it. A docstring is reserved for rules
+# whose *reasoning* is not obvious, and `varda rules -v` prints those.
+# Requiring one on all twenty-one would duplicate the title twenty-one times.
+"src/varda/rules.py" = ["D103"]

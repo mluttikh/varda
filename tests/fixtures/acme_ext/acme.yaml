@@ -1,0 +1,52 @@
+id: https://acme.example/varda/acme
+name: acme
+version: 1.2.0
+title: Acme's Varda extension
+description: >-
+  What Acme needs on top of the Varda core: which cost centre owns a table,
+  how long its rows are kept, and how sensitive a column is. None of this
+  belongs in Varda — it is specific to how Acme is organised, which is
+  exactly what the extension mechanism is for.
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  acme: https://acme.example/varda/acme/
+default_prefix: acme
+default_range: string
+imports:
+  - linkml:types
+
+enums:
+  Sensitivity:
+    description: Acme's data classification scheme.
+    permissible_values:
+      public:
+        description: May leave Acme.
+      internal:
+        description: Acme staff only.
+      restricted:
+        description: Named access list only.
+
+classes:
+
+  AcmeTableAnnotations:
+    description: Annotations Acme permits on a table.
+    annotations:
+      acme:applies_to: table
+    attributes:
+      cost_centre:
+        description: The cost centre that pays for this table's storage.
+        range: string
+        required: true
+      retention_days:
+        description: How long rows are kept before deletion.
+        range: integer
+
+  AcmeColumnAnnotations:
+    description: Annotations Acme permits on a column.
+    annotations:
+      acme:applies_to: column
+    attributes:
+      sensitivity:
+        description: Acme's data classification for this column.
+        range: Sensitivity

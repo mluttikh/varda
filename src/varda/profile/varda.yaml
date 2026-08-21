@@ -1,0 +1,277 @@
+id: https://varda-project.org/profile/varda
+name: varda
+version: 0.1.0
+title: The Varda profile — dimensional modelling vocabulary for LinkML
+description: >-
+  Varda is a *profile* of LinkML, not a replacement for it. LinkML already
+  knows about classes, slots, ranges, cardinality, enumerations, inheritance,
+  identifiers and imports. It does not know about facts, dimensions, grain,
+  additivity or slowly-changing dimensions, because those are dimensional
+  modelling concepts rather than general modelling concepts.
+
+  This schema declares the vocabulary Varda adds, as LinkML enumerations and
+  classes. Every `varda:` annotation that may appear on a domain model is
+  declared here, which makes the profile self-describing: `varda check`
+  validates domain models against *this file*, and this file is an ordinary
+  LinkML schema that ordinary LinkML tooling can read.
+
+  Nothing here is a LinkML extension in the technical sense. A domain model
+  carrying Varda annotations is a legal LinkML schema that `gen-pydantic`,
+  `gen-owl`, `gen-json-schema` and every other LinkML generator will consume
+  happily, ignoring what they do not understand.
+
+  **Scope.** This is the deliberately small core: eleven annotations that
+  describe a standard star schema and nothing else. Anything specific to one
+  organisation — cost centres, retention, data classification, ownership —
+  belongs in an extension under that organisation's own prefix. See
+  `varda.ext`.
+
+license: https://creativecommons.org/publicdomain/zero/1.0/
+prefixes:
+  linkml: https://w3id.org/linkml/
+  varda: https://varda-project.org/profile/varda/
+default_prefix: varda
+default_range: string
+imports:
+  - linkml:types
+
+# ---------------------------------------------------------------------------
+# Enumerations — the closed vocabularies.
+#
+# These are closed on purpose, and the constraint is load-bearing: an
+# extension may add annotations but may NOT add a value to an enum here.
+# Every generator dispatches exhaustively on these, and a generator that has
+# to tolerate an unrecognised value has a silent fallback path instead of a
+# mapping. Widening from outside would turn that discipline into a default.
+#
+# Varda may widen its own enums in a later minor version — that is backward
+# compatible, because no existing model breaks when a new value becomes
+# legal. So a value missing here is a request to file, not a reason to fork.
+# ---------------------------------------------------------------------------
+
+enums:
+
+  TableRole:
+    description: >-
+      What part a class plays in the dimensional model. Every class carrying
+      Varda annotations must declare exactly one.
+    permissible_values:
+      fact:
+        description: >-
+          A measurement event table. Has a declared grain, foreign keys to
+          dimensions, and zero or more measures. Never the target of another
+          table's foreign key.
+      dimension:
+        description: >-
+          Descriptive context. Has one surrogate key, one or more natural key
+          columns, and attributes that are almost always textual or
+          categorical. Referenced by facts.
+      bridge:
+        description: >-
+          Resolves a many-to-many between a fact and a dimension, or a
+          multi-valued dimension attribute. Carries an allocation factor when
+          the many-to-many is weighted.
+
+  ColumnRole:
+    description: >-
+      What part a slot plays inside its table. Every slot of a class carrying
+      Varda annotations must declare exactly one.
+
+      This is the most valuable annotation in the profile: it is what turns a
+      flat list of columns into a structure that generators and validators can
+      reason about.
+    permissible_values:
+      surrogate_key:
+        description: >-
+          The meaningless integer or hash primary key of a dimension. Exactly
+          one per dimension.
+      natural_key:
+        description: >-
+          A column carrying the business identity of a dimension row. Together
+          the natural key columns — plus, for a type-2 dimension, the validity
+          window — must be unique.
+      foreign_key:
+        description: >-
+          A reference from a fact or bridge to a dimension's surrogate key.
+          Must declare `varda:references`.
+      measure:
+        description: >-
+          A numeric quantity that is aggregated. Must declare
+          `varda:additivity`. Lives on a fact or a bridge, never a dimension.
+      attribute:
+        description: >-
+          Descriptive context, grouped and filtered on but not summed. The
+          default role for a dimension column.
+      degenerate_dimension:
+        description: >-
+          An identifier that lives on the fact with no dimension table of its
+          own — an order number, a ticket reference. Fact tables only.
+
+  Additivity:
+    description: >-
+      How a measure may be aggregated across dimensions. Required on every
+      measure, because the wrong answer here is the single most expensive
+      class of error a dimensional model produces: silently summing something
+      that must not be summed yields a number that looks fine and is wrong.
+    permissible_values:
+      additive:
+        description: >-
+          May be summed across every dimension of its fact. Sales amount,
+          quantity, cost.
+      semi_additive:
+        description: >-
+          May be summed across some dimensions but not others — almost always
+          not across time. Account balance, inventory level, headcount. Must
+          declare `varda:semi_additive_over`.
+      non_additive:
+        description: >-
+          May not be summed across any dimension. Ratios, percentages, unit
+          prices, temperatures. Aggregate the components and recompute.
+
+  SlowlyChangingType:
+    description: >-
+      How a dimension responds when a source attribute changes. Kimball's
+      numbering, restricted to the three types that are common enough to
+      generate for.
+    permissible_values:
+      type_0:
+        description: >-
+          Retain original. The value is written once at first load and never
+          updated, whatever the source says afterwards.
+      type_1:
+        description: >-
+          Overwrite. No history is kept; the row shows the current value.
+      type_2:
+        description: >-
+          Add a row. History is preserved by versioning: a new row per change,
+          bounded by a validity window and marked with a current flag.
+
+  FactType:
+    description: >-
+      The temporal shape of a fact table, which determines how it is loaded
+      and what its grain sentence must say.
+    permissible_values:
+      transaction:
+        description: >-
+          One row per event, at the moment the event occurs. Insert-only.
+      periodic_snapshot:
+        description: >-
+          One row per entity per regular interval, whether or not anything
+          happened. Insert-only, predictable size.
+      accumulating_snapshot:
+        description: >-
+          One row per tracked item, updated in place as it passes milestones.
+          The only fact shape that is routinely updated after insert.
+      factless:
+        description: >-
+          One row per event or condition, carrying no measure — coverage,
+          eligibility, attendance. Counted rather than summed.
+
+# ---------------------------------------------------------------------------
+# Annotation classes.
+#
+# These classes are never instantiated. They exist so that the set of legal
+# annotations is *declared data* rather than a list in the validator's source,
+# which is what lets an extension add to it without editing Varda, and what
+# lets `varda check` produce "unknown annotation" errors from the profile
+# itself.
+#
+# `varda:applies_to` names which kind of object the annotations may appear on.
+# The registry reads it to decide whether `varda:grain` is legal on a slot.
+# ---------------------------------------------------------------------------
+
+classes:
+
+  TableAnnotations:
+    description: >-
+      Annotations permitted on a class that participates in the model.
+    annotations:
+      varda:applies_to: table
+    attributes:
+
+      role:
+        description: >-
+          What part this table plays. Required on every table.
+        range: TableRole
+        required: true
+
+      grain:
+        description: >-
+          What exactly one row of this table represents, as a sentence.
+
+          Required on facts, and the most important sentence in the model.
+          Conventionally phrased "one row per ...". A grain that cannot be
+          stated in one sentence is a sign the table is doing two jobs, and
+          the discipline of writing it is most of the value — a fact table
+          whose grain nobody can state is one whose double counting nobody
+          can rule out.
+        range: string
+
+      fact_type:
+        description: >-
+          The temporal shape of a fact table. Facts only.
+        range: FactType
+
+      scd:
+        description: >-
+          How this dimension responds to source changes. Dimensions only.
+
+          Declared on the table rather than per column, because a mixed
+          dimension — some attributes type 1, others type 2 — is a genuinely
+          harder object that this core deliberately does not model. Split it
+          into two dimensions, or handle it in an extension.
+        range: SlowlyChangingType
+
+      physical_name:
+        description: >-
+          The table name to emit, when it differs from the class name. Without
+          it, generators derive a physical name from the class name.
+        range: string
+
+  ColumnAnnotations:
+    description: >-
+      Annotations permitted on a slot of a class that participates in the
+      model.
+    annotations:
+      varda:applies_to: column
+    attributes:
+
+      role:
+        description: >-
+          What part this column plays. Required on every column.
+        range: ColumnRole
+        required: true
+
+      references:
+        description: >-
+          The name of the class this foreign key points at. Required on every
+          column whose role is `foreign_key`, and checked: it must name a
+          class that exists and that is a dimension or a bridge.
+        range: string
+
+      additivity:
+        description: >-
+          How this measure may be aggregated. Required on every measure.
+        range: Additivity
+
+      semi_additive_over:
+        description: >-
+          The foreign key across which this measure may NOT be summed —
+          almost always the date. Required when additivity is
+          `semi_additive`, and checked against the table's actual foreign
+          keys, because naming a dimension the fact does not have is a
+          constraint that silently never applies.
+        range: string
+
+      unit:
+        description: >-
+          The unit of measurement, as a symbol or short code — `EUR`, `kg`,
+          `count`. Free text in this core; an extension wanting a controlled
+          unit vocabulary should declare its own annotation for it rather
+          than constraining this one.
+        range: string
+
+      physical_name:
+        description: >-
+          The column name to emit, when it differs from the slot name.
+        range: string
