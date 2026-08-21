@@ -728,14 +728,14 @@ def test_extension_activates(tmp_path: pathlib.Path) -> None:
     from acme_ext import EXTENSION  # noqa: PLC0415
 
     table = dimension()
-    table["annotations"]["acme:cost_centre"] = "CC-4471"
+    table["annotations"]["acme:cost_center"] = "CC-4471"
     with registry.using(EXTENSION):
         model = build(tmp_path, {"DimThing": table})
         fired = codes(model)
-        assert "V001" not in fired  # acme:cost_centre is now declared
+        assert "V001" not in fired  # acme:cost_center is now declared
         assert "ACME101" not in fired
         assert "acme" in registry.prefixes()
-        assert "acme:cost_centre" in registry.declared_annotations("table")
+        assert "acme:cost_center" in registry.declared_annotations("table")
 
 
 def test_extension_rule_fires(tmp_path: pathlib.Path) -> None:
@@ -756,7 +756,7 @@ def test_extension_enum_is_checked(tmp_path: pathlib.Path) -> None:
     from acme_ext import EXTENSION  # noqa: PLC0415
 
     table = dimension()
-    table["annotations"]["acme:cost_centre"] = "CC-1"
+    table["annotations"]["acme:cost_center"] = "CC-1"
     table["attributes"]["d_id"]["annotations"]["acme:sensitivity"] = "secret"
     with registry.using(EXTENSION):
         model = build(tmp_path, {"DimThing": table})
@@ -770,7 +770,7 @@ def test_extension_severity_default_applies(tmp_path: pathlib.Path) -> None:
     from acme_ext import EXTENSION  # noqa: PLC0415
 
     table = dimension(annotations={"varda:role": "bridge"})
-    table["annotations"]["acme:cost_centre"] = "CC-1"
+    table["annotations"]["acme:cost_center"] = "CC-1"
     table["attributes"]["amount"] = {
         "range": "decimal",
         "annotations": {
@@ -845,11 +845,11 @@ def test_duplicate_rule_code_is_refused() -> None:
         )
 
 
-def test_colliding_artefact_path_is_refused() -> None:
+def test_colliding_artifact_path_is_refused() -> None:
     def run(_ctx: Any) -> dict[str, str]:
         return {"sql/mart.sql": ""}
 
-    gen = Generator(name="mine", artefacts=("sql/mart.sql",), run=run)
+    gen = Generator(name="mine", artifacts=("sql/mart.sql",), run=run)
     with pytest.raises(ExtensionError, match="silently overwrite"):
         activate(_bare("a", "one", generators=(gen,)))
 
@@ -858,7 +858,7 @@ def test_colliding_generator_name_is_refused() -> None:
     def run(_ctx: Any) -> dict[str, str]:
         return {"other/x.txt": ""}
 
-    gen = Generator(name="sql", artefacts=("other/x.txt",), run=run)
+    gen = Generator(name="sql", artifacts=("other/x.txt",), run=run)
     with pytest.raises(ExtensionError, match="generator 'sql'"):
         activate(_bare("a", "one", generators=(gen,)))
 
@@ -984,7 +984,7 @@ def test_unmapped_range_raises(tmp_path: pathlib.Path) -> None:
         generate_sql(model)
 
 
-def test_generate_writes_declared_artefacts(tmp_path: pathlib.Path) -> None:
+def test_generate_writes_declared_artifacts(tmp_path: pathlib.Path) -> None:
     code = cli.main(["generate", str(RETAIL), "--out", str(tmp_path / "out")])
     assert code == 0
     assert (tmp_path / "out" / "sql" / "mart.sql").is_file()
@@ -1004,7 +1004,7 @@ def test_generate_fails_closed(tmp_path: pathlib.Path) -> None:
         msg = "deliberate"
         raise RuntimeError(msg)
 
-    gen = Generator(name="zzz", artefacts=("zzz/out.txt",), run=boom)
+    gen = Generator(name="zzz", artifacts=("zzz/out.txt",), run=boom)
     out = tmp_path / "out"
     with registry.using(_bare("a", "one", generators=(gen,))):
         code = cli.main(["generate", str(RETAIL), "--out", str(out)])
@@ -1016,7 +1016,7 @@ def test_generate_rejects_an_undeclared_path(tmp_path: pathlib.Path) -> None:
     def sneaky(_ctx: Any) -> dict[str, str]:
         return {"declared.txt": "a", "undeclared.txt": "b"}
 
-    gen = Generator(name="zzz", artefacts=("declared.txt",), run=sneaky)
+    gen = Generator(name="zzz", artifacts=("declared.txt",), run=sneaky)
     out = tmp_path / "out"
     with registry.using(_bare("a", "one", generators=(gen,))):
         code = cli.main(["generate", str(RETAIL), "--out", str(out)])
@@ -1161,7 +1161,7 @@ def test_toml_declares_an_extension_without_python(
 ) -> None:
     """The smallest useful extension is a YAML file and three lines of TOML.
 
-    An organisation that only wants extra vocabulary should not have to
+    An organization that only wants extra vocabulary should not have to
     publish a package to get it, because requiring that is what pushes people
     into using undeclared annotations instead.
     """

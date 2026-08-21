@@ -85,7 +85,7 @@ class Generator:
     anything is written, so a failure half way through leaves no half-written
     output tree behind.
 
-    Paths are declared up front, in ``artefacts``, so that two extensions
+    Paths are declared up front, in ``artifacts``, so that two extensions
     claiming the same output file are caught at startup rather than by one
     silently overwriting the other's work.
 
@@ -95,7 +95,7 @@ class Generator:
     """
 
     name: str
-    artefacts: tuple[str, ...]
+    artifacts: tuple[str, ...]
     run: Callable[[Context], dict[str, str]]
 
 
@@ -106,7 +106,7 @@ class Extension:
     The only required fields are ``name`` and ``prefix``. An extension that
     declares nothing but a profile is legal and useful: it adds vocabulary
     that ``varda check`` will then accept, which is the smallest thing an
-    organisation typically wants.
+    organization typically wants.
 
     ``eq=False`` because ``rules`` holds a mutable :class:`RuleSet`, which
     makes the dataclass unhashable under the default ``eq``; identity is the

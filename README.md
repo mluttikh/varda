@@ -1,6 +1,6 @@
 # Varda
 
-**Dimensional modelling for [LinkML](https://linkml.io).**
+**Dimensional modeling for [LinkML](https://linkml.io).**
 
 Varda is a *profile* of LinkML: a small vocabulary that lets you say a class
 is a fact table, that a column is a semi-additive measure, that a dimension
@@ -74,7 +74,7 @@ in and same bytes out, so the output can be committed and diffed.
 ## Extending it
 
 Varda's core is small on purpose. Anything specific to how *your*
-organisation works — cost centres, retention, data classification, ownership
+organization works — cost centers, retention, data classification, ownership
 — goes in an extension under your own prefix.
 
 The smallest useful extension needs no Python at all. Write a LinkML schema
@@ -87,7 +87,7 @@ prefix = "acme"
 profile = "profiles/acme.yaml"
 ```
 
-From then on `acme:cost_centre` is a first-class annotation: checked for
+From then on `acme:cost_center` is a first-class annotation: checked for
 typos, its enum values enforced, and listed by `varda ext`. Misspell it and
 you get
 
@@ -113,7 +113,7 @@ load rather than warning.
 | | |
 | --- | --- |
 | `varda check MODEL` | validate; `--strict` fails on warnings too |
-| `varda generate MODEL --out DIR` | write artefacts; fails closed |
+| `varda generate MODEL --out DIR` | write artifacts; fails closed |
 | `varda rules` | list every rule, `-v` for reasoning |
 | `varda ext` | describe active extensions and their vocabulary |
 | `varda importmap` | print the LinkML import map |
@@ -128,7 +128,7 @@ on; rule codes will not be renumbered. Analytical functions, model diffing,
 lineage and the drift gate are deliberately not here yet — see `SPEC.md` for
 what is deferred and why.
 
-## Licence
+## License
 
 MIT for the code. The profile vocabulary in `src/varda/profile/varda.yaml` is
 CC0, so it can be reused anywhere without attribution — a vocabulary that

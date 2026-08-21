@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "varda"
 version = "0.1.0"
-description = "Dimensional modelling for LinkML — a profile, its rules, and the generators that hang off it"
+description = "Dimensional modeling for LinkML — a profile, its rules, and the generators that hang off it"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 keywords = [
     "linkml",
-    "dimensional-modelling",
+    "dimensional-modeling",
     "star-schema",
     "kimball",
     "data-warehouse",

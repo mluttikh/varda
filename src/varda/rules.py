@@ -355,7 +355,7 @@ def v110(model: DimensionalModel) -> Iterator[Finding]:
     """Flag a foreign key aimed at a fact.
 
     A fact referenced by another fact is the most common way a star quietly
-    becomes a normalised schema: the join is now fact-to-fact, the grain of
+    becomes a normalized schema: the join is now fact-to-fact, the grain of
     the result is neither table's, and no aggregate over it is safe.
     """
     for table in model.tables:

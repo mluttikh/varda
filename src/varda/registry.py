@@ -8,7 +8,7 @@ Three ways an extension becomes active, in increasing order of locality:
 
 The third exists because the second requires publishing a package, and the
 smallest useful extension — a handful of extra annotations with no code
-behind them — should not require that. An organisation can add vocabulary
+behind them — should not require that. An organization can add vocabulary
 with a YAML file and three lines of TOML.
 
 Everything here is validated once, at first use, and then cached. The
@@ -166,7 +166,7 @@ def _from_config() -> list[Extension]:
     Two forms. ``extensions = ["acme_ext"]`` imports a module and takes its
     ``EXTENSION`` attribute — the form for an extension with code behind it.
     ``[[extension]]`` tables declare one inline from a name, a prefix and a
-    profile path — the form for an organisation that only wants vocabulary.
+    profile path — the form for an organization that only wants vocabulary.
     """
     path = find_config()
     if path is None:
@@ -281,7 +281,7 @@ def _validate(found: list[Extension]) -> None:
     _check_prefixes(found)
     _check_rule_tags(found)
     _check_rule_codes(found)
-    _check_artefacts(found)
+    _check_artifacts(found)
     _check_profiles(found)
     _check_vocabulary_collisions(found)
     _check_severity_defaults(found)
@@ -347,7 +347,7 @@ def _check_rule_codes(found: list[Extension]) -> None:
             seen[code] = ext.name
 
 
-def _check_artefacts(found: list[Extension]) -> None:
+def _check_artifacts(found: list[Extension]) -> None:
     """Refuse two generators claiming one name or one output path."""
     names: dict[str, str] = {}
     paths: dict[str, str] = {}
@@ -360,7 +360,7 @@ def _check_artefacts(found: list[Extension]) -> None:
                 )
                 raise ExtensionError(msg)
             names[gen.name] = ext.name
-            for path in gen.artefacts:
+            for path in gen.artifacts:
                 if path in paths:
                     msg = (
                         f"{path!r} is written by both {paths[path]} and "
@@ -468,7 +468,7 @@ def _check_severity_defaults(found: list[Extension]) -> None:
 def declared_annotations(target: Target) -> frozenset[str]:
     """Every annotation tag legal on ``target``, across all extensions.
 
-    Full tags — ``varda:role``, ``acme:cost_centre`` — rather than bare names,
+    Full tags — ``varda:role``, ``acme:cost_center`` — rather than bare names,
     so a tag is checked against the extension that owns its prefix rather than
     against the union of everybody's vocabulary.
     """

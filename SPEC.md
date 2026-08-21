@@ -11,7 +11,7 @@ reversed, and what to build next in what order.
 
 ## 1. What Varda is
 
-A *profile* of LinkML that adds the vocabulary of dimensional modelling, the
+A *profile* of LinkML that adds the vocabulary of dimensional modeling, the
 rules that check a model against it, and generators that build from it.
 
 The critical property, and the reason the design is shaped this way: **a model
@@ -20,9 +20,9 @@ tool reads it and ignores what it does not understand. Varda adds no new
 syntax, forks no metamodel, and requires no changes to LinkML. Anything
 proposed later that breaks this property is not a Varda feature.
 
-The second critical property: **the core is small, and organisations extend
-it themselves.** Cost centres, retention policy, data classification,
-ownership — these differ per organisation and none of them belong in Varda.
+The second critical property: **the core is small, and organizations extend
+it themselves.** Cost centers, retention policy, data classification,
+ownership — these differ per organization and none of them belong in Varda.
 The extension mechanism is not a nice-to-have bolted on the side; it is the
 reason the core can stay small enough to be correct.
 
@@ -57,7 +57,7 @@ An extension plugs in at exactly four places. Everything else is internal.
    rules `V001` and `V002`.
 2. **Rules** — a `RuleSet` whose codes all begin with the extension's tag.
    Merged into `rules.all_rules()`.
-3. **Generators** — `Generator(name, artefacts, run)`. Paths declared up
+3. **Generators** — `Generator(name, artifacts, run)`. Paths declared up
    front so collisions are caught at load.
 4. **Distribution** — a `varda.extensions` entry point, or a `varda.toml`
    entry, or `[[extension]]` inline in TOML for the no-Python case.
@@ -105,7 +105,7 @@ deleting it; never reuse it.
 
 **I8 — Severity conflicts are refused, not resolved.** Two extensions naming
 different severities for one code is an error naming both parties. Resolving
-by load order makes behaviour depend on discovery order, which is a
+by load order makes behavior depend on discovery order, which is a
 difference between machines nothing in either repository explains.
 `varda.toml` overrides everything, because the repository can see itself and
 an upstream cannot.
@@ -126,7 +126,7 @@ add early.
 | **Analytical functions** — `FunctionAnnotations`, parameters, implementation bindings | 17 further annotations for a feature most models never touch. Adding it early doubles the vocabulary a newcomer must read. | ~400 lines |
 | **Drift gate** (`varda verify`) | Genuinely valuable and genuinely cheap; cut only because it is worth nothing until generated output is being committed. **First thing to add.** | ~150 lines |
 | **Model diffing / evolution** | Needs a stable vocabulary to diff against. Building it before 1.0 means rebuilding it. | ~360 lines |
-| **Lineage and catalog export** | Every organisation's catalog is different; this is extension territory until a second real consumer exists. | ~280 lines |
+| **Lineage and catalog export** | Every organization's catalog is different; this is extension territory until a second real consumer exists. | ~280 lines |
 | **Extension conformance kit** | A test harness proving a third-party extension is deterministic and stays inside the public API. Worth nothing until third-party extensions exist. | ~230 lines |
 | **`requires_profile` version pinning** | PEP 440 pin of an extension against the profile version. Pulls in `packaging`. Add when a second Varda version exists to be incompatible with. | ~40 lines |
 | **M1 data-quality expectations** | Claims about *rows*, not about the model. A different layer with a different audience; do not blur it into the rules. | ~250 lines |
@@ -136,7 +136,7 @@ add early.
 
 **0.2 — make the output trustworthy.**
 Add `varda verify`: regenerate into a temp tree, compare against what is
-committed, exit non-zero on drift. Add `Artefact(path, compare)` so a
+committed, exit non-zero on drift. Add `Artifact(path, compare)` so a
 generator can declare that its output compares as RDF graphs or as a sorted
 set of SQL statements rather than as bytes. This is the highest-value
 remaining item and it is small.
@@ -144,7 +144,7 @@ remaining item and it is small.
 **0.3 — make extensions safe to depend on.**
 `requires_profile` pinning, plus the conformance kit: `varda ext --check
 NAME` runs a third-party extension against a fixture model twice, asserts
-identical findings and identical artefacts, and AST-scans for imports of
+identical findings and identical artifacts, and AST-scans for imports of
 anything outside `varda.ext`.
 
 **0.4 — generators on demand.**
@@ -154,7 +154,7 @@ mechanical against `model.py`.
 **1.0 — freeze the vocabulary.**
 The commitment at 1.0 is that annotations and rule codes do not change
 meaning within the major version. Do not reach it before at least two real
-organisations have written an extension, because the extension mechanism is
+organizations have written an extension, because the extension mechanism is
 the part most likely to need a breaking change and 1.0 is where that stops
 being possible.
 
@@ -197,7 +197,7 @@ against `examples/retail.yaml`. All five must pass. There is no
    statement of the property, not of the violation.
 2. A message that says what to do, not only what is wrong — `V001` names the
    profile file to declare the annotation in.
-3. A test provoking it, and if the rule is a judgement call, a docstring
+3. A test provoking it, and if the rule is a judgment call, a docstring
    explaining the reasoning that `varda rules -v` will print.
 4. Severity chosen deliberately: `error` only if it is unambiguously illegal.
    Anything arguable is a `warning`, or it gets switched off wholesale.

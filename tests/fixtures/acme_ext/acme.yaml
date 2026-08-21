@@ -3,9 +3,9 @@ name: acme
 version: 1.2.0
 title: Acme's Varda extension
 description: >-
-  What Acme needs on top of the Varda core: which cost centre owns a table,
+  What Acme needs on top of the Varda core: which cost center owns a table,
   how long its rows are kept, and how sensitive a column is. None of this
-  belongs in Varda — it is specific to how Acme is organised, which is
+  belongs in Varda — it is specific to how Acme is organized, which is
   exactly what the extension mechanism is for.
 
 prefixes:
@@ -34,8 +34,8 @@ classes:
     annotations:
       acme:applies_to: table
     attributes:
-      cost_centre:
-        description: The cost centre that pays for this table's storage.
+      cost_center:
+        description: The cost center that pays for this table's storage.
         range: string
         required: true
       retention_days:

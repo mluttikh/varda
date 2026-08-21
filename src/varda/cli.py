@@ -132,7 +132,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return EXIT_FAIL
-        undeclared = sorted(set(produced) - set(gen.artefacts))
+        undeclared = sorted(set(produced) - set(gen.artifacts))
         if undeclared:
             print(
                 f"{gen.name} wrote undeclared path(s): {', '.join(undeclared)}",
@@ -147,7 +147,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         print(f"wrote {target}")
-    print(f"\n{len(collected)} artefacts from {len(chosen)} generators")
+    print(f"\n{len(collected)} artifacts from {len(chosen)} generators")
     return EXIT_OK
 
 
@@ -214,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser."""
     parser = argparse.ArgumentParser(
         prog="varda",
-        description="Dimensional modelling for LinkML.",
+        description="Dimensional modeling for LinkML.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -233,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_check.set_defaults(fn=cmd_check)
 
-    p_gen = sub.add_parser("generate", help="write artefacts from a model")
+    p_gen = sub.add_parser("generate", help="write artifacts from a model")
     p_gen.add_argument("model")
     p_gen.add_argument("--out", default="out", help="output directory")
     p_gen.add_argument("--schema", default="mart", help="SQL schema name")

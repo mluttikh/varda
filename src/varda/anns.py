@@ -41,7 +41,7 @@ class Reader:
 
     The prefix *is* the namespace, and the match is exact: a reader for
     ``acme`` never sees ``varda:role``, and Varda's reader never sees
-    ``acme:cost_centre``. Reads are deliberately strict about the prefix — an
+    ``acme:cost_center``. Reads are deliberately strict about the prefix — an
     unprefixed ``role:`` annotation is nobody's, not everybody's, and
     accepting it as Varda's is how one party's vocabulary silently consumes
     another's.

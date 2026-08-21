@@ -1,6 +1,6 @@
-"""Varda — dimensional modelling for LinkML.
+"""Varda — dimensional modeling for LinkML.
 
-A profile of LinkML that adds the vocabulary of dimensional modelling — facts,
+A profile of LinkML that adds the vocabulary of dimensional modeling — facts,
 dimensions, grain, additivity, slowly-changing dimensions — plus the rules
 that check a model against it and the generators that build from it.
 
