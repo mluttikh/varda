@@ -22,6 +22,9 @@ step "mypy --strict"
 step "pytest"
 "$PY/python" -m pytest -q
 
+step "generate the docs reference pages"
+"$PY/python" scripts/gen_reference.py
+
 step "varda check examples/retail.yaml --strict"
 "$PY/varda" check examples/retail.yaml --strict
 

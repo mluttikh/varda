@@ -217,6 +217,24 @@ misconfigured. That failure appears only for someone who `pip install`ed —
 every rule fires "unknown annotation" because the vocabulary is not
 there — and never for anyone working from a source checkout.
 
+### Documentation
+
+```console
+pip install -e ".[docs]"
+mkdocs serve          # http://127.0.0.1:8000/varda/
+```
+
+`docs/reference/` — vocabulary, rules, command line — is generated from the
+package by `scripts/gen_reference.py` and git-ignored. `mkdocs serve` watches
+`src/` and regenerates on every rebuild, in a subprocess: an in-process call
+would read the already-imported module and silently regenerate stale pages.
+
+The generator is a script rather than a site-generator plugin, so the docs
+build unchanged under Material for MkDocs, ProperDocs and Zensical. That is
+deliberate — MkDocs 1.x is unmaintained, its announced 2.0 breaks existing
+plugins, and Material for MkDocs reaches end of life on 5 November 2026.
+`mkdocs` is pinned `<2` so a release cannot break the build unattended.
+
 ### House rules
 
 - **80 columns**, enforced. Applies to generated output too — it is read by

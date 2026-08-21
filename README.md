@@ -3,6 +3,7 @@
 [![CI](https://github.com/mluttikh/varda/actions/workflows/ci.yml/badge.svg)](https://github.com/mluttikh/varda/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/varda)](https://pypi.org/project/varda/)
 [![Python](https://img.shields.io/pypi/pyversions/varda)](https://pypi.org/project/varda/)
+[![Docs](https://img.shields.io/badge/docs-mluttikh.github.io%2Fvarda-2F6B57)](https://mluttikh.github.io/varda/)
 
 **Dimensional modeling for [LinkML](https://linkml.io).**
 
@@ -101,6 +102,8 @@ ERROR V001  DimStore
         acme.yaml or fix the typo
 ```
 
+Full documentation: **<https://mluttikh.github.io/varda/>**
+
 An extension with code behind it adds rules and generators through
 `varda.ext`, and ships as an installable package advertising the
 `varda.extensions` entry point. See [`SPEC.md`](SPEC.md) for the interface
@@ -131,6 +134,34 @@ failed, `2` the invocation was wrong.
 on; rule codes will not be renumbered. Analytical functions, model diffing,
 lineage and the drift gate are deliberately not here yet — see `SPEC.md` for
 what is deferred and why.
+
+## Building the documentation
+
+```console
+pip install -e ".[docs]"
+mkdocs serve
+```
+
+Then open **<http://127.0.0.1:8000/varda/>** — note the `/varda/` path, which
+comes from `site_url` because this is a GitHub Pages project site rather than
+a user site. Plain `http://127.0.0.1:8000/` redirects there.
+
+The vocabulary, rules and command-line pages are generated from the package
+itself into a git-ignored `docs/reference/`, so they cannot drift from the
+code. `mkdocs serve` regenerates them on every rebuild and watches `src/` as
+well as `docs/` — edit a rule's docstring and the page updates.
+
+To build the static site the way CI does:
+
+```console
+python scripts/gen_reference.py
+mkdocs build --strict
+```
+
+`--strict` turns a broken internal link into a failed build. The generator is
+a standalone script rather than a plugin, so the site also builds under
+[Zensical](https://zensical.org) and [ProperDocs](https://properdocs.org) from
+the same `mkdocs.yml` — see `docs/design.md` for why that matters.
 
 ## License
 

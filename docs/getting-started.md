@@ -1,0 +1,128 @@
+# Getting started
+
+## Install
+
+```console
+pip install varda
+```
+
+Python 3.11 or newer. The only runtime dependency is `linkml-runtime`.
+
+## Annotate a model
+
+Varda reads an ordinary LinkML schema. Classes carrying `varda:` annotations
+are tables; anything else in the file is left alone.
+
+```yaml title="mart.yaml"
+id: https://example.org/mart
+name: mart
+prefixes:
+  linkml: https://w3id.org/linkml/
+  varda: https://w3id.org/varda/
+default_prefix: mart
+default_range: string
+imports:
+  - linkml:types
+
+classes:
+
+  DimCustomer:
+    annotations:
+      varda:role: dimension
+      varda:scd: type_2
+    attributes:
+      customer_key:
+        range: integer
+        annotations:
+          varda:role: surrogate_key
+      customer_id:
+        annotations:
+          varda:role: natural_key
+      country:
+        annotations:
+          varda:role: attribute
+
+  FctOrder:
+    annotations:
+      varda:role: fact
+      varda:fact_type: transaction
+      varda:grain: one row per line of a customer order
+    attributes:
+      customer_key:
+        range: integer
+        annotations:
+          varda:role: foreign_key
+          varda:references: DimCustomer
+      net_amount:
+        range: decimal
+        annotations:
+          varda:role: measure
+          varda:additivity: additive
+          varda:unit: EUR
+```
+
+Three things are doing the work here. `varda:role` on the class says what the
+table *is*; `varda:role` on each column says what the column *is*; and
+`varda:grain` states what one row of the fact represents.
+
+!!! tip "The grain sentence is the most valuable line in the file"
+    A fact table whose grain nobody can state in one sentence is one whose
+    double counting nobody can rule out. If it takes two sentences, the table
+    is usually doing two jobs.
+
+## Check it
+
+```console
+$ varda check mart.yaml
+2 tables checked against 22 rules (varda 0.1.0): 0 errors, 0 warnings
+```
+
+Introduce a mistake — misspell `varda:grain` as `varda:grian`, say — and:
+
+```console
+$ varda check mart.yaml
+ERROR V001  FctOrder
+        unknown table annotation 'varda:grian'; declare it in varda.yaml or fix the typo
+ERROR V103  FctOrder
+        no varda:grain; state what exactly one row represents
+
+2 tables checked against 22 rules (varda 0.1.0): 2 errors, 0 warnings
+```
+
+`--strict` also fails on warnings, and on an exemption that names a rule
+nobody registers — a suppression that has outlived the rule it suppressed.
+
+## Generate from it
+
+```console
+$ varda generate mart.yaml --out out/
+wrote out/docs/model.md
+wrote out/sql/mart.sql
+
+2 artifacts from 2 generators
+```
+
+Generation **fails closed**: every generator runs and every result is
+collected before a single byte is written, so a generator that raises leaves
+no partial output tree behind. A half-generated estate is worse than none —
+it looks complete, and the stale parts are the ones nobody thinks to check.
+
+Output is deterministic. Nothing is timestamped and nothing depends on the
+environment, so the same model produces the same bytes and generated files
+can be committed and diffed like any other source.
+
+## In CI
+
+```yaml title=".github/workflows/model.yml"
+- run: pip install varda
+- run: varda check mart.yaml --strict
+```
+
+Exit codes are part of the contract: `0` success, `1` the model or the run
+failed, `2` the invocation was wrong.
+
+## Next
+
+- [Concepts](concepts.md) — what Varda means by grain, role, additivity and SCD
+- [Vocabulary](reference/vocabulary.md) — all eleven annotations
+- [Extending](extending.md) — adding your organization's own metadata
