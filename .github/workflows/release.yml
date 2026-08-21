@@ -112,7 +112,7 @@ jobs:
 # At https://pypi.org/manage/account/publishing/ add a pending publisher:
 #
 #     PyPI project name   varda
-#     Owner               varda-project
+#     Owner               mluttikh
 #     Repository name     varda
 #     Workflow name       release.yml
 #     Environment name    pypi

@@ -246,9 +246,13 @@ there — and never for anyone working from a source checkout.
 
 ## 7. Release
 
-Name reserved on PyPI as `varda`. Repository `varda-project/varda`, docs at
-`varda-project.readthedocs.io` — the bare `varda` GitHub org and
-readthedocs subdomain are held by an unrelated bioinformatics project.
+Repository <https://github.com/mluttikh/varda>. PyPI project name `varda`.
+
+There is no documentation site yet. `varda.readthedocs.io` and the bare
+`varda` GitHub organisation are both held by an unrelated bioinformatics
+project, so the natural home is GitHub Pages at
+`mluttikh.github.io/varda` once there is something to publish. Until then
+`README.md` and this file are the documentation.
 
 Releases go out through `.github/workflows/release.yml`, triggered by
 publishing a GitHub release. It re-runs the whole gate, checks the tag
@@ -267,7 +271,7 @@ the first real upload.
 
 **One-time setup on PyPI**, at
 <https://pypi.org/manage/account/publishing/> — add a pending publisher for
-project `varda`, owner `varda-project`, repository `varda`, workflow
+project `varda`, owner `mluttikh`, repository `varda`, workflow
 `release.yml`, environment `pypi`. Until that exists the release workflow
 fails at the upload step, which is the intended behaviour rather than a
 surprise. Attaching required reviewers to the `pypi` environment in
