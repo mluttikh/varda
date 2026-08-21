@@ -1,13 +1,13 @@
 id: https://varda-project.org/profile/varda
 name: varda
 version: 0.1.0
-title: The Varda profile — dimensional modelling vocabulary for LinkML
+title: The Varda profile — dimensional modeling vocabulary for LinkML
 description: >-
   Varda is a *profile* of LinkML, not a replacement for it. LinkML already
   knows about classes, slots, ranges, cardinality, enumerations, inheritance,
   identifiers and imports. It does not know about facts, dimensions, grain,
   additivity or slowly-changing dimensions, because those are dimensional
-  modelling concepts rather than general modelling concepts.
+  modeling concepts rather than general modeling concepts.
 
   This schema declares the vocabulary Varda adds, as LinkML enumerations and
   classes. Every `varda:` annotation that may appear on a domain model is
@@ -22,8 +22,8 @@ description: >-
 
   **Scope.** This is the deliberately small core: eleven annotations that
   describe a standard star schema and nothing else. Anything specific to one
-  organisation — cost centres, retention, data classification, ownership —
-  belongs in an extension under that organisation's own prefix. See
+  organization — cost centers, retention, data classification, ownership —
+  belongs in an extension under that organization's own prefix. See
   `varda.ext`.
 
 license: https://creativecommons.org/publicdomain/zero/1.0/
@@ -41,7 +41,7 @@ imports:
 # These are closed on purpose, and the constraint is load-bearing: an
 # extension may add annotations but may NOT add a value to an enum here.
 # Every generator dispatches exhaustively on these, and a generator that has
-# to tolerate an unrecognised value has a silent fallback path instead of a
+# to tolerate an unrecognized value has a silent fallback path instead of a
 # mapping. Widening from outside would turn that discipline into a default.
 #
 # Varda may widen its own enums in a later minor version — that is backward

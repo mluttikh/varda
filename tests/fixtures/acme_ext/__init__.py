@@ -1,7 +1,7 @@
 """An extension, as a third party would write one.
 
 This is the fixture the test suite uses, and it is deliberately written the
-way a real organisation would write one: a profile declaring the vocabulary,
+way a real organization would write one: a profile declaring the vocabulary,
 a rule set under its own tag, and one `Extension` exported as `EXTENSION`.
 
 Note what it does *not* do. It never imports from anywhere in `varda` except
@@ -31,15 +31,15 @@ RULES = RuleSet(tag="ACME")
 A = Extension.reader("acme")
 
 
-@RULES.rule("ACME101", "error", "Every table names a cost centre")
+@RULES.rule("ACME101", "error", "Every table names a cost center")
 def acme101(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.tables:
-        if not A.get(table.cls, "cost_centre"):
+        if not A.get(table.cls, "cost_center"):
             yield Finding(
                 "ACME101",
                 "error",
                 str(table),
-                "no acme:cost_centre; storage has to be billed to someone",
+                "no acme:cost_center; storage has to be billed to someone",
             )
 
 

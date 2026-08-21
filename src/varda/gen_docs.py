@@ -86,5 +86,5 @@ def generate(model: DimensionalModel) -> str:
 
 
 def run(ctx: Context) -> dict[str, str]:
-    """Run this generator and return its artefacts."""
+    """Run this generator and return its artifacts."""
     return {"docs/model.md": generate(ctx.model)}

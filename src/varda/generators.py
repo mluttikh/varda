@@ -13,12 +13,12 @@ from .ext import Generator
 BUILTIN: tuple[Generator, ...] = (
     Generator(
         name="sql",
-        artefacts=("sql/mart.sql",),
+        artifacts=("sql/mart.sql",),
         run=gen_sql.run,
     ),
     Generator(
         name="docs",
-        artefacts=("docs/model.md",),
+        artifacts=("docs/model.md",),
         run=gen_docs.run,
     ),
 )

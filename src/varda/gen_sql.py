@@ -123,5 +123,5 @@ def generate(model: DimensionalModel, schema: str = "mart") -> str:
 
 
 def run(ctx: Context) -> dict[str, str]:
-    """Run this generator and return its artefacts."""
+    """Run this generator and return its artifacts."""
     return {"sql/mart.sql": generate(ctx.model, ctx.schema)}
