@@ -18,10 +18,10 @@ one tool's extension API.
 
 from __future__ import annotations
 
+import inspect
 import pathlib
 import subprocess
 import sys
-import textwrap
 from typing import Any
 
 from varda import registry, rules
@@ -189,7 +189,14 @@ def rules_page() -> str:
                 "",
             ]
             if fn.__doc__:
-                out += [textwrap.dedent(fn.__doc__).strip(), ""]
+                # `inspect.cleandoc`, not `textwrap.dedent`. A docstring's
+                # first line is flush against the opening quotes while the
+                # rest is indented, so the *common* prefix dedent looks for
+                # is empty and it strips nothing — leaving four spaces on
+                # every continuation line, which Markdown renders as a code
+                # block. The reasoning then arrives as monospace with a copy
+                # button instead of as prose.
+                out += [inspect.cleandoc(fn.__doc__), ""]
     return "\n".join(out)
 
 

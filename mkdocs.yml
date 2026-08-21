@@ -28,11 +28,19 @@ theme:
     # palette actually is.
     - media: "(prefers-color-scheme: light)"
       scheme: default
+      # `custom` is not a colour Material ships; it is the hook that makes it
+      # stamp data-md-color-primary="custom" on <body>, which is what lets
+      # stylesheets/varda.css define the palette. Without it Material stamps
+      # "indigo" and its own block shadows ours from further down the tree.
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
