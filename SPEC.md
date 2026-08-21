@@ -197,7 +197,7 @@ request, in five parallel jobs:
 | --- | --- |
 | `lint` | `ruff check` and `ruff format --check`, as separate steps so a failure says which |
 | `types` | `mypy --strict`. One interpreter only — `python_version` is pinned to 3.11, so a matrix would repeat one answer |
-| `test` | `pytest` on 3.11, 3.12 and 3.13 on Linux, plus 3.12 on macOS and Windows |
+| `test` | `pytest` on 3.11, 3.12, 3.13 and 3.14 on Linux, plus 3.12 on macOS and Windows |
 | `gate` | `./run_all.sh` — the same script run locally |
 | `package` | builds, `twine check --strict`, asserts the profile and `py.typed` are in the wheel, then installs the wheel in a clean venv and runs the CLI from it |
 

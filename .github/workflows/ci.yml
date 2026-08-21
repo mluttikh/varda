@@ -73,7 +73,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         include:
           # Two extra cells rather than a full 3x3. This package walks parent
           # directories looking for varda.toml and joins POSIX-style artifact
