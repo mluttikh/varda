@@ -1,0 +1,44 @@
+/* Varda's palette, carried over from the specification page.
+   Cool slate neutrals rather than a warm grey, and a lichen green — the
+   colours a cairn actually is, rather than a hue picked off a palette. */
+
+:root {
+  --md-primary-fg-color:        #2F6B57;
+  --md-primary-fg-color--light: #3E8A70;
+  --md-primary-fg-color--dark:  #22503F;
+  --md-accent-fg-color:         #22503F;
+  --md-default-bg-color:        #F5F7F8;
+  --md-typeset-a-color:         #2F6B57;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        #6FBFA0;
+  --md-primary-fg-color--light: #8FD3B8;
+  --md-primary-fg-color--dark:  #172B24;
+  --md-accent-fg-color:         #8FD3B8;
+  --md-default-bg-color:        #10151A;
+  --md-typeset-a-color:         #6FBFA0;
+  --md-code-bg-color:           #171D23;
+}
+
+/* Rule severities. Semantic colour, deliberately separate from the accent —
+   a reader scanning the rule list should be able to spot the errors without
+   reading a word. */
+.sev-error   { color: #A6483A; }
+.sev-warning { color: #9A6E24; }
+.sev-info    { color: #5A6672; }
+
+[data-md-color-scheme="slate"] .sev-error   { color: #E08877; }
+[data-md-color-scheme="slate"] .sev-warning { color: #D6A64E; }
+[data-md-color-scheme="slate"] .sev-info    { color: #8D99A4; }
+
+/* Rule entries read as a reference list, not as prose sections. */
+.md-typeset h3[id^="v"] {
+  font-family: var(--md-code-font-family, monospace);
+  scroll-margin-top: 4rem;
+}
+
+/* Tables here are mostly two- and three-column reference material; let the
+   meaning column breathe rather than wrapping the identifier. */
+.md-typeset table:not([class]) td:first-child { white-space: nowrap; }
+.md-typeset table:not([class]) { font-size: .78rem; }

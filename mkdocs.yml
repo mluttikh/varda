@@ -1,0 +1,99 @@
+site_name: Varda
+site_description: Dimensional modeling for LinkML — a profile, its rules, and the generators that hang off it
+site_url: https://mluttikh.github.io/varda/
+repo_url: https://github.com/mluttikh/varda
+repo_name: mluttikh/varda
+edit_uri: edit/main/docs/
+copyright: MIT-licensed. The profile vocabulary is CC0.
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    # Colours are set in stylesheets/varda.css rather than by naming one of
+    # Material's built-in hues, so the docs match the specification page:
+    # cool slate neutrals and a lichen green, which is where a cairn's own
+    # palette actually is.
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/varda.css
+
+# The reference pages under docs/reference/ are written by
+# `scripts/gen_reference.py`, which runs before the build and is not committed.
+# A plain script rather than a generator plugin, so the docs are not bound to
+# one tool's extension API — see docs/design.md.
+plugins:
+  - search
+
+# Local-development convenience only: regenerates the reference pages before
+# each build so `mkdocs serve` reflects a change to a rule docstring or the
+# profile without a manual step. `scripts/gen_reference.py` remains a
+# standalone script, and CI runs it explicitly, so a generator that ignores
+# hooks loses nothing.
+hooks:
+  - scripts/mkdocs_hooks.py
+
+# Rebuild when the package changes, not only when the markdown does — the
+# reference pages are derived from it.
+watch:
+  - src
+  - scripts
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.snippets
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Concepts: concepts.md
+  - Reference:
+      - Vocabulary: reference/vocabulary.md
+      - Rules: reference/rules.md
+      - Command line: reference/cli.md
+  - Extending: extending.md
+  - Design notes: design.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/mluttikh/varda
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/varda/

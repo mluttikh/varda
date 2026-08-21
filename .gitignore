@@ -9,3 +9,7 @@ build/
 dist/
 out/
 *.DS_Store
+
+# Written by scripts/gen_reference.py at build time.
+docs/reference/
+site/
