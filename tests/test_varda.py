@@ -237,7 +237,13 @@ def test_v003_is_not_an_error() -> None:
 def test_v101_table_without_role(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
-        {"Thing": {"annotations": {"varda:grain": "one row per thing here"}}},
+        {
+            "Thing": {
+                "annotations": {
+                    "varda:grain_statement": "one row per thing here"
+                }
+            }
+        },
     )
     assert "V101" in codes(model)
 
@@ -249,48 +255,129 @@ def test_v102_column_without_role(tmp_path: pathlib.Path) -> None:
     assert "V102" in codes(model)
 
 
+def _fact(**annotations: Any) -> dict[str, Any]:
+    """Build a fact with one foreign key and one degenerate dimension.
+
+    Enough structure for a legal grain to be built out of, so grain tests can
+    vary only the annotation under test.
+    """
+    return {
+        "annotations": {"varda:role": "fact", **annotations},
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "foreign_key",
+                    "varda:references": "DimThing",
+                },
+            },
+            "ticket": {"annotations": {"varda:role": "degenerate_dimension"}},
+            "amount": {
+                "range": "decimal",
+                "annotations": {
+                    "varda:role": "measure",
+                    "varda:additivity": "additive",
+                    "varda:unit": "EUR",
+                },
+            },
+        },
+    }
+
+
 def test_v103_fact_without_grain(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FctX": {
-                "annotations": {"varda:role": "fact"},
-                "attributes": {
-                    "d_key": {
-                        "range": "integer",
-                        "annotations": {
-                            "varda:role": "foreign_key",
-                            "varda:references": "DimThing",
-                        },
-                    }
-                },
-            },
+            "FctX": _fact(**{"varda:grain_statement": "one row per ticket"}),
             "DimThing": dimension(),
         },
     )
     assert "V103" in codes(model)
 
 
-def test_v104_grain_is_a_phrase(tmp_path: pathlib.Path) -> None:
+def test_v104_fact_without_grain_statement(tmp_path: pathlib.Path) -> None:
+    model = build(
+        tmp_path,
+        {"FctX": _fact(**{"varda:grain": ["d_key"]}), "DimThing": dimension()},
+    )
+    assert "V104" in codes(model)
+
+
+def test_v104_grain_statement_is_a_phrase(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
         {
-            "FctX": {
-                "annotations": {"varda:role": "fact", "varda:grain": "daily"},
-                "attributes": {
-                    "d_key": {
-                        "range": "integer",
-                        "annotations": {
-                            "varda:role": "foreign_key",
-                            "varda:references": "DimThing",
-                        },
-                    }
-                },
-            },
+            "FctX": _fact(
+                **{"varda:grain": ["d_key"], "varda:grain_statement": "daily"}
+            ),
             "DimThing": dimension(),
         },
     )
     assert "V104" in codes(model)
+
+
+def test_v114_grain_names_a_missing_column(tmp_path: pathlib.Path) -> None:
+    model = build(
+        tmp_path,
+        {
+            "FctX": _fact(
+                **{
+                    "varda:grain": ["d_key", "nonesuch"],
+                    "varda:grain_statement": "one row per thing per other",
+                }
+            ),
+            "DimThing": dimension(),
+        },
+    )
+    assert "V114" in codes(model)
+
+
+def test_v115_grain_cannot_be_built_from_a_measure(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A measure in a grain is the diagnostic form of a real confusion.
+
+    A fact identified by one of its own measurements gains a second row every
+    time the same event is measured differently, which is the double counting
+    the grain exists to rule out.
+    """
+    model = build(
+        tmp_path,
+        {
+            "FctX": _fact(
+                **{
+                    "varda:grain": ["d_key", "amount"],
+                    "varda:grain_statement": "one row per thing per amount",
+                }
+            ),
+            "DimThing": dimension(),
+        },
+    )
+    assert "V115" in codes(model)
+
+
+def test_a_well_formed_grain_is_quiet(tmp_path: pathlib.Path) -> None:
+    """The grain rules stay silent on a fact that declares both halves.
+
+    Worth asserting explicitly: five rules now read the grain, and a suite
+    that only ever checks that they fire cannot tell an alert validator from
+    a noisy one.
+    """
+    model = build(
+        tmp_path,
+        {
+            "FctX": _fact(
+                **{
+                    "varda:grain": ["d_key", "ticket"],
+                    "varda:grain_statement": "one row per ticket per thing",
+                    "varda:fact_type": "transaction",
+                }
+            ),
+            "DimThing": dimension(),
+        },
+    )
+    fired = codes(model)
+    assert not fired & {"V103", "V104", "V114", "V115"}
 
 
 def test_v105_dimension_without_surrogate_key(
@@ -330,7 +417,7 @@ def test_v107_fact_without_foreign_key(tmp_path: pathlib.Path) -> None:
             "FctX": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                 },
                 "attributes": {
                     "amount": {
@@ -355,7 +442,7 @@ def test_v108_foreign_key_without_target(tmp_path: pathlib.Path) -> None:
             "FctX": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                 },
                 "attributes": {
                     "d_key": {
@@ -376,7 +463,7 @@ def test_v109_foreign_key_target_missing(tmp_path: pathlib.Path) -> None:
             "FctX": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                 },
                 "attributes": {
                     "d_key": {
@@ -400,7 +487,7 @@ def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
             "FctA": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                     "varda:fact_type": "transaction",
                 },
                 "attributes": {
@@ -416,7 +503,7 @@ def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
             "FctB": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per other thing that happened",
+                    "varda:grain_statement": "one row per other thing",
                     "varda:fact_type": "transaction",
                 },
                 "attributes": {
@@ -442,7 +529,7 @@ def test_v111_fact_without_type(tmp_path: pathlib.Path) -> None:
             "FctX": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                 },
                 "attributes": {
                     "d_key": {
@@ -467,7 +554,7 @@ def test_v112_surrogate_key_on_a_fact(tmp_path: pathlib.Path) -> None:
             "FctX": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                     "varda:fact_type": "transaction",
                 },
                 "attributes": {
@@ -533,7 +620,7 @@ def test_v203_semi_additive_over_is_not_a_key(
             "FctX": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                     "varda:fact_type": "periodic_snapshot",
                 },
                 "attributes": {
@@ -597,7 +684,7 @@ def test_v206_fact_without_measures(tmp_path: pathlib.Path) -> None:
             "FctX": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                     "varda:fact_type": "transaction",
                 },
                 "attributes": {
@@ -623,7 +710,7 @@ def test_v206_silent_when_declared_factless(tmp_path: pathlib.Path) -> None:
             "FctX": {
                 "annotations": {
                     "varda:role": "fact",
-                    "varda:grain": "one row per thing that happened",
+                    "varda:grain_statement": "one row per thing that happened",
                     "varda:fact_type": "factless",
                 },
                 "attributes": {

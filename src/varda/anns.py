@@ -13,6 +13,7 @@ vocabulary. Varda's own reader is :data:`varda`.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -75,6 +76,24 @@ class Reader:
         value = self.raw(obj, key)
         return None if value is None else str(value)
 
+    def get_list(self, obj: Any, key: str) -> tuple[str, ...]:
+        """Read one annotation as a tuple of strings.
+
+        A YAML list arrives as a list and a bare scalar arrives as a scalar,
+        and both are legitimate ways to write a one-element annotation. The
+        scalar is widened rather than rejected, because `grain: order_id` is
+        what someone writes for a single-column grain and refusing it would
+        be pedantry with no safety behind it.
+        """
+        value = self.raw(obj, key)
+        if value is None:
+            return ()
+        if isinstance(value, (str, bytes)):
+            return (str(value),)
+        if isinstance(value, Iterable):
+            return tuple(str(v) for v in value)
+        return (str(value),)
+
     def present(self, obj: Any) -> bool:
         """Flag whether the object carries any annotation in this namespace."""
         return any(k.startswith(self.tag) for k in anns(obj))
@@ -89,6 +108,7 @@ class Reader:
 varda = Reader("varda")
 
 get = varda.get
+get_list = varda.get_list
 
 
 def is_model_object(obj: Any) -> bool:

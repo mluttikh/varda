@@ -210,14 +210,40 @@ classes:
 
       grain:
         description: >-
-          What exactly one row of this table represents, as a sentence.
+          The columns at which rows of this table are unique — the set that
+          together identifies exactly one row. Required on facts.
 
-          Required on facts, and the most important sentence in the model.
-          Conventionally phrased "one row per ...". A grain that cannot be
-          stated in one sentence is a sign the table is doing two jobs, and
-          the discipline of writing it is most of the value — a fact table
-          whose grain nobody can state is one whose double counting nobody
-          can rule out.
+          This is the grain proper: in every formal treatment of dimensional
+          modeling the grain *is* the column set that identifies a row.
+
+          Every entry must name a column of this table, and each must be a
+          foreign key or a degenerate dimension: those are the columns that
+          locate a row in the model's dimensional space. A measure cannot be
+          part of a grain, because a grain is what a row is, not what it
+          records.
+
+          Stating the grain as columns is what makes it checkable — a
+          validator can test the claim, and a generator can emit it as a
+          uniqueness constraint the database enforces.
+        range: string
+        multivalued: true
+
+      grain_statement:
+        description: >-
+          What exactly one row of this table represents, as a sentence.
+          Required on facts, alongside `varda:grain`.
+
+          Conventionally phrased "one row per ...". Checked for being a
+          sentence and nothing further: `varda:grain` carries the half of
+          the claim a validator can test, and this carries the half it
+          cannot.
+
+          The sentence is not redundant with the columns. It states *why*
+          those columns, and what a row means to somebody reading the model
+          rather than querying it. A
+          fact table whose grain nobody can state in a sentence is one whose
+          double counting nobody can rule out, and the discipline of writing
+          it is most of the value.
         range: string
 
       fact_type:

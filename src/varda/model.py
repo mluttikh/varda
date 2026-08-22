@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from linkml_runtime.utils.schemaview import SchemaView
 
-from .anns import get, is_model_object
+from .anns import get, get_list, is_model_object
 
 if TYPE_CHECKING:
     from linkml_runtime.linkml_model.meta import (
@@ -117,8 +117,26 @@ class Table:
         return get(self.cls, "role")
 
     @property
-    def grain(self) -> str | None:
-        return get(self.cls, "grain")
+    def grain(self) -> tuple[str, ...]:
+        """The columns at which rows are unique, in declared order."""
+        return get_list(self.cls, "grain")
+
+    @property
+    def grain_statement(self) -> str | None:
+        return get(self.cls, "grain_statement")
+
+    @property
+    def grain_columns(self) -> tuple[Column, ...]:
+        """Resolve the declared grain to columns, skipping unknown names.
+
+        Rules report the missing names; every other caller wants the columns
+        it can actually work with, so resolution drops what it cannot find
+        rather than raising. A generator running on a model that failed
+        `check` is already in undefined territory, and a partial grain is a
+        better failure than an exception from a property access.
+        """
+        found = (self.column(n) for n in self.grain)
+        return tuple(c for c in found if c is not None)
 
     @property
     def fact_type(self) -> str | None:

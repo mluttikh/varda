@@ -212,8 +212,8 @@ $ varda ext
 varda 0.1.0  [varda:]
     origin      built in
     rule tag    V
-    rules       22
-    table       varda:fact_type, varda:grain, varda:physical_name, varda:role, varda:scd
+    rules       24
+    table       varda:fact_type, varda:grain, varda:grain_statement, ...
     column      varda:additivity, varda:physical_name, varda:references, ...
     generators  sql, docs
 
