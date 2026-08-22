@@ -13,3 +13,9 @@ out/
 # Written by scripts/gen_reference.py at build time.
 docs/reference/
 site/
+
+# Varda is a library, not an application. A committed lockfile pins one
+# resolution that no consumer inherits — pip and uv both resolve against the
+# ranges in `pyproject.toml` — while adding a large diff to every dependency
+# change. Kept local so `uv sync` still works here.
+uv.lock
