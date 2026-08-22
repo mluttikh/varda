@@ -52,6 +52,13 @@ extra_css:
 # `scripts/gen_reference.py`, which runs before the build and is not committed.
 # A plain script rather than a generator plugin, so the docs are not bound to
 # one tool's extension API — see docs/design.md.
+# `--strict` promotes warnings to errors but leaves anchor checking at INFO,
+# so a link to `rules.md#v999` builds clean and exits 0. This raises it to a
+# warning, which `--strict` then fails on. Concepts links into the generated
+# reference by rule code, and those anchors move when a rule is renumbered.
+validation:
+  anchors: warn
+
 plugins:
   - search
 

@@ -7,6 +7,10 @@ facts, dimensions, grain, additivity or slowly-changing dimensions, because
 those are dimensional-modeling concepts rather than general modeling
 concepts.
 
+Three of them carry most of the weight: what one row of a fact *is*, how a
+measure may be aggregated, and what happens when a dimension value changes.
+Everything below builds to those.
+
 ## Tables have a role
 
 Every annotated class declares [`varda:role`](reference/vocabulary.md):
@@ -24,53 +28,20 @@ natural key, and attributes that are almost always textual or categorical.
 usually carry an allocation factor, because a customer counted once per
 segment is a customer counted three times.
 
-## Grain is a column set and a sentence
-
-`varda:grain` names the columns at which rows of a fact are unique, and
-`varda:grain_statement` says the same thing in words — conventionally "one row
-per …". Both are required on a fact, and each checks the other.
-
-The columns are the grain proper: in every formal treatment of dimensional
-modeling the grain *is* the set that identifies one row, which is why the
-annotation named after the concept holds it. Declaring it makes the claim
-testable. [`V114`](reference/rules.md#v114) checks the columns exist,
-[`V115`](reference/rules.md#v115) checks they are foreign keys or degenerate
-dimensions — a grain is what a row *is*, not what it records — and the SQL
-generator turns the set into a `UNIQUE` constraint the database enforces.
-
-The sentence is not redundant. It carries the intent a column list cannot:
-*why* those columns, and what a row means to somebody reading the model rather
-than querying it. A grain that cannot be stated in one sentence is a sign the
-table is doing two jobs, and writing it is most of the value.
-[`V104`](reference/rules.md#v104) flags a statement shorter than four words —
-it cannot tell a good sentence from a bad one, but it catches
-`grain_statement: daily`, which is the form the failure usually takes.
-
-Nothing checks the sentence *against* the columns, and that is deliberate.
-
-Such a rule would have to read English prose, and it would be right only for
-the phrasings it recognised: silent on `each row is one shipment leg`, and
-wrong about `one row per order line` over a grain of order number and line
-number, which is how the sentence is normally written. A check that fires for
-some phrasings and not others is unreliable rather than weak, and an
-unreliable check is worse than none — it invites you to stop looking while
-giving you nothing to lean on.
-
-The failure such a rule would reach for is caught exactly, further down. A
-grain missing a column becomes a `UNIQUE` constraint that fails on load:
-language-independent, and impossible to write around.
-
-So the division is clean. The columns are checked, by rules that are
-deterministic about when they fire. The sentence is checked only for being a
-sentence, and is otherwise yours — it exists to carry intent to a person, and
-a grain statement written to satisfy a linter has already lost the thing it
-was for.
-
 ## Columns have a role too
 
 `varda:role` on a slot turns a flat list of columns into a structure that
-generators and validators can reason about: `surrogate_key`, `natural_key`,
-`foreign_key`, `measure`, `attribute`, `degenerate_dimension`.
+generators and validators can reason about.
+
+| Role | On | What it is |
+| --- | --- | --- |
+| `surrogate_key` | dimension | The meaningless key facts join to. Exactly one. |
+| `natural_key` | dimension | The business identity a loader matches on. |
+| `foreign_key` | fact, bridge, dimension | A reference to another table's surrogate key. |
+| `degenerate_dimension` | fact | An identifier with no dimension table of its own. |
+| `measure` | fact, bridge | A numeric quantity that is aggregated. |
+| `attribute` | any | Descriptive context, grouped and filtered on. |
+| `version_start`, `version_end`, `is_current`, `version_number` | type-2 dimension | What marks one version of a row off from another. |
 
 The **natural key** is what a loader matches on — what makes two source rows
 the same business entity. Without one, every load either creates duplicates or
@@ -80,6 +51,32 @@ has the matching rule written somewhere the model cannot see. The
 A **degenerate dimension** is an identifier living on the fact with no
 dimension table of its own — an order number, a ticket reference. It groups
 the lines of one transaction and has no attributes worth a table.
+
+The versioning roles belong to [history](#history-what-happens-when-a-value-changes),
+below.
+
+## Grain: what one row is
+
+A fact declares its grain twice, in two forms that do different jobs.
+
+`varda:grain` names the columns at which rows are unique — the set that
+together identifies exactly one row. This is the grain proper: in every formal
+treatment of dimensional modeling the grain *is* that set. Stating it makes
+the claim testable. [`V114`](reference/rules.md#v114) checks the columns
+exist, [`V115`](reference/rules.md#v115) checks each is a foreign key or a
+degenerate dimension — a grain is what a row *is*, not what it records — and
+the SQL generator turns the set into a `UNIQUE` constraint the database
+enforces.
+
+`varda:grain_statement` says the same thing in words, conventionally "one row
+per …". It carries what a column list cannot: *why* those columns, and what a
+row means to somebody reading the model rather than querying it. A grain that
+cannot be stated in one sentence is a sign the table is doing two jobs, and
+writing it is most of the value. [`V104`](reference/rules.md#v104) checks it
+is a sentence and nothing further.
+
+Nothing compares the sentence to the columns, deliberately — see
+[Design notes](design.md#why-the-grain-sentence-is-not-checked-against-the-columns).
 
 ## Additivity is the expensive one
 
@@ -103,10 +100,11 @@ that silently never applies, and it looks exactly like one that does.
     someone who acts on it. This is the one class of modeling error that is
     both easy to make and invisible afterwards.
 
-## History is a property of the dimension
+## History: what happens when a value changes
 
-`varda:scd` declares what happens when a source attribute changes: `type_0`
-retain original, `type_1` overwrite, `type_2` add a row.
+`varda:scd` declares how a dimension responds when a source attribute
+changes: `type_0` retain the original, `type_1` overwrite it, `type_2` add a
+row.
 
 It sits on the table rather than per column, deliberately. A mixed dimension
 — some attributes overwritten, others versioned — is a genuinely harder object
@@ -117,6 +115,35 @@ an extension.
 great many dimensions are genuinely type 1 and saying so feels like ceremony.
 It stays a rule because "we never decided" and "we decided overwrite" look
 identical in the model and cost very differently two years later.
+
+### How a type-2 dimension versions
+
+Type 2 keeps a row per change. It does not say how the current row is found,
+because the field does not agree on that, and three mechanisms are all in
+normal use:
+
+| Strategy | Columns | The current row is |
+| --- | --- | --- |
+| window | `version_start` + `version_end` | the one whose end is null or far-future |
+| flagged | `version_start` + `is_current` | the flagged one; the end derived from the next row |
+| counter | `version_number` | the highest per natural key |
+
+Varda accepts all three, and insists only that *one* of them be marked —
+because a dimension versioning by an undeclared mechanism cannot have its
+uniqueness generated. That constraint is the return on saying so: a type-2
+dimension is unique on its natural key **plus** the discriminator, never the
+natural key alone, which would reject the second version of every row.
+
+The period follows SQL:2011 — closed at the start, open at the end. A row is
+in force from `version_start` up to but not including `version_end`, which is
+what stops consecutive versions overlapping at their boundary.
+
+!!! note "Version time is usually not business time"
+    `version_start` is named for the version rather than for validity because
+    in practice it records when the warehouse *noticed* a change, not when the
+    change was true. dbt's `dbt_valid_from` and Data Vault's `LOAD_DATE` are
+    both this, whatever they are called. Keeping both would be bitemporality,
+    which this core does not model.
 
 ## What Varda does not model
 

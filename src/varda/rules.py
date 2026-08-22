@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from . import registry
 from .anns import anns
 from .ext import SEVERITIES, Severity
+from .model import VERSIONING_ROLES
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -407,6 +408,11 @@ def v112(model: DimensionalModel) -> Iterator[Finding]:
         "surrogate_key": ("dimension",),
         "natural_key": ("dimension",),
         "degenerate_dimension": ("fact",),
+        # Versioning columns describe a dimension row's history. A fact
+        # records events that already happened and does not revise them, so
+        # a version period on one is either a misunderstanding or an attempt
+        # at bitemporality, which this core does not model.
+        **dict.fromkeys(VERSIONING_ROLES, ("dimension",)),
     }
     for table in model.tables:
         if table.role is None:
@@ -444,17 +450,29 @@ def v113(model: DimensionalModel) -> Iterator[Finding]:
             )
 
 
-@RULES.rule("V114", "error", "Grain columns exist")
+@RULES.rule("V114", "error", "Grain columns are real and distinct")
 def v114(model: DimensionalModel) -> Iterator[Finding]:
-    """Flag a grain naming a column the table does not have.
+    """Flag a grain naming a column the table lacks, or naming one twice.
 
-    The failure this catches is silent by construction, in the same way
-    V203's is: a grain that names a column nobody declared is a claim about
-    row identity that can never be checked against anything, and it looks
-    exactly like one that can.
+    Both failures are silent by construction, in the same way V203's is. An
+    unknown name is a claim about row identity that can never be checked
+    against anything and looks exactly like one that can — and because the
+    generator resolves the grain to columns it can find, the emitted
+    constraint quietly covers *fewer* columns than were declared, which
+    rejects legitimate rows and reads like broken source data.
+
+    A repeated name is the same mistake wearing a different hat: it adds
+    nothing to the constraint and means the modeler listed something twice
+    without noticing.
+
+    Checked on any table that declares a grain rather than on facts alone.
+    Requiring one is a fact's business — V103 — but a grain that is wrong is
+    wrong wherever it appears, and `examples/retail.yaml` puts one on a
+    bridge.
     """
-    for table in model.facts:
+    for table in model.tables:
         have = {c.name for c in table.columns}
+        seen: set[str] = set()
         for name in table.grain:
             if name not in have:
                 yield Finding(
@@ -464,6 +482,15 @@ def v114(model: DimensionalModel) -> Iterator[Finding]:
                     f"varda:grain names {name!r}, which is not a column "
                     f"of this table",
                 )
+            elif name in seen:
+                yield Finding(
+                    "V114",
+                    "error",
+                    str(table),
+                    f"varda:grain names {name!r} twice; a column can only "
+                    f"identify a row once",
+                )
+            seen.add(name)
 
 
 @RULES.rule("V115", "error", "Grain columns locate a row")
@@ -478,7 +505,7 @@ def v115(model: DimensionalModel) -> Iterator[Finding]:
     silently becomes a second row.
     """
     allowed = {"foreign_key", "degenerate_dimension"}
-    for table in model.facts:
+    for table in model.tables:
         for column in table.grain_columns:
             if column.role not in allowed:
                 yield Finding(
@@ -489,6 +516,120 @@ def v115(model: DimensionalModel) -> Iterator[Finding]:
                     f"a grain is composed of foreign keys and degenerate "
                     f"dimensions",
                 )
+
+
+@RULES.rule("V116", "error", "Versioning columns belong to a type-2 dimension")
+def v116(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a version period on a dimension that keeps no versions.
+
+    Type 0 retains the original value and type 1 overwrites it. Neither
+    produces a second row, so a column bounding "this version" describes
+    something the declared type says does not exist. One of the two is
+    wrong, and which one is not for a validator to guess.
+    """
+    for table in model.dimensions:
+        if table.scd is None or table.scd == "type_2":
+            continue  # V113 handles the missing case
+        for column in table.versioning:
+            yield Finding(
+                "V116",
+                "error",
+                str(column),
+                f"role {column.role!r} versions a row, but {table.name} is "
+                f"{table.scd}, which keeps no versions",
+            )
+
+
+@RULES.rule("V117", "error", "A version period that ends also starts")
+def v117(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a version end with no corresponding start.
+
+    An end alone bounds nothing. The reverse is not a finding: storing only
+    the start and deriving the end from the next version is a normal design,
+    and Data Vault virtualizes the end column outright.
+    """
+    for table in model.dimensions:
+        if table.version_ends and not table.version_starts:
+            yield Finding(
+                "V117",
+                "error",
+                str(table),
+                "varda:role: version_end with no version_start; an end "
+                "bounds nothing on its own",
+            )
+
+
+@RULES.rule("V118", "error", "At most one column per versioning role")
+def v118(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a repeated versioning role on one table.
+
+    Two starts is two answers to when a version began, and every consumer
+    picks one — the generator by declaration order, the reader by whichever
+    name looks more official. They will not always pick the same one.
+    """
+    for table in model.dimensions:
+        seen: dict[str, list[str]] = {}
+        for column in table.versioning:
+            seen.setdefault(column.role or "", []).append(column.name)
+        for role, names in sorted(seen.items()):
+            if len(names) > 1:
+                yield Finding(
+                    "V118",
+                    "error",
+                    str(table),
+                    f"{len(names)} columns claim role {role!r} "
+                    f"({', '.join(sorted(names))}); at most one may",
+                )
+
+
+@RULES.rule("V119", "warning", "A type-2 dimension says how it versions")
+def v119(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a type-2 dimension with no versioning column marked.
+
+    Type 2 keeps a row per change, so something must distinguish those rows
+    — a period, a flag, a counter. Varda does not insist which, because the
+    field uses all three and calling any of them mandatory would reject
+    working designs. It does insist that one of them be *named*, because a
+    dimension that versions by a mechanism nobody declared cannot have its
+    uniqueness generated or its current row found by anything but guesswork.
+    """
+    for table in model.dimensions:
+        if table.scd == "type_2" and not table.versioning:
+            yield Finding(
+                "V119",
+                "warning",
+                str(table),
+                "type_2 but no version_start, is_current or version_number; "
+                "nothing marks one version off from another",
+            )
+
+
+@RULES.rule("V120", "error", "Table annotations sit on the right role")
+def v120(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a table annotation on a kind of table it does not describe.
+
+    `varda:fact_type` is the temporal shape of a fact; `varda:scd` is how a
+    dimension answers a change. Neither means anything on the other kind of
+    table, and neither is inert when misplaced: generators read both, so an
+    `scd` on a fact emits DDL commented as keeping history the fact does not
+    keep.
+
+    V112 is this check for column roles. This is the same one a level up.
+    """
+    misplaced = {"fact_type": ("fact",), "scd": ("dimension",)}
+    for table in model.tables:
+        if table.role is None:
+            continue  # V101 already said so
+        for key, allowed in sorted(misplaced.items()):
+            if getattr(table, key) is None or table.role in allowed:
+                continue
+            yield Finding(
+                "V120",
+                "error",
+                str(table),
+                f"varda:{key} describes a {' or '.join(allowed)}, and "
+                f"{table.name} is a {table.role}",
+            )
 
 
 # ---------------------------------------------------------------------------

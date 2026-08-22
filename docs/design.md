@@ -83,13 +83,61 @@ The parts deliberately left out of 0.1, with the reasoning for each, are
 listed in `SPEC.md` §4. Analytical functions, model diffing, lineage export
 and the drift gate all exist in a larger internal prototype and were cut.
 
+## Why the grain sentence is not checked against the columns
+
+A fact declares its grain twice — as columns and as a sentence — and nothing
+compares them. That looks like an omission and is not.
+
+A rule that compared them would have to read English prose, and it would be
+right only for the phrasings it recognised: silent on `each row is one
+shipment leg`, and wrong about `one row per order line` over a grain of order
+number and line number, which is how the sentence is normally written. A check
+that fires for some phrasings and not others is unreliable rather than weak,
+and an unreliable check is worse than none — it invites you to stop looking
+while giving you nothing to lean on.
+
+The failure such a rule would reach for is caught exactly, further down. A
+grain missing a column becomes a `UNIQUE` constraint that fails on load:
+language-independent, and impossible to write around.
+
+There is a second cost, and it is the one that decides it. A rule shaping the
+sentence teaches people to write for the rule. The sentence exists to carry
+intent to a person, and a grain statement written to satisfy a linter has
+already lost the thing it was for.
+
+## Why type 2 does not require a validity window
+
+The obvious rule — a type-2 dimension must have a start and an end column —
+would reject working warehouses.
+
+Type 2 is defined by keeping a row per change, not by how the current row is
+identified, and at least three mechanisms are in normal use: a closed period,
+a start plus a current flag with the end derived from the next row, and a bare
+counter with no timestamps at all. Data Vault does not store an end column;
+it computes one as a view over an insert-only satellite. Kimball recommends
+effective date, expiration date and current indicator together, but that is a
+recommendation rather than the definition.
+
+So the rules are the ones that hold across all three. A versioning column on a
+type 0 or type 1 dimension is an error, because those keep no versions to
+bound. An end with no start is an error, because it bounds nothing. Two
+columns claiming one role is an error. A type-2 dimension marking none of them
+is a warning — something must distinguish the rows, and Varda cannot insist
+which.
+
+The same reasoning names the roles. `version_start` rather than `valid_from`,
+because dbt's `dbt_valid_from` and Data Vault's `LOAD_DATE` both record when
+the warehouse observed a change rather than when it was true. A role named for
+validity would invite asserting business time about a load timestamp, and
+nothing in the model could tell.
+
 ## Why generated docs
 
 The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of twenty-four rules disagrees with the code within two
+A hand-written table of twenty-nine rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

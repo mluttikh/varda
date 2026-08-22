@@ -68,21 +68,22 @@ classes:
         annotations:
           varda:role: attribute
       valid_from:
-        description: Start of this version's validity window.
+        description: Start of this version's period, inclusive.
         range: datetime
         required: true
         annotations:
-          varda:role: attribute
+          varda:role: version_start
       valid_to:
-        description: End of this version's validity window; open if null.
+        description: End of this version's period, exclusive; open if null.
         range: datetime
         annotations:
-          varda:role: attribute
+          varda:role: version_end
       is_current:
+        description: Flags the version in force now.
         range: boolean
         required: true
         annotations:
-          varda:role: attribute
+          varda:role: is_current
 
   DimProduct:
     description: A sellable item.

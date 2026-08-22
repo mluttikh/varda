@@ -53,8 +53,16 @@ def _table(table: Table) -> str:
     if table.description:
         lines += [table.description, ""]
     facts = [f"**Physical name:** `{table.physical}`"]
+    # The sentence leads and the columns follow, because the audience for
+    # this page is deciding whether a table answers their question and the
+    # sentence is the part that tells them. The columns matter to whoever
+    # writes the query afterwards, which is why they get their own label
+    # rather than being folded into the same line.
+    if table.grain_statement:
+        facts.append(f"**Grain:** {table.grain_statement}")
     if table.grain:
-        facts.append(f"**Grain:** {table.grain}")
+        cols = ", ".join(f"`{c}`" for c in table.grain)
+        facts.append(f"**Unique on:** {cols}")
     if table.fact_type:
         facts.append(f"**Fact type:** {table.fact_type}")
     if table.scd:
