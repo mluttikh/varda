@@ -20,7 +20,8 @@ FctSale:
   annotations:
     varda:role: fact
     varda:fact_type: transaction
-    varda:grain: one row per product per line of a sales receipt
+    varda:grain: [order_number, product_key]
+    varda:grain_statement: one row per product per line of a receipt
   attributes:
     customer_key:
       range: integer
@@ -37,7 +38,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 22 rules (varda 0.1.0): 0 errors, 0 warnings
+8 tables checked against 24 rules (varda 0.1.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -54,17 +55,17 @@ Python 3.11+. The only runtime dependency is `linkml-runtime`.
 
 ## What it gives you
 
-**Eleven annotations.** Five on tables — `role`, `grain`, `fact_type`, `scd`,
-`physical_name`. Six on columns — `role`, `references`, `additivity`,
-`semi_additive_over`, `unit`, `physical_name`. That is the whole core
-vocabulary, and it is deliberately the whole core vocabulary.
+**Twelve annotations.** Six on tables — `role`, `grain`, `grain_statement`,
+`fact_type`, `scd`, `physical_name`. Six on columns — `role`, `references`,
+`additivity`, `semi_additive_over`, `unit`, `physical_name`. That is the whole
+core vocabulary, and it is deliberately the whole core vocabulary.
 
-**Twenty-two rules** that catch the mistakes worth catching:
+**Twenty-four rules** that catch the mistakes worth catching:
 
 | | |
 | --- | --- |
 | `V001`–`V003` | the annotations themselves — typos, bad enum values, unknown prefixes |
-| `V101`–`V113` | structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
+| `V101`–`V115` | structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
 | `V201`–`V206` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
 
 The `V2xx` family exists because additivity is where the expensive errors

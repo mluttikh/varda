@@ -85,8 +85,8 @@ def _table(table: Table, schema: str) -> str:
     lines: list[str] = []
     if table.description:
         lines += _comment(table.description)
-    if table.grain:
-        lines += _comment(table.grain, "Grain: ")
+    if table.grain_statement:
+        lines += _comment(table.grain_statement, "Grain: ")
     if table.scd:
         lines += _comment(table.scd, "Slowly-changing: ")
     lines.append(f"CREATE TABLE {schema}.{table.physical} (")
@@ -103,6 +103,15 @@ def _table(table: Table, schema: str) -> str:
             f"    FOREIGN KEY ({fk.physical}) REFERENCES "
             f"{schema}.{target.physical} ({key[0].physical})"
         )
+    # The grain, as a constraint the database enforces rather than a comment
+    # it ignores. This is the whole return on declaring `varda:grain` as
+    # columns: a uniqueness claim nobody checks is a uniqueness claim that
+    # stops being true, quietly, on some load nobody is watching.
+    grain = table.grain_columns
+    if grain:
+        cols = ", ".join(c.physical for c in grain)
+        body.append(f"    UNIQUE ({cols})")
+
     lines.append(",\n".join(body))
     lines.append(");")
     return "\n".join(lines)

@@ -80,6 +80,11 @@ def _annotation_rows(ext: Any, target: str) -> list[str]:
             continue
         for name, attr in (cls.attributes or {}).items():
             rng = _range_link(str(attr.range or "string"), view)
+            # A multivalued annotation takes a YAML list, and a reference
+            # that renders it identically to a scalar one teaches the wrong
+            # syntax. `varda:grain` is the case: `[a, b]`, not `a`.
+            if attr.multivalued:
+                rng = f"{rng}, list"
             required = " **required**" if attr.required else ""
             rows.append(
                 f"| `{ext.prefix}:{name}` | {rng}{required} "

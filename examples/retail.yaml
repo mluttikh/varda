@@ -154,7 +154,9 @@ classes:
       three times in a segment rollup.
     annotations:
       varda:role: bridge
-      varda:grain: one row per customer per segment they belong to
+      varda:grain: [customer_key, segment_key]
+      varda:grain_statement: >-
+        one row per customer per segment they belong to
     attributes:
       customer_key:
         range: integer
@@ -184,7 +186,9 @@ classes:
     annotations:
       varda:role: fact
       varda:fact_type: transaction
-      varda:grain: one row per product per line of a sales receipt
+      varda:grain: [order_number, product_key]
+      varda:grain_statement: >-
+        one row per product per line of a sales receipt
     attributes:
       date_key:
         range: integer
@@ -247,7 +251,9 @@ classes:
     annotations:
       varda:role: fact
       varda:fact_type: periodic_snapshot
-      varda:grain: one row per product per store per day
+      varda:grain: [date_key, product_key, store_key]
+      varda:grain_statement: >-
+        one row per product per store per day
     attributes:
       date_key:
         range: integer

@@ -46,8 +46,12 @@ classes:
     annotations:
       varda:role: fact
       varda:fact_type: transaction
-      varda:grain: one row per line of a customer order
+      varda:grain: [order_line]
+      varda:grain_statement: one row per line of a customer order
     attributes:
+      order_line:
+        annotations:
+          varda:role: degenerate_dimension
       customer_key:
         range: integer
         annotations:
@@ -62,19 +66,24 @@ classes:
 ```
 
 Three things are doing the work here. `varda:role` on the class says what the
-table *is*; `varda:role` on each column says what the column *is*; and
-`varda:grain` states what one row of the fact represents.
+table *is*; `varda:role` on each column says what the column *is*; and the
+grain pair says what one row of the fact represents — `varda:grain` as the
+columns at which rows are unique, `varda:grain_statement` as the sentence.
 
-!!! tip "The grain sentence is the most valuable line in the file"
+!!! tip "The grain is the most valuable thing in the file"
     A fact table whose grain nobody can state in one sentence is one whose
     double counting nobody can rule out. If it takes two sentences, the table
     is usually doing two jobs.
+
+    The two halves check each other. The columns make the claim testable —
+    they become a `UNIQUE` constraint in the generated DDL — and the sentence
+    carries the intent a column list cannot.
 
 ## Check it
 
 ```console
 $ varda check mart.yaml
-2 tables checked against 22 rules (varda 0.1.0): 0 errors, 0 warnings
+2 tables checked against 24 rules (varda 0.1.0): 0 errors, 0 warnings
 ```
 
 Introduce a mistake — misspell `varda:grain` as `varda:grian`, say — and:
@@ -84,9 +93,9 @@ $ varda check mart.yaml
 ERROR V001  FctOrder
         unknown table annotation 'varda:grian'; declare it in varda.yaml or fix the typo
 ERROR V103  FctOrder
-        no varda:grain; state what exactly one row represents
+        no varda:grain; name the columns at which rows are unique
 
-2 tables checked against 22 rules (varda 0.1.0): 2 errors, 0 warnings
+2 tables checked against 24 rules (varda 0.1.0): 2 errors, 0 warnings
 ```
 
 `--strict` also fails on warnings, and on an exemption that names a rule
@@ -124,5 +133,5 @@ failed, `2` the invocation was wrong.
 ## Next
 
 - [Concepts](concepts.md) — what Varda means by grain, role, additivity and SCD
-- [Vocabulary](reference/vocabulary.md) — all eleven annotations
+- [Vocabulary](reference/vocabulary.md) — all twelve annotations
 - [Extending](extending.md) — adding your organization's own metadata

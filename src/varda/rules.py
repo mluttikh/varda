@@ -242,34 +242,50 @@ def v102(model: DimensionalModel) -> Iterator[Finding]:
 
 @RULES.rule("V103", "error", "Every fact declares its grain")
 def v103(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a fact whose row identity is undeclared.
+
+    An error rather than a warning, on the same reasoning that makes
+    additivity required: a fact whose grain is unknown is one whose measures
+    cannot be safely aggregated through any join, so accepting it silently
+    postpones the failure to whoever queries it.
+    """
     for table in model.facts:
-        if not (table.grain or "").strip():
+        if not table.grain:
             yield Finding(
                 "V103",
                 "error",
                 str(table),
-                "no varda:grain; state what exactly one row represents",
+                "no varda:grain; name the columns at which rows are unique",
             )
 
 
 @RULES.rule("V104", "warning", "Grain is stated as a sentence")
 def v104(model: DimensionalModel) -> Iterator[Finding]:
-    """Flag a grain too short to be a claim about a row.
+    """Flag a missing or too-short grain sentence.
 
-    The threshold is crude on purpose. It cannot tell a good grain from a bad
-    one, and pretending otherwise would make this an argument rather than a
-    check. What it can catch is `grain: daily` — a word where a sentence
-    belongs, which is the form the failure almost always takes.
+    The length threshold is crude on purpose. It cannot tell a good sentence
+    from a bad one, and pretending otherwise would make this an argument
+    rather than a check. What it can catch is `grain_statement: daily` — a
+    word where a sentence belongs, which is the form the failure almost
+    always takes.
     """
     for table in model.facts:
-        grain = (table.grain or "").strip()
-        if grain and len(grain.split()) < GRAIN_MIN_WORDS:
+        statement = (table.grain_statement or "").strip()
+        if not statement:
             yield Finding(
                 "V104",
                 "warning",
                 str(table),
-                f"grain {grain!r} is a phrase, not a sentence; "
-                f'conventionally "one row per ..."',
+                "no varda:grain_statement; say what one row is, "
+                'conventionally "one row per ..."',
+            )
+        elif len(statement.split()) < GRAIN_MIN_WORDS:
+            yield Finding(
+                "V104",
+                "warning",
+                str(table),
+                f"grain statement {statement!r} is a phrase, not a "
+                f'sentence; conventionally "one row per ..."',
             )
 
 
@@ -426,6 +442,53 @@ def v113(model: DimensionalModel) -> Iterator[Finding]:
                 str(table),
                 "no varda:scd; nothing here says whether history is kept",
             )
+
+
+@RULES.rule("V114", "error", "Grain columns exist")
+def v114(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a grain naming a column the table does not have.
+
+    The failure this catches is silent by construction, in the same way
+    V203's is: a grain that names a column nobody declared is a claim about
+    row identity that can never be checked against anything, and it looks
+    exactly like one that can.
+    """
+    for table in model.facts:
+        have = {c.name for c in table.columns}
+        for name in table.grain:
+            if name not in have:
+                yield Finding(
+                    "V114",
+                    "error",
+                    str(table),
+                    f"varda:grain names {name!r}, which is not a column "
+                    f"of this table",
+                )
+
+
+@RULES.rule("V115", "error", "Grain columns locate a row")
+def v115(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a grain built from columns that cannot identify a row.
+
+    A grain is what a row *is*, not what it records. Only foreign keys and
+    degenerate dimensions place a row in the model's dimensional space, so
+    only those can compose a grain. A measure in a grain is the diagnostic
+    form of a real confusion — a fact whose identity is defined by one of
+    its own measurements is one where a second measurement of the same event
+    silently becomes a second row.
+    """
+    allowed = {"foreign_key", "degenerate_dimension"}
+    for table in model.facts:
+        for column in table.grain_columns:
+            if column.role not in allowed:
+                yield Finding(
+                    "V115",
+                    "error",
+                    f"{table}.{column.name}",
+                    f"role {column.role!r} cannot be part of a grain; "
+                    f"a grain is composed of foreign keys and degenerate "
+                    f"dimensions",
+                )
 
 
 # ---------------------------------------------------------------------------

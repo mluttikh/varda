@@ -24,17 +24,47 @@ natural key, and attributes that are almost always textual or categorical.
 usually carry an allocation factor, because a customer counted once per
 segment is a customer counted three times.
 
-## Grain is a sentence
+## Grain is a column set and a sentence
 
-`varda:grain` states what exactly one row represents. Conventionally "one row
-per …".
+`varda:grain` names the columns at which rows of a fact are unique, and
+`varda:grain_statement` says the same thing in words — conventionally "one row
+per …". Both are required on a fact, and each checks the other.
 
-This is the most important sentence in a model, and writing it is most of the
-value. A grain that cannot be stated in one sentence is a sign the table is
-doing two jobs. Rule [`V104`](reference/rules.md#v104) flags a grain shorter
-than four words — it cannot tell a good grain from a bad one, and pretending
-otherwise would make it an argument rather than a check, but it does catch
-`grain: daily`, which is the form the failure almost always takes.
+The columns are the grain proper: in every formal treatment of dimensional
+modeling the grain *is* the set that identifies one row, which is why the
+annotation named after the concept holds it. Declaring it makes the claim
+testable. [`V114`](reference/rules.md#v114) checks the columns exist,
+[`V115`](reference/rules.md#v115) checks they are foreign keys or degenerate
+dimensions — a grain is what a row *is*, not what it records — and the SQL
+generator turns the set into a `UNIQUE` constraint the database enforces.
+
+The sentence is not redundant. It carries the intent a column list cannot:
+*why* those columns, and what a row means to somebody reading the model rather
+than querying it. A grain that cannot be stated in one sentence is a sign the
+table is doing two jobs, and writing it is most of the value.
+[`V104`](reference/rules.md#v104) flags a statement shorter than four words —
+it cannot tell a good sentence from a bad one, but it catches
+`grain_statement: daily`, which is the form the failure usually takes.
+
+Nothing checks the sentence *against* the columns, and that is deliberate.
+
+Such a rule would have to read English prose, and it would be right only for
+the phrasings it recognised: silent on `each row is one shipment leg`, and
+wrong about `one row per order line` over a grain of order number and line
+number, which is how the sentence is normally written. A check that fires for
+some phrasings and not others is unreliable rather than weak, and an
+unreliable check is worse than none — it invites you to stop looking while
+giving you nothing to lean on.
+
+The failure such a rule would reach for is caught exactly, further down. A
+grain missing a column becomes a `UNIQUE` constraint that fails on load:
+language-independent, and impossible to write around.
+
+So the division is clean. The columns are checked, by rules that are
+deterministic about when they fire. The sentence is checked only for being a
+sentence, and is otherwise yours — it exists to carry intent to a person, and
+a grain statement written to satisfy a linter has already lost the thing it
+was for.
 
 ## Columns have a role too
 
