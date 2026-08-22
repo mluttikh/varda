@@ -608,11 +608,13 @@ def v119(model: DimensionalModel) -> Iterator[Finding]:
 def v120(model: DimensionalModel) -> Iterator[Finding]:
     """Flag a table annotation on a kind of table it does not describe.
 
-    The profile has said "Facts only" and "Dimensions only" in prose since
-    the first version and nothing enforced it, so `varda:scd: type_2` on a
-    fact passed clean and was rendered into the generated DDL as a comment
-    claiming the fact keeps history. V112 does this for column roles; this
-    is the same check one level up.
+    `varda:fact_type` is the temporal shape of a fact; `varda:scd` is how a
+    dimension answers a change. Neither means anything on the other kind of
+    table, and neither is inert when misplaced: generators read both, so an
+    `scd` on a fact emits DDL commented as keeping history the fact does not
+    keep.
+
+    V112 is this check for column roles. This is the same one a level up.
     """
     misplaced = {"fact_type": ("fact",), "scd": ("dimension",)}
     for table in model.tables:

@@ -40,8 +40,8 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~25 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~275 | Five commands. |
 
-**2,607 lines of source**: 1,562 of code, 472 of docstrings, 116 of
-comment, 457 blank. The prose share is deliberate and is house style —
+**2,609 lines of source**: 1,562 of code, 473 of docstrings, 116 of
+comment, 458 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 

@@ -53,11 +53,11 @@ def _table(table: Table) -> str:
     if table.description:
         lines += [table.description, ""]
     facts = [f"**Physical name:** `{table.physical}`"]
-    # The sentence leads and the columns follow it, because the audience for
+    # The sentence leads and the columns follow, because the audience for
     # this page is deciding whether a table answers their question and the
-    # sentence is the part that tells them. Rendering the columns alone —
-    # which this did while `grain` held a tuple — puts a Python repr where
-    # the most important line in the entry belongs.
+    # sentence is the part that tells them. The columns matter to whoever
+    # writes the query afterwards, which is why they get their own label
+    # rather than being folded into the same line.
     if table.grain_statement:
         facts.append(f"**Grain:** {table.grain_statement}")
     if table.grain:
