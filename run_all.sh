@@ -25,6 +25,9 @@ step "pytest"
 step "generate the docs reference pages"
 "$PY/python" scripts/gen_reference.py
 
+step "the docs agree with the tool"
+"$PY/python" scripts/check_docs.py
+
 step "varda check examples/retail.yaml --strict"
 "$PY/varda" check examples/retail.yaml --strict
 

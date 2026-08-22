@@ -14,6 +14,14 @@ FctSale:
     varda:grain: [order_number, product_key]
     varda:grain_statement: one row per product per line of a receipt
   attributes:
+    order_number:
+      annotations:
+        varda:role: degenerate_dimension
+    product_key:
+      range: integer
+      annotations:
+        varda:role: foreign_key
+        varda:references: DimProduct
     customer_key:
       range: integer
       annotations:
@@ -29,7 +37,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 28 rules (varda 0.1.0): 0 errors, 0 warnings
+8 tables checked against 29 rules (varda 0.1.0): 0 errors, 0 warnings
 ```
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -50,7 +58,7 @@ That is the whole reason for choosing annotations over a new format.
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 
-**Twenty-eight rules**, in three families:
+**Twenty-nine rules**, in three families:
 
 | | |
 | --- | --- |

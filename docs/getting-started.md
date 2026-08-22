@@ -41,6 +41,14 @@ classes:
       country:
         annotations:
           varda:role: attribute
+      valid_from:
+        range: datetime
+        annotations:
+          varda:role: version_start
+      is_current:
+        range: boolean
+        annotations:
+          varda:role: is_current
 
   FctOrder:
     annotations:
@@ -83,7 +91,7 @@ columns at which rows are unique, `varda:grain_statement` as the sentence.
 
 ```console
 $ varda check mart.yaml
-2 tables checked against 28 rules (varda 0.1.0): 0 errors, 0 warnings
+2 tables checked against 29 rules (varda 0.1.0): 0 errors, 0 warnings
 ```
 
 Introduce a mistake — misspell `varda:grain` as `varda:grian`, say — and:
@@ -95,7 +103,7 @@ ERROR V001  FctOrder
 ERROR V103  FctOrder
         no varda:grain; name the columns at which rows are unique
 
-2 tables checked against 28 rules (varda 0.1.0): 2 errors, 0 warnings
+2 tables checked against 29 rules (varda 0.1.0): 2 errors, 0 warnings
 ```
 
 `--strict` also fails on warnings, and on an exemption that names a rule
