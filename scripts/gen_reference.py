@@ -102,6 +102,13 @@ def _enum_section(view: Any, name: str) -> list[str]:
     out += ["| Value | Meaning |", "| --- | --- |"]
     for value, meta in (enum.permissible_values or {}).items():
         desc = _clean(getattr(meta, "description", ""))
+        # A permissible value bound to an ontology term through LinkML's
+        # `meaning:` is the one place a Varda model reaches outside itself.
+        # Rendering the CURIE puts that on the page instead of leaving it in
+        # the schema for whoever thinks to look.
+        term = getattr(meta, "meaning", None)
+        if term:
+            desc = f"{desc} <br>Ontology term: `{term}`".strip()
         out.append(f"| `{value}` | {desc} |")
     out.append("")
     return out

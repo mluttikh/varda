@@ -43,6 +43,11 @@ license: https://creativecommons.org/publicdomain/zero/1.0/
 prefixes:
   linkml: https://w3id.org/linkml/
   varda: https://w3id.org/varda/
+  # OWL-Time, for the `meaning:` mappings on the versioning column
+  # roles. A version's period is a temporal interval, and saying so in
+  # the vocabulary is what lets a model built on this profile join a
+  # knowledge graph instead of only a warehouse.
+  time: http://www.w3.org/2006/time#
 default_prefix: varda
 default_range: string
 imports:
@@ -119,6 +124,51 @@ enums:
         description: >-
           An identifier that lives on the fact with no dimension table of its
           own — an order number, a ticket reference. Fact tables only.
+
+      version_start:
+        description: >-
+          The instant from which this version of the row is the one in force.
+          Dimensions with `varda:scd: type_2` only.
+
+          Named for the version rather than for validity on purpose. In
+          practice this column usually records when the warehouse *observed*
+          the change rather than when the change was true in the business —
+          dbt's snapshots and Data Vault's `LOAD_DATE` both work this way,
+          whatever they are called. Varda does not distinguish the two,
+          because separating business validity from load time is
+          bitemporality and that is out of scope here.
+
+          The period is closed at the start and open at the end, following
+          SQL:2011: a row is in force from this instant up to but not
+          including `version_end`. That convention is what stops consecutive
+          versions overlapping at their boundary.
+        meaning: time:hasBeginning
+
+      version_end:
+        description: >-
+          The instant at which this version stopped being the one in force,
+          exclusive. Dimensions with `varda:scd: type_2` only.
+
+          Optional, and genuinely so. A great many type-2 dimensions store
+          only the start and derive the end from the next version's start;
+          Data Vault virtualizes it as a view over an insert-only satellite.
+          Requiring it would reject correct designs, so nothing does.
+        meaning: time:hasEnd
+
+      is_current:
+        description: >-
+          Flags the version in force now. Dimensions with `varda:scd: type_2`
+          only.
+
+          Derivable from the period, and materialized anyway almost
+          everywhere, because the alternative is a null test or a
+          far-future sentinel in every query that wants today's row.
+
+      version_number:
+        description: >-
+          A monotonic counter distinguishing versions of one natural key,
+          for dimensions that version without timestamps at all. The current
+          version is the highest. Dimensions with `varda:scd: type_2` only.
 
   Additivity:
     description: >-

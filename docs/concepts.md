@@ -66,6 +66,39 @@ sentence, and is otherwise yours — it exists to carry intent to a person, and
 a grain statement written to satisfy a linter has already lost the thing it
 was for.
 
+## Type 2 keeps versions, and says how
+
+`varda:scd: type_2` means a dimension keeps a row per change. It does not say
+how the current row is found, because the field does not agree on that, and
+three mechanisms are all in normal use:
+
+| Strategy | Columns | Current row is |
+| --- | --- | --- |
+| window | `version_start` + `version_end` | the one whose end is null or far-future |
+| flagged | `version_start` + `is_current` | the flagged one; the end is derived from the next row |
+| counter | `version_number` | the highest per natural key |
+
+Varda accepts all three. Requiring a start and an end together would reject
+two of them, and Data Vault does not even store an end — it computes one as a
+view over an insert-only table.
+
+What Varda does insist on is that *something* be marked, because a dimension
+that versions by a mechanism nobody declared cannot have its uniqueness
+generated. That constraint is the return on saying so: a type-2 dimension is
+unique on its natural key **plus** the discriminator, never the natural key
+alone, which would reject the second version of every row.
+
+The period follows SQL:2011 — closed at the start, open at the end. A row is
+in force from `version_start` up to but not including `version_end`, which is
+what stops consecutive versions overlapping at their boundary.
+
+!!! note "Version time is usually not business time"
+    `version_start` is named for the version rather than for validity because
+    in practice it records when the warehouse *noticed* a change, not when the
+    change was true. dbt's `dbt_valid_from` and Data Vault's `LOAD_DATE` are
+    both this, whatever they are called. Keeping both would be bitemporality,
+    which this core does not model.
+
 ## Columns have a role too
 
 `varda:role` on a slot turns a flat list of columns into a structure that

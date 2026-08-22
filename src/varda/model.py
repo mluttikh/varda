@@ -47,6 +47,15 @@ def physical_name(logical: str) -> str:
     return _BOUNDARY.sub("_", logical).lower()
 
 
+#: The column roles that mark one version of a dimension row off from
+#: another. Named as a set because every rule about versioning asks the same
+#: question — is this column one of them — and a set that lives in one place
+#: cannot drift from the profile that declares them.
+VERSIONING_ROLES = frozenset(
+    {"version_start", "version_end", "is_current", "version_number"}
+)
+
+
 @dataclass(frozen=True)
 class Column:
     """One slot of a table class, read through the profile."""
@@ -207,6 +216,34 @@ class Table:
     @property
     def degenerates(self) -> tuple[Column, ...]:
         return self._by_role("degenerate_dimension")
+
+    @property
+    def version_starts(self) -> tuple[Column, ...]:
+        return self._by_role("version_start")
+
+    @property
+    def version_ends(self) -> tuple[Column, ...]:
+        return self._by_role("version_end")
+
+    @property
+    def current_flags(self) -> tuple[Column, ...]:
+        return self._by_role("is_current")
+
+    @property
+    def version_numbers(self) -> tuple[Column, ...]:
+        return self._by_role("version_number")
+
+    @property
+    def versioning(self) -> tuple[Column, ...]:
+        """Every column that discriminates one version of a row from another.
+
+        Type 2 is defined by keeping a row per change, not by how the current
+        one is found, and the field uses at least three mechanisms to find
+        it: a closed period, a start plus a flag, or a bare counter. Callers
+        that need to know *whether* a dimension versions ask this; callers
+        that need to know *how* ask for the specific role.
+        """
+        return tuple(c for c in self.columns if c.role in VERSIONING_ROLES)
 
     def _by_role(self, role: str) -> tuple[Column, ...]:
         return tuple(c for c in self.columns if c.role == role)

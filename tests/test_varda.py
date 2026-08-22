@@ -79,6 +79,18 @@ def dimension(**extra: Any) -> dict[str, Any]:
     return base
 
 
+def versioned(**columns: Any) -> dict[str, Any]:
+    """Build a type-2 dimension carrying the given versioning columns."""
+    base = dimension()
+    base["annotations"] = {"varda:role": "dimension", "varda:scd": "type_2"}
+    base["attributes"] = {**base["attributes"], **columns}
+    return base
+
+
+def _col(role: str, rng: str = "datetime") -> dict[str, Any]:
+    return {"range": rng, "annotations": {"varda:role": role}}
+
+
 @pytest.fixture(autouse=True)
 def _clean_registry() -> Iterator[None]:
     """Reset the registry between tests.
@@ -1433,3 +1445,121 @@ def test_example_declares_the_same_namespace() -> None:
     model = DimensionalModel.load(RETAIL)
     declared = model.view.schema.prefixes["varda"].prefix_reference
     assert str(declared) == "https://w3id.org/varda/"
+
+
+# ---------------------------------------------------------------------------
+# Versioning columns
+#
+# Type 2 is defined by keeping a row per change, not by how the current row
+# is identified. The field uses at least three mechanisms, and the first
+# three tests exist to hold the rules open to all of them: a validator that
+# only accepts the textbook one rejects working warehouses.
+# ---------------------------------------------------------------------------
+
+
+def test_version_window_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
+    """Start and end columns — the textbook form."""
+    model = build(
+        tmp_path,
+        {
+            "DimThing": versioned(
+                vf=_col("version_start"), vt=_col("version_end")
+            )
+        },
+    )
+    assert not codes(model) & {"V116", "V117", "V118", "V119"}
+
+
+def test_flagged_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
+    """A start and a current flag, with the end derived from the next row.
+
+    Storing no end column is a normal design, and Data Vault virtualizes it
+    outright, so its absence must not be a finding.
+    """
+    model = build(
+        tmp_path,
+        {
+            "DimThing": versioned(
+                vf=_col("version_start"), cur=_col("is_current", "boolean")
+            )
+        },
+    )
+    assert not codes(model) & {"V116", "V117", "V118", "V119"}
+
+
+def test_version_counter_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
+    """A bare counter and no timestamps at all."""
+    model = build(
+        tmp_path,
+        {"DimThing": versioned(v=_col("version_number", "integer"))},
+    )
+    assert not codes(model) & {"V116", "V117", "V118", "V119"}
+
+
+def test_v116_versioning_on_a_type_1_dimension(
+    tmp_path: pathlib.Path,
+) -> None:
+    table = dimension()
+    table["attributes"]["vf"] = _col("version_start")
+    model = build(tmp_path, {"DimThing": table})
+    assert "V116" in codes(model)
+
+
+def test_v112_versioning_on_a_fact(tmp_path: pathlib.Path) -> None:
+    """A version period on a fact is caught by the role/table-kind rule."""
+    fct = _fact(
+        **{
+            "varda:grain": ["d_key"],
+            "varda:grain_statement": "one row per thing",
+        }
+    )
+    fct["attributes"]["vf"] = _col("version_start")
+    model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
+    assert "V112" in codes(model)
+
+
+def test_v117_version_end_without_a_start(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": versioned(vt=_col("version_end"))})
+    assert "V117" in codes(model)
+
+
+def test_v118_two_columns_claim_one_versioning_role(
+    tmp_path: pathlib.Path,
+) -> None:
+    model = build(
+        tmp_path,
+        {
+            "DimThing": versioned(
+                vf=_col("version_start"), vf2=_col("version_start")
+            )
+        },
+    )
+    assert "V118" in codes(model)
+
+
+def test_v119_type_2_with_no_versioning_column(
+    tmp_path: pathlib.Path,
+) -> None:
+    model = build(tmp_path, {"DimThing": versioned()})
+    assert "V119" in codes(model)
+
+
+def test_type_2_uniqueness_includes_the_version(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The generated constraint is the natural key plus the discriminator.
+
+    The natural key alone would reject the second version of every row —
+    wrong in the direction that looks like the source data is broken.
+    """
+    model = build(
+        tmp_path,
+        {
+            "DimThing": versioned(
+                vf=_col("version_start"), cur=_col("is_current", "boolean")
+            )
+        },
+    )
+    sql = generate_sql(model)
+    assert "UNIQUE (d_id, vf)" in sql
+    assert "UNIQUE (d_id)" not in sql

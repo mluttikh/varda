@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from . import registry
 from .anns import anns
 from .ext import SEVERITIES, Severity
+from .model import VERSIONING_ROLES
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -407,6 +408,11 @@ def v112(model: DimensionalModel) -> Iterator[Finding]:
         "surrogate_key": ("dimension",),
         "natural_key": ("dimension",),
         "degenerate_dimension": ("fact",),
+        # Versioning columns describe a dimension row's history. A fact
+        # records events that already happened and does not revise them, so
+        # a version period on one is either a misunderstanding or an attempt
+        # at bitemporality, which this core does not model.
+        **dict.fromkeys(VERSIONING_ROLES, ("dimension",)),
     }
     for table in model.tables:
         if table.role is None:
@@ -489,6 +495,92 @@ def v115(model: DimensionalModel) -> Iterator[Finding]:
                     f"a grain is composed of foreign keys and degenerate "
                     f"dimensions",
                 )
+
+
+@RULES.rule("V116", "error", "Versioning columns belong to a type-2 dimension")
+def v116(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a version period on a dimension that keeps no versions.
+
+    Type 0 retains the original value and type 1 overwrites it. Neither
+    produces a second row, so a column bounding "this version" describes
+    something the declared type says does not exist. One of the two is
+    wrong, and which one is not for a validator to guess.
+    """
+    for table in model.dimensions:
+        if table.scd is None or table.scd == "type_2":
+            continue  # V113 handles the missing case
+        for column in table.versioning:
+            yield Finding(
+                "V116",
+                "error",
+                str(column),
+                f"role {column.role!r} versions a row, but {table.name} is "
+                f"{table.scd}, which keeps no versions",
+            )
+
+
+@RULES.rule("V117", "error", "A version period that ends also starts")
+def v117(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a version end with no corresponding start.
+
+    An end alone bounds nothing. The reverse is not a finding: storing only
+    the start and deriving the end from the next version is a normal design,
+    and Data Vault virtualizes the end column outright.
+    """
+    for table in model.dimensions:
+        if table.version_ends and not table.version_starts:
+            yield Finding(
+                "V117",
+                "error",
+                str(table),
+                "varda:role: version_end with no version_start; an end "
+                "bounds nothing on its own",
+            )
+
+
+@RULES.rule("V118", "error", "At most one column per versioning role")
+def v118(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a repeated versioning role on one table.
+
+    Two starts is two answers to when a version began, and every consumer
+    picks one — the generator by declaration order, the reader by whichever
+    name looks more official. They will not always pick the same one.
+    """
+    for table in model.dimensions:
+        seen: dict[str, list[str]] = {}
+        for column in table.versioning:
+            seen.setdefault(column.role or "", []).append(column.name)
+        for role, names in sorted(seen.items()):
+            if len(names) > 1:
+                yield Finding(
+                    "V118",
+                    "error",
+                    str(table),
+                    f"{len(names)} columns claim role {role!r} "
+                    f"({', '.join(sorted(names))}); at most one may",
+                )
+
+
+@RULES.rule("V119", "warning", "A type-2 dimension says how it versions")
+def v119(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a type-2 dimension with no versioning column marked.
+
+    Type 2 keeps a row per change, so something must distinguish those rows
+    — a period, a flag, a counter. Varda does not insist which, because the
+    field uses all three and calling any of them mandatory would reject
+    working designs. It does insist that one of them be *named*, because a
+    dimension that versions by a mechanism nobody declared cannot have its
+    uniqueness generated or its current row found by anything but guesswork.
+    """
+    for table in model.dimensions:
+        if table.scd == "type_2" and not table.versioning:
+            yield Finding(
+                "V119",
+                "warning",
+                str(table),
+                "type_2 but no version_start, is_current or version_number; "
+                "nothing marks one version off from another",
+            )
 
 
 # ---------------------------------------------------------------------------
