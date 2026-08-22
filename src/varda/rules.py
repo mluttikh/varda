@@ -450,17 +450,29 @@ def v113(model: DimensionalModel) -> Iterator[Finding]:
             )
 
 
-@RULES.rule("V114", "error", "Grain columns exist")
+@RULES.rule("V114", "error", "Grain columns are real and distinct")
 def v114(model: DimensionalModel) -> Iterator[Finding]:
-    """Flag a grain naming a column the table does not have.
+    """Flag a grain naming a column the table lacks, or naming one twice.
 
-    The failure this catches is silent by construction, in the same way
-    V203's is: a grain that names a column nobody declared is a claim about
-    row identity that can never be checked against anything, and it looks
-    exactly like one that can.
+    Both failures are silent by construction, in the same way V203's is. An
+    unknown name is a claim about row identity that can never be checked
+    against anything and looks exactly like one that can — and because the
+    generator resolves the grain to columns it can find, the emitted
+    constraint quietly covers *fewer* columns than were declared, which
+    rejects legitimate rows and reads like broken source data.
+
+    A repeated name is the same mistake wearing a different hat: it adds
+    nothing to the constraint and means the modeler listed something twice
+    without noticing.
+
+    Checked on any table that declares a grain rather than on facts alone.
+    Requiring one is a fact's business — V103 — but a grain that is wrong is
+    wrong wherever it appears, and `examples/retail.yaml` puts one on a
+    bridge.
     """
-    for table in model.facts:
+    for table in model.tables:
         have = {c.name for c in table.columns}
+        seen: set[str] = set()
         for name in table.grain:
             if name not in have:
                 yield Finding(
@@ -470,6 +482,15 @@ def v114(model: DimensionalModel) -> Iterator[Finding]:
                     f"varda:grain names {name!r}, which is not a column "
                     f"of this table",
                 )
+            elif name in seen:
+                yield Finding(
+                    "V114",
+                    "error",
+                    str(table),
+                    f"varda:grain names {name!r} twice; a column can only "
+                    f"identify a row once",
+                )
+            seen.add(name)
 
 
 @RULES.rule("V115", "error", "Grain columns locate a row")
@@ -484,7 +505,7 @@ def v115(model: DimensionalModel) -> Iterator[Finding]:
     silently becomes a second row.
     """
     allowed = {"foreign_key", "degenerate_dimension"}
-    for table in model.facts:
+    for table in model.tables:
         for column in table.grain_columns:
             if column.role not in allowed:
                 yield Finding(
@@ -580,6 +601,32 @@ def v119(model: DimensionalModel) -> Iterator[Finding]:
                 str(table),
                 "type_2 but no version_start, is_current or version_number; "
                 "nothing marks one version off from another",
+            )
+
+
+@RULES.rule("V120", "error", "Table annotations sit on the right role")
+def v120(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a table annotation on a kind of table it does not describe.
+
+    The profile has said "Facts only" and "Dimensions only" in prose since
+    the first version and nothing enforced it, so `varda:scd: type_2` on a
+    fact passed clean and was rendered into the generated DDL as a comment
+    claiming the fact keeps history. V112 does this for column roles; this
+    is the same check one level up.
+    """
+    misplaced = {"fact_type": ("fact",), "scd": ("dimension",)}
+    for table in model.tables:
+        if table.role is None:
+            continue  # V101 already said so
+        for key, allowed in sorted(misplaced.items()):
+            if getattr(table, key) is None or table.role in allowed:
+                continue
+            yield Finding(
+                "V120",
+                "error",
+                str(table),
+                f"varda:{key} describes a {' or '.join(allowed)}, and "
+                f"{table.name} is a {table.role}",
             )
 
 

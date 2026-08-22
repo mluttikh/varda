@@ -122,10 +122,18 @@ def _table(table: Table, schema: str) -> str:
     # or a counter. `is_current` does not, because it is true of exactly one
     # version and would make the constraint vacuous.
     if table.is_dimension and table.scd == "type_2":
-        discriminators = table.version_starts + table.version_numbers
-        if table.natural_keys and discriminators:
+        # One discriminator, not both. Concatenating them weakens the very
+        # constraint this exists to tighten: `UNIQUE (nk, start, number)`
+        # permits two rows sharing a natural key and a start that differ only
+        # in their counter, which either column alone would have forbidden.
+        # Declaring more versioning metadata must not buy a worse guarantee.
+        #
+        # The start wins when both are present, because a period is the more
+        # specific claim — a counter orders versions, a start says when.
+        starts = table.version_starts or table.version_numbers
+        if table.natural_keys and starts:
             cols = ", ".join(
-                c.physical for c in table.natural_keys + discriminators
+                c.physical for c in (*table.natural_keys, starts[0])
             )
             body.append(f"    UNIQUE ({cols})")
 

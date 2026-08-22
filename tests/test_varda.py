@@ -1587,3 +1587,90 @@ def test_generated_docs_lead_with_the_grain_sentence(
     assert "**Grain:** one row per ticket per thing" in docs
     assert "**Unique on:** `d_key`, `ticket`" in docs
     assert "('d_key'" not in docs
+
+
+def test_v114_rejects_a_repeated_grain_column(
+    tmp_path: pathlib.Path,
+) -> None:
+    fct = _fact(
+        **{
+            "varda:grain": ["d_key", "d_key"],
+            "varda:grain_statement": "one row per thing",
+        }
+    )
+    model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
+    assert "V114" in codes(model)
+
+
+def test_grain_is_checked_off_facts_too(tmp_path: pathlib.Path) -> None:
+    """A grain on a bridge is validated, because it is also generated.
+
+    `gen_sql` emits a UNIQUE for any table declaring a grain, so validating
+    only facts left the one place fan-out actually happens unchecked — and
+    `examples/retail.yaml` puts a grain on its bridge.
+    """
+    bridge = {
+        "annotations": {
+            "varda:role": "bridge",
+            "varda:grain": ["d_key", "nonesuch"],
+            "varda:grain_statement": "one row per thing per other",
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "foreign_key",
+                    "varda:references": "DimThing",
+                },
+            },
+            "w": {
+                "range": "decimal",
+                "annotations": {
+                    "varda:role": "measure",
+                    "varda:additivity": "non_additive",
+                    "varda:unit": "ratio",
+                },
+            },
+        },
+    }
+    model = build(tmp_path, {"BridgeX": bridge, "DimThing": dimension()})
+    assert "V114" in codes(model)
+
+
+def test_v120_scd_on_a_fact(tmp_path: pathlib.Path) -> None:
+    fct = _fact(
+        **{
+            "varda:grain": ["d_key"],
+            "varda:grain_statement": "one row per thing",
+            "varda:scd": "type_2",
+        }
+    )
+    model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
+    assert "V120" in codes(model)
+
+
+def test_v120_fact_type_on_a_dimension(tmp_path: pathlib.Path) -> None:
+    table = dimension()
+    table["annotations"]["varda:fact_type"] = "transaction"
+    model = build(tmp_path, {"DimThing": table})
+    assert "V120" in codes(model)
+
+
+def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
+    """Declaring both a start and a counter must not weaken the constraint.
+
+    `UNIQUE (nk, start, number)` permits two rows sharing a natural key and a
+    start that differ only in their counter — strictly weaker than either
+    column alone. More metadata must not buy a worse guarantee.
+    """
+    model = build(
+        tmp_path,
+        {
+            "DimThing": versioned(
+                vs=_col("version_start"), vn=_col("version_number", "integer")
+            )
+        },
+    )
+    sql = generate_sql(model)
+    assert "UNIQUE (d_id, vs)" in sql
+    assert "UNIQUE (d_id, vs, vn)" not in sql
