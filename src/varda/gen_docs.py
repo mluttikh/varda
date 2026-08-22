@@ -53,8 +53,16 @@ def _table(table: Table) -> str:
     if table.description:
         lines += [table.description, ""]
     facts = [f"**Physical name:** `{table.physical}`"]
+    # The sentence leads and the columns follow it, because the audience for
+    # this page is deciding whether a table answers their question and the
+    # sentence is the part that tells them. Rendering the columns alone —
+    # which this did while `grain` held a tuple — puts a Python repr where
+    # the most important line in the entry belongs.
+    if table.grain_statement:
+        facts.append(f"**Grain:** {table.grain_statement}")
     if table.grain:
-        facts.append(f"**Grain:** {table.grain}")
+        cols = ", ".join(f"`{c}`" for c in table.grain)
+        facts.append(f"**Unique on:** {cols}")
     if table.fact_type:
         facts.append(f"**Fact type:** {table.fact_type}")
     if table.scd:

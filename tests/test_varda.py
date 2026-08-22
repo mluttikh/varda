@@ -18,6 +18,7 @@ import yaml
 
 from varda import __version__, cli, registry, rules
 from varda.ext import Extension, ExtensionError, Generator
+from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
 from varda.model import DimensionalModel, physical_name
@@ -1563,3 +1564,26 @@ def test_type_2_uniqueness_includes_the_version(
     sql = generate_sql(model)
     assert "UNIQUE (d_id, vf)" in sql
     assert "UNIQUE (d_id)" not in sql
+
+
+def test_generated_docs_lead_with_the_grain_sentence(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The docs page renders the sentence, not a repr of the column tuple.
+
+    This regressed once already: `Table.grain` changed from a string to a
+    tuple, `gen_sql` was updated and `gen_docs` was not, and the page shipped
+    reading `**Grain:** ('a', 'b')` with the sentence dropped entirely. No
+    test looked at the line, so the whole gate stayed green.
+    """
+    fct = _fact(
+        **{
+            "varda:grain": ["d_key", "ticket"],
+            "varda:grain_statement": "one row per ticket per thing",
+        }
+    )
+    model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
+    docs = generate_docs(model)
+    assert "**Grain:** one row per ticket per thing" in docs
+    assert "**Unique on:** `d_key`, `ticket`" in docs
+    assert "('d_key'" not in docs
