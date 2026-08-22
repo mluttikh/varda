@@ -4,7 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "varda"
-version = "0.1.0"
+
+# The version lives in `src/varda/__init__.py` and is read from there, rather
+# than being declared here and repeated in the package. Two copies of a
+# version number drift the first time somebody bumps one of them, and the
+# failure is quiet: `varda check` prints `__version__` in its summary line, so
+# a package would misreport itself to every user while the distribution
+# metadata said something else. One source removes the class of mistake
+# instead of adding a test that notices it afterwards.
+dynamic = ["version"]
 description = "Dimensional modeling for LinkML — a profile, its rules, and the generators that hang off it"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -79,6 +87,9 @@ varda = "varda.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "varda.__version__" }
 
 # Ships the type information. An extension author's own type checker then sees
 # the boundary Varda maintains: `model.py` is the wall built along the untyped

@@ -8,6 +8,7 @@ somebody has shipped a model against them.
 
 from __future__ import annotations
 
+import importlib.metadata
 import pathlib
 import textwrap
 from typing import TYPE_CHECKING, Any
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import yaml
 
-from varda import cli, registry, rules
+from varda import __version__, cli, registry, rules
 from varda.ext import Extension, ExtensionError, Generator
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
@@ -1324,6 +1325,20 @@ def test_profile_namespace_is_pinned() -> None:
     assert view.schema.prefixes["varda"].prefix_reference == (
         "https://w3id.org/varda/"
     )
+
+
+def test_version_has_one_source() -> None:
+    """`__version__` is the only place the version is written.
+
+    `pyproject.toml` declares the version dynamic and reads it back out of
+    `varda.__init__` via `[tool.setuptools.dynamic]`, so the number the code
+    prints and the number pip reports come from the same line. This asserts
+    the derivation still happens: if the `attr` lookup ever stopped
+    resolving — a renamed module, a build-backend change, a stale editable
+    install — the two drift apart, and every consumer sees one version in
+    `pip show` and another in `varda check`.
+    """
+    assert importlib.metadata.version("varda") == __version__
 
 
 def test_example_declares_the_same_namespace() -> None:

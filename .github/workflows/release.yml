@@ -42,17 +42,31 @@ jobs:
       # A tag that disagrees with the version in the package produces a
       # release whose name and contents differ — discoverable only by someone
       # who installs it and wonders why the version is wrong.
+      #
+      # Three values have to agree, not two. `__version__` is what the code
+      # prints; the distribution metadata is what pip and PyPI report; the tag
+      # is what the release is filed under. The middle one is derived from the
+      # first by `[tool.setuptools.dynamic]`, so comparing all three also
+      # proves that derivation still works — if the `attr` lookup ever
+      # silently stopped resolving, this is the step that says so.
       - name: tag matches package version
         if: github.event_name == 'release'
         run: |
           python - <<'PY'
-          import os, sys, tomllib
-          with open("pyproject.toml", "rb") as fh:
-              declared = tomllib.load(fh)["project"]["version"]
+          import os
+          import sys
+          from importlib.metadata import version
+
+          from varda import __version__
+
           tag = os.environ["TAG"].removeprefix("v")
-          if tag != declared:
-              sys.exit(f"tag {tag!r} != pyproject version {declared!r}")
-          print(f"tag and version agree: {declared}")
+          dist = version("varda")
+          if not (tag == dist == __version__):
+              sys.exit(
+                  f"version disagreement: tag {tag!r}, "
+                  f"distribution {dist!r}, __version__ {__version__!r}"
+              )
+          print(f"tag, distribution and __version__ all agree: {tag}")
           PY
         env:
           TAG: ${{ github.event.release.tag_name }}
