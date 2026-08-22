@@ -222,8 +222,8 @@ def v101(model: DimensionalModel) -> Iterator[Finding]:
                 "V101",
                 "error",
                 str(table),
-                "no varda:role; every annotated class must be a fact, "
-                "a dimension or a bridge",
+                "no varda:role; every annotated class must declare "
+                "FACT, DIMENSION or BRIDGE",
             )
 
 
@@ -301,7 +301,7 @@ def v105(model: DimensionalModel) -> Iterator[Finding]:
             "V105",
             "error",
             str(table),
-            f"a dimension needs exactly one surrogate_key column; "
+            f"a dimension needs exactly one SURROGATE_KEY column; "
             f"found {len(keys)} ({found})",
         )
 
@@ -320,7 +320,7 @@ def v106(model: DimensionalModel) -> Iterator[Finding]:
                 "V106",
                 "error",
                 str(table),
-                "no natural_key column; nothing here says what makes two "
+                "no NATURAL_KEY column; nothing here says what makes two "
                 "source rows the same business entity",
             )
 
@@ -333,7 +333,7 @@ def v107(model: DimensionalModel) -> Iterator[Finding]:
                 "V107",
                 "error",
                 str(table),
-                "no foreign_key column; a fact with no dimensions cannot "
+                "no FOREIGN_KEY column; a fact with no dimensions cannot "
                 "be sliced by anything",
             )
 
@@ -347,7 +347,7 @@ def v108(model: DimensionalModel) -> Iterator[Finding]:
                     "V108",
                     "error",
                     str(column),
-                    "foreign_key with no varda:references; name the class "
+                    "FOREIGN_KEY with no varda:references; name the class "
                     "it points at",
                 )
 
@@ -405,14 +405,14 @@ def v111(model: DimensionalModel) -> Iterator[Finding]:
 @RULES.rule("V112", "error", "Roles sit on the right kind of table")
 def v112(model: DimensionalModel) -> Iterator[Finding]:
     misplaced = {
-        "surrogate_key": ("dimension",),
-        "natural_key": ("dimension",),
-        "degenerate_dimension": ("fact",),
+        "SURROGATE_KEY": ("DIMENSION",),
+        "NATURAL_KEY": ("DIMENSION",),
+        "DEGENERATE_DIMENSION": ("FACT",),
         # Versioning columns describe a dimension row's history. A fact
         # records events that already happened and does not revise them, so
         # a version period on one is either a misunderstanding or an attempt
         # at bitemporality, which this core does not model.
-        **dict.fromkeys(VERSIONING_ROLES, ("dimension",)),
+        **dict.fromkeys(VERSIONING_ROLES, ("DIMENSION",)),
     }
     for table in model.tables:
         if table.role is None:
@@ -504,7 +504,7 @@ def v115(model: DimensionalModel) -> Iterator[Finding]:
     its own measurements is one where a second measurement of the same event
     silently becomes a second row.
     """
-    allowed = {"foreign_key", "degenerate_dimension"}
+    allowed = {"FOREIGN_KEY", "DEGENERATE_DIMENSION"}
     for table in model.tables:
         for column in table.grain_columns:
             if column.role not in allowed:
@@ -528,7 +528,7 @@ def v116(model: DimensionalModel) -> Iterator[Finding]:
     wrong, and which one is not for a validator to guess.
     """
     for table in model.dimensions:
-        if table.scd is None or table.scd == "type_2":
+        if table.scd is None or table.scd == "TYPE_2":
             continue  # V113 handles the missing case
         for column in table.versioning:
             yield Finding(
@@ -554,7 +554,7 @@ def v117(model: DimensionalModel) -> Iterator[Finding]:
                 "V117",
                 "error",
                 str(table),
-                "varda:role: version_end with no version_start; an end "
+                "varda:role: VERSION_END with no VERSION_START; an end "
                 "bounds nothing on its own",
             )
 
@@ -594,12 +594,12 @@ def v119(model: DimensionalModel) -> Iterator[Finding]:
     uniqueness generated or its current row found by anything but guesswork.
     """
     for table in model.dimensions:
-        if table.scd == "type_2" and not table.versioning:
+        if table.scd == "TYPE_2" and not table.versioning:
             yield Finding(
                 "V119",
                 "warning",
                 str(table),
-                "type_2 but no version_start, is_current or version_number; "
+                "TYPE_2 but no VERSION_START, IS_CURRENT or VERSION_NUMBER; "
                 "nothing marks one version off from another",
             )
 
@@ -616,7 +616,7 @@ def v120(model: DimensionalModel) -> Iterator[Finding]:
 
     V112 is this check for column roles. This is the same one a level up.
     """
-    misplaced = {"fact_type": ("fact",), "scd": ("dimension",)}
+    misplaced = {"fact_type": ("FACT",), "scd": ("DIMENSION",)}
     for table in model.tables:
         if table.role is None:
             continue  # V101 already said so
@@ -660,7 +660,7 @@ def v201(model: DimensionalModel) -> Iterator[Finding]:
 def v202(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.tables:
         for column in table.measures:
-            if column.additivity != "semi_additive":
+            if column.additivity != "SEMI_ADDITIVE":
                 continue
             if (column.semi_additive_over or "").strip():
                 continue
@@ -668,8 +668,8 @@ def v202(model: DimensionalModel) -> Iterator[Finding]:
                 "V202",
                 "error",
                 str(column),
-                "semi_additive with no varda:semi_additive_over; say which "
-                "dimension it may not be summed across",
+                "SEMI_ADDITIVE with no varda:semi_additive_over; name the "
+                "foreign key it may not be summed across",
             )
 
 
@@ -711,8 +711,8 @@ def v204(model: DimensionalModel) -> Iterator[Finding]:
                 "V204",
                 "error",
                 str(column),
-                "measure on a dimension; make it an attribute, or move it "
-                "to a fact at the grain it is measured at",
+                "a measure on a dimension; give it role ATTRIBUTE, or move "
+                "it to a fact at the grain it is measured at",
             )
 
 
@@ -733,14 +733,14 @@ def v205(model: DimensionalModel) -> Iterator[Finding]:
 @RULES.rule("V206", "warning", "A fact carries measures, or says it does not")
 def v206(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.facts:
-        if table.measures or table.fact_type == "factless":
+        if table.measures or table.fact_type == "FACTLESS":
             continue
         yield Finding(
             "V206",
             "warning",
             str(table),
             "no measures; if that is deliberate, declare "
-            "varda:fact_type: factless",
+            "varda:fact_type: FACTLESS",
         )
 
 

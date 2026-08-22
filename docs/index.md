@@ -9,29 +9,29 @@ keeps history. It then checks those claims and generates from them.
 ```yaml
 FctSale:
   annotations:
-    varda:role: fact
-    varda:fact_type: transaction
+    varda:role: FACT
+    varda:fact_type: TRANSACTION
     varda:grain: [order_number, product_key]
     varda:grain_statement: one row per product per line of a receipt
   attributes:
     order_number:
       annotations:
-        varda:role: degenerate_dimension
+        varda:role: DEGENERATE_DIMENSION
     product_key:
       range: integer
       annotations:
-        varda:role: foreign_key
+        varda:role: FOREIGN_KEY
         varda:references: DimProduct
     customer_key:
       range: integer
       annotations:
-        varda:role: foreign_key
+        varda:role: FOREIGN_KEY
         varda:references: DimCustomer
     net_amount:
       range: decimal
       annotations:
-        varda:role: measure
-        varda:additivity: additive
+        varda:role: MEASURE
+        varda:additivity: ADDITIVE
         varda:unit: EUR
 ```
 

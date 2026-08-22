@@ -67,13 +67,13 @@ def codes(model: DimensionalModel) -> set[str]:
 def dimension(**extra: Any) -> dict[str, Any]:
     """Build a minimal legal dimension, for tests that need one to point at."""
     base: dict[str, Any] = {
-        "annotations": {"varda:role": "dimension", "varda:scd": "type_1"},
+        "annotations": {"varda:role": "DIMENSION", "varda:scd": "TYPE_1"},
         "attributes": {
             "d_key": {
                 "range": "integer",
-                "annotations": {"varda:role": "surrogate_key"},
+                "annotations": {"varda:role": "SURROGATE_KEY"},
             },
-            "d_id": {"annotations": {"varda:role": "natural_key"}},
+            "d_id": {"annotations": {"varda:role": "NATURAL_KEY"}},
         },
     }
     base.update(extra)
@@ -83,7 +83,7 @@ def dimension(**extra: Any) -> dict[str, Any]:
 def versioned(**columns: Any) -> dict[str, Any]:
     """Build a type-2 dimension carrying the given versioning columns."""
     base = dimension()
-    base["annotations"] = {"varda:role": "dimension", "varda:scd": "type_2"}
+    base["annotations"] = {"varda:role": "DIMENSION", "varda:scd": "TYPE_2"}
     base["attributes"] = {**base["attributes"], **columns}
     return base
 
@@ -147,7 +147,7 @@ def test_physical_name_override(tmp_path: pathlib.Path) -> None:
         {
             "DimThing": dimension(
                 annotations={
-                    "varda:role": "dimension",
+                    "varda:role": "DIMENSION",
                     "varda:physical_name": "d_thing_v2",
                 }
             )
@@ -170,7 +170,7 @@ def test_columns_include_inherited(tmp_path: pathlib.Path) -> None:
                 "attributes": {
                     "audit_ts": {
                         "range": "datetime",
-                        "annotations": {"varda:role": "attribute"},
+                        "annotations": {"varda:role": "ATTRIBUTE"},
                     }
                 }
             },
@@ -192,7 +192,7 @@ def test_v001_unknown_annotation(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {
             "DimThing": dimension(
-                annotations={"varda:role": "dimension", "varda:grian": "x"}
+                annotations={"varda:role": "DIMENSION", "varda:grian": "x"}
             )
         },
     )
@@ -204,7 +204,7 @@ def test_v001_message_names_the_profile(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {
             "DimThing": dimension(
-                annotations={"varda:role": "dimension", "varda:nope": "x"}
+                annotations={"varda:role": "DIMENSION", "varda:nope": "x"}
             )
         },
     )
@@ -227,7 +227,7 @@ def test_v003_unknown_prefix(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {
             "DimThing": dimension(
-                annotations={"varda:role": "dimension", "nope:thing": "x"}
+                annotations={"varda:role": "DIMENSION", "nope:thing": "x"}
             )
         },
     )
@@ -275,21 +275,21 @@ def _fact(**annotations: Any) -> dict[str, Any]:
     vary only the annotation under test.
     """
     return {
-        "annotations": {"varda:role": "fact", **annotations},
+        "annotations": {"varda:role": "FACT", **annotations},
         "attributes": {
             "d_key": {
                 "range": "integer",
                 "annotations": {
-                    "varda:role": "foreign_key",
+                    "varda:role": "FOREIGN_KEY",
                     "varda:references": "DimThing",
                 },
             },
-            "ticket": {"annotations": {"varda:role": "degenerate_dimension"}},
+            "ticket": {"annotations": {"varda:role": "DEGENERATE_DIMENSION"}},
             "amount": {
                 "range": "decimal",
                 "annotations": {
-                    "varda:role": "measure",
-                    "varda:additivity": "additive",
+                    "varda:role": "MEASURE",
+                    "varda:additivity": "ADDITIVE",
                     "varda:unit": "EUR",
                 },
             },
@@ -383,7 +383,7 @@ def test_a_well_formed_grain_is_quiet(tmp_path: pathlib.Path) -> None:
                 **{
                     "varda:grain": ["d_key", "ticket"],
                     "varda:grain_statement": "one row per ticket per thing",
-                    "varda:fact_type": "transaction",
+                    "varda:fact_type": "TRANSACTION",
                 }
             ),
             "DimThing": dimension(),
@@ -408,7 +408,7 @@ def test_v105_dimension_with_two_surrogate_keys(
     table = dimension()
     table["attributes"]["other_key"] = {
         "range": "integer",
-        "annotations": {"varda:role": "surrogate_key"},
+        "annotations": {"varda:role": "SURROGATE_KEY"},
     }
     model = build(tmp_path, {"DimThing": table})
     found = [f for f in rules.check(model) if f.rule == "V105"]
@@ -429,15 +429,15 @@ def test_v107_fact_without_foreign_key(tmp_path: pathlib.Path) -> None:
         {
             "FctX": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
                 },
                 "attributes": {
                     "amount": {
                         "range": "decimal",
                         "annotations": {
-                            "varda:role": "measure",
-                            "varda:additivity": "additive",
+                            "varda:role": "MEASURE",
+                            "varda:additivity": "ADDITIVE",
                             "varda:unit": "EUR",
                         },
                     }
@@ -454,13 +454,13 @@ def test_v108_foreign_key_without_target(tmp_path: pathlib.Path) -> None:
         {
             "FctX": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
                 },
                 "attributes": {
                     "d_key": {
                         "range": "integer",
-                        "annotations": {"varda:role": "foreign_key"},
+                        "annotations": {"varda:role": "FOREIGN_KEY"},
                     }
                 },
             }
@@ -475,14 +475,14 @@ def test_v109_foreign_key_target_missing(tmp_path: pathlib.Path) -> None:
         {
             "FctX": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
                 },
                 "attributes": {
                     "d_key": {
                         "range": "integer",
                         "annotations": {
-                            "varda:role": "foreign_key",
+                            "varda:role": "FOREIGN_KEY",
                             "varda:references": "DimGhost",
                         },
                     }
@@ -499,15 +499,15 @@ def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
         {
             "FctA": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
-                    "varda:fact_type": "transaction",
+                    "varda:fact_type": "TRANSACTION",
                 },
                 "attributes": {
                     "b_key": {
                         "range": "integer",
                         "annotations": {
-                            "varda:role": "foreign_key",
+                            "varda:role": "FOREIGN_KEY",
                             "varda:references": "FctB",
                         },
                     }
@@ -515,15 +515,15 @@ def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
             },
             "FctB": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per other thing",
-                    "varda:fact_type": "transaction",
+                    "varda:fact_type": "TRANSACTION",
                 },
                 "attributes": {
                     "d_key": {
                         "range": "integer",
                         "annotations": {
-                            "varda:role": "foreign_key",
+                            "varda:role": "FOREIGN_KEY",
                             "varda:references": "DimThing",
                         },
                     }
@@ -541,14 +541,14 @@ def test_v111_fact_without_type(tmp_path: pathlib.Path) -> None:
         {
             "FctX": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
                 },
                 "attributes": {
                     "d_key": {
                         "range": "integer",
                         "annotations": {
-                            "varda:role": "foreign_key",
+                            "varda:role": "FOREIGN_KEY",
                             "varda:references": "DimThing",
                         },
                     }
@@ -566,19 +566,19 @@ def test_v112_surrogate_key_on_a_fact(tmp_path: pathlib.Path) -> None:
         {
             "FctX": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
-                    "varda:fact_type": "transaction",
+                    "varda:fact_type": "TRANSACTION",
                 },
                 "attributes": {
                     "bad_key": {
                         "range": "integer",
-                        "annotations": {"varda:role": "surrogate_key"},
+                        "annotations": {"varda:role": "SURROGATE_KEY"},
                     },
                     "d_key": {
                         "range": "integer",
                         "annotations": {
-                            "varda:role": "foreign_key",
+                            "varda:role": "FOREIGN_KEY",
                             "varda:references": "DimThing",
                         },
                     },
@@ -593,16 +593,16 @@ def test_v112_surrogate_key_on_a_fact(tmp_path: pathlib.Path) -> None:
 def test_v113_dimension_without_scd(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
-        {"DimThing": dimension(annotations={"varda:role": "dimension"})},
+        {"DimThing": dimension(annotations={"varda:role": "DIMENSION"})},
     )
     assert "V113" in codes(model)
 
 
 def test_v201_measure_without_additivity(tmp_path: pathlib.Path) -> None:
-    table = dimension(annotations={"varda:role": "bridge"})
+    table = dimension(annotations={"varda:role": "BRIDGE"})
     table["attributes"]["amount"] = {
         "range": "decimal",
-        "annotations": {"varda:role": "measure"},
+        "annotations": {"varda:role": "MEASURE"},
     }
     model = build(tmp_path, {"BridgeX": table})
     assert "V201" in codes(model)
@@ -611,12 +611,12 @@ def test_v201_measure_without_additivity(tmp_path: pathlib.Path) -> None:
 def test_v202_semi_additive_without_exception(
     tmp_path: pathlib.Path,
 ) -> None:
-    table = dimension(annotations={"varda:role": "bridge"})
+    table = dimension(annotations={"varda:role": "BRIDGE"})
     table["attributes"]["amount"] = {
         "range": "decimal",
         "annotations": {
-            "varda:role": "measure",
-            "varda:additivity": "semi_additive",
+            "varda:role": "MEASURE",
+            "varda:additivity": "SEMI_ADDITIVE",
             "varda:unit": "EUR",
         },
     }
@@ -632,23 +632,23 @@ def test_v203_semi_additive_over_is_not_a_key(
         {
             "FctX": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
-                    "varda:fact_type": "periodic_snapshot",
+                    "varda:fact_type": "PERIODIC_SNAPSHOT",
                 },
                 "attributes": {
                     "d_key": {
                         "range": "integer",
                         "annotations": {
-                            "varda:role": "foreign_key",
+                            "varda:role": "FOREIGN_KEY",
                             "varda:references": "DimThing",
                         },
                     },
                     "balance": {
                         "range": "decimal",
                         "annotations": {
-                            "varda:role": "measure",
-                            "varda:additivity": "semi_additive",
+                            "varda:role": "MEASURE",
+                            "varda:additivity": "SEMI_ADDITIVE",
                             "varda:semi_additive_over": "date_key",
                             "varda:unit": "EUR",
                         },
@@ -668,8 +668,8 @@ def test_v204_measure_on_a_dimension(tmp_path: pathlib.Path) -> None:
     table["attributes"]["amount"] = {
         "range": "decimal",
         "annotations": {
-            "varda:role": "measure",
-            "varda:additivity": "additive",
+            "varda:role": "MEASURE",
+            "varda:additivity": "ADDITIVE",
             "varda:unit": "EUR",
         },
     }
@@ -678,12 +678,12 @@ def test_v204_measure_on_a_dimension(tmp_path: pathlib.Path) -> None:
 
 
 def test_v205_measure_without_unit(tmp_path: pathlib.Path) -> None:
-    table = dimension(annotations={"varda:role": "bridge"})
+    table = dimension(annotations={"varda:role": "BRIDGE"})
     table["attributes"]["amount"] = {
         "range": "decimal",
         "annotations": {
-            "varda:role": "measure",
-            "varda:additivity": "additive",
+            "varda:role": "MEASURE",
+            "varda:additivity": "ADDITIVE",
         },
     }
     model = build(tmp_path, {"BridgeX": table})
@@ -696,15 +696,15 @@ def test_v206_fact_without_measures(tmp_path: pathlib.Path) -> None:
         {
             "FctX": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
-                    "varda:fact_type": "transaction",
+                    "varda:fact_type": "TRANSACTION",
                 },
                 "attributes": {
                     "d_key": {
                         "range": "integer",
                         "annotations": {
-                            "varda:role": "foreign_key",
+                            "varda:role": "FOREIGN_KEY",
                             "varda:references": "DimThing",
                         },
                     }
@@ -722,15 +722,15 @@ def test_v206_silent_when_declared_factless(tmp_path: pathlib.Path) -> None:
         {
             "FctX": {
                 "annotations": {
-                    "varda:role": "fact",
+                    "varda:role": "FACT",
                     "varda:grain_statement": "one row per thing that happened",
-                    "varda:fact_type": "factless",
+                    "varda:fact_type": "FACTLESS",
                 },
                 "attributes": {
                     "d_key": {
                         "range": "integer",
                         "annotations": {
-                            "varda:role": "foreign_key",
+                            "varda:role": "FOREIGN_KEY",
                             "varda:references": "DimThing",
                         },
                     }
@@ -778,7 +778,7 @@ def test_unknown_codes_finds_stale_exemptions() -> None:
 def test_exemptions_skip_a_rule(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
-        {"DimThing": dimension(annotations={"varda:role": "dimension"})},
+        {"DimThing": dimension(annotations={"varda:role": "DIMENSION"})},
     )
     assert "V113" in codes(model)
     fired = {f.rule for f in rules.check(model, exemptions=["V113"])}
@@ -810,9 +810,9 @@ def test_declared_annotations_are_namespaced() -> None:
 
 def test_permitted_values() -> None:
     assert registry.permitted("TableRole") == (
-        "fact",
-        "dimension",
-        "bridge",
+        "FACT",
+        "DIMENSION",
+        "BRIDGE",
     )
 
 
@@ -870,13 +870,13 @@ def test_extension_severity_default_applies(tmp_path: pathlib.Path) -> None:
     """Acme raises V205 from warning to error."""
     from acme_ext import EXTENSION  # noqa: PLC0415
 
-    table = dimension(annotations={"varda:role": "bridge"})
+    table = dimension(annotations={"varda:role": "BRIDGE"})
     table["annotations"]["acme:cost_center"] = "CC-1"
     table["attributes"]["amount"] = {
         "range": "decimal",
         "annotations": {
-            "varda:role": "measure",
-            "varda:additivity": "additive",
+            "varda:role": "MEASURE",
+            "varda:additivity": "ADDITIVE",
         },
     }
     with registry.using(EXTENSION):
@@ -1078,7 +1078,7 @@ def test_unmapped_range_raises(tmp_path: pathlib.Path) -> None:
     table = dimension()
     table["attributes"]["odd"] = {
         "range": "curie",
-        "annotations": {"varda:role": "attribute"},
+        "annotations": {"varda:role": "ATTRIBUTE"},
     }
     model = build(tmp_path, {"DimThing": table})
     with pytest.raises(GenerationError, match="no SQL mapping"):
@@ -1166,7 +1166,7 @@ def test_check_strict_fails_on_warnings(tmp_path: pathlib.Path) -> None:
                 "prefixes": {"linkml": "https://w3id.org/linkml/"},
                 "classes": {
                     "DimThing": dimension(
-                        annotations={"varda:role": "dimension"}
+                        annotations={"varda:role": "DIMENSION"}
                     )
                 },
             }
@@ -1302,8 +1302,8 @@ def test_toml_extension_vocabulary_is_enforced(
         {
             "DimThing": dimension(
                 annotations={
-                    "varda:role": "dimension",
-                    "varda:scd": "type_1",
+                    "varda:role": "DIMENSION",
+                    "varda:scd": "TYPE_1",
                     "fin:ledger": "invented",
                 }
             )
@@ -1464,7 +1464,7 @@ def test_version_window_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {
             "DimThing": versioned(
-                vf=_col("version_start"), vt=_col("version_end")
+                vf=_col("VERSION_START"), vt=_col("VERSION_END")
             )
         },
     )
@@ -1481,7 +1481,7 @@ def test_flagged_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {
             "DimThing": versioned(
-                vf=_col("version_start"), cur=_col("is_current", "boolean")
+                vf=_col("VERSION_START"), cur=_col("IS_CURRENT", "boolean")
             )
         },
     )
@@ -1492,7 +1492,7 @@ def test_version_counter_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
     """A bare counter and no timestamps at all."""
     model = build(
         tmp_path,
-        {"DimThing": versioned(v=_col("version_number", "integer"))},
+        {"DimThing": versioned(v=_col("VERSION_NUMBER", "integer"))},
     )
     assert not codes(model) & {"V116", "V117", "V118", "V119"}
 
@@ -1501,7 +1501,7 @@ def test_v116_versioning_on_a_type_1_dimension(
     tmp_path: pathlib.Path,
 ) -> None:
     table = dimension()
-    table["attributes"]["vf"] = _col("version_start")
+    table["attributes"]["vf"] = _col("VERSION_START")
     model = build(tmp_path, {"DimThing": table})
     assert "V116" in codes(model)
 
@@ -1514,13 +1514,13 @@ def test_v112_versioning_on_a_fact(tmp_path: pathlib.Path) -> None:
             "varda:grain_statement": "one row per thing",
         }
     )
-    fct["attributes"]["vf"] = _col("version_start")
+    fct["attributes"]["vf"] = _col("VERSION_START")
     model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
     assert "V112" in codes(model)
 
 
 def test_v117_version_end_without_a_start(tmp_path: pathlib.Path) -> None:
-    model = build(tmp_path, {"DimThing": versioned(vt=_col("version_end"))})
+    model = build(tmp_path, {"DimThing": versioned(vt=_col("VERSION_END"))})
     assert "V117" in codes(model)
 
 
@@ -1531,7 +1531,7 @@ def test_v118_two_columns_claim_one_versioning_role(
         tmp_path,
         {
             "DimThing": versioned(
-                vf=_col("version_start"), vf2=_col("version_start")
+                vf=_col("VERSION_START"), vf2=_col("VERSION_START")
             )
         },
     )
@@ -1557,7 +1557,7 @@ def test_type_2_uniqueness_includes_the_version(
         tmp_path,
         {
             "DimThing": versioned(
-                vf=_col("version_start"), cur=_col("is_current", "boolean")
+                vf=_col("VERSION_START"), cur=_col("IS_CURRENT", "boolean")
             )
         },
     )
@@ -1611,7 +1611,7 @@ def test_grain_is_checked_off_facts_too(tmp_path: pathlib.Path) -> None:
     """
     bridge = {
         "annotations": {
-            "varda:role": "bridge",
+            "varda:role": "BRIDGE",
             "varda:grain": ["d_key", "nonesuch"],
             "varda:grain_statement": "one row per thing per other",
         },
@@ -1619,15 +1619,15 @@ def test_grain_is_checked_off_facts_too(tmp_path: pathlib.Path) -> None:
             "d_key": {
                 "range": "integer",
                 "annotations": {
-                    "varda:role": "foreign_key",
+                    "varda:role": "FOREIGN_KEY",
                     "varda:references": "DimThing",
                 },
             },
             "w": {
                 "range": "decimal",
                 "annotations": {
-                    "varda:role": "measure",
-                    "varda:additivity": "non_additive",
+                    "varda:role": "MEASURE",
+                    "varda:additivity": "NON_ADDITIVE",
                     "varda:unit": "ratio",
                 },
             },
@@ -1642,7 +1642,7 @@ def test_v120_scd_on_a_fact(tmp_path: pathlib.Path) -> None:
         **{
             "varda:grain": ["d_key"],
             "varda:grain_statement": "one row per thing",
-            "varda:scd": "type_2",
+            "varda:scd": "TYPE_2",
         }
     )
     model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
@@ -1651,7 +1651,7 @@ def test_v120_scd_on_a_fact(tmp_path: pathlib.Path) -> None:
 
 def test_v120_fact_type_on_a_dimension(tmp_path: pathlib.Path) -> None:
     table = dimension()
-    table["annotations"]["varda:fact_type"] = "transaction"
+    table["annotations"]["varda:fact_type"] = "TRANSACTION"
     model = build(tmp_path, {"DimThing": table})
     assert "V120" in codes(model)
 
@@ -1667,7 +1667,7 @@ def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {
             "DimThing": versioned(
-                vs=_col("version_start"), vn=_col("version_number", "integer")
+                vs=_col("VERSION_START"), vn=_col("VERSION_NUMBER", "integer")
             )
         },
     )

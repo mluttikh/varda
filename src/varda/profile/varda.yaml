@@ -74,17 +74,17 @@ enums:
       What part a class plays in the dimensional model. Every class carrying
       Varda annotations must declare exactly one.
     permissible_values:
-      fact:
+      FACT:
         description: >-
           A measurement event table. Has a declared grain, foreign keys to
           dimensions, and zero or more measures. Never the target of another
           table's foreign key.
-      dimension:
+      DIMENSION:
         description: >-
           Descriptive context. Has one surrogate key, one or more natural key
           columns, and attributes that are almost always textual or
           categorical. Referenced by facts.
-      bridge:
+      BRIDGE:
         description: >-
           Resolves a many-to-many between a fact and a dimension, or a
           multi-valued dimension attribute. Carries an allocation factor when
@@ -99,36 +99,36 @@ enums:
       flat list of columns into a structure that generators and validators can
       reason about.
     permissible_values:
-      surrogate_key:
+      SURROGATE_KEY:
         description: >-
           The meaningless integer or hash primary key of a dimension. Exactly
           one per dimension.
-      natural_key:
+      NATURAL_KEY:
         description: >-
           A column carrying the business identity of a dimension row. Together
           the natural key columns — plus, for a type-2 dimension, the validity
           window — must be unique.
-      foreign_key:
+      FOREIGN_KEY:
         description: >-
           A reference from a fact or bridge to a dimension's surrogate key.
           Must declare `varda:references`.
-      measure:
+      MEASURE:
         description: >-
           A numeric quantity that is aggregated. Must declare
           `varda:additivity`. Lives on a fact or a bridge, never a dimension.
-      attribute:
+      ATTRIBUTE:
         description: >-
           Descriptive context, grouped and filtered on but not summed. The
           default role for a dimension column.
-      degenerate_dimension:
+      DEGENERATE_DIMENSION:
         description: >-
           An identifier that lives on the fact with no dimension table of its
           own — an order number, a ticket reference. Fact tables only.
 
-      version_start:
+      VERSION_START:
         description: >-
           The instant from which this version of the row is the one in force.
-          Dimensions with `varda:scd: type_2` only.
+          Dimensions with `varda:scd: TYPE_2` only.
 
           Named for the version rather than for validity on purpose. In
           practice this column usually records when the warehouse *observed*
@@ -140,14 +140,14 @@ enums:
 
           The period is closed at the start and open at the end, following
           SQL:2011: a row is in force from this instant up to but not
-          including `version_end`. That convention is what stops consecutive
+          including `VERSION_END`. That convention is what stops consecutive
           versions overlapping at their boundary.
         meaning: time:hasBeginning
 
-      version_end:
+      VERSION_END:
         description: >-
           The instant at which this version stopped being the one in force,
-          exclusive. Dimensions with `varda:scd: type_2` only.
+          exclusive. Dimensions with `varda:scd: TYPE_2` only.
 
           Optional, and genuinely so. A great many type-2 dimensions store
           only the start and derive the end from the next version's start;
@@ -155,20 +155,20 @@ enums:
           Requiring it would reject correct designs, so nothing does.
         meaning: time:hasEnd
 
-      is_current:
+      IS_CURRENT:
         description: >-
-          Flags the version in force now. Dimensions with `varda:scd: type_2`
+          Flags the version in force now. Dimensions with `varda:scd: TYPE_2`
           only.
 
           Derivable from the period, and materialized anyway almost
           everywhere, because the alternative is a null test or a
           far-future sentinel in every query that wants today's row.
 
-      version_number:
+      VERSION_NUMBER:
         description: >-
           A monotonic counter distinguishing versions of one natural key,
           for dimensions that version without timestamps at all. The current
-          version is the highest. Dimensions with `varda:scd: type_2` only.
+          version is the highest. Dimensions with `varda:scd: TYPE_2` only.
 
   Additivity:
     description: >-
@@ -177,16 +177,16 @@ enums:
       class of error a dimensional model produces: silently summing something
       that must not be summed yields a number that looks fine and is wrong.
     permissible_values:
-      additive:
+      ADDITIVE:
         description: >-
           May be summed across every dimension of its fact. Sales amount,
           quantity, cost.
-      semi_additive:
+      SEMI_ADDITIVE:
         description: >-
           May be summed across some dimensions but not others — almost always
           not across time. Account balance, inventory level, headcount. Must
           declare `varda:semi_additive_over`.
-      non_additive:
+      NON_ADDITIVE:
         description: >-
           May not be summed across any dimension. Ratios, percentages, unit
           prices, temperatures. Aggregate the components and recompute.
@@ -197,14 +197,14 @@ enums:
       numbering, restricted to the three types that are common enough to
       generate for.
     permissible_values:
-      type_0:
+      TYPE_0:
         description: >-
           Retain original. The value is written once at first load and never
           updated, whatever the source says afterwards.
-      type_1:
+      TYPE_1:
         description: >-
           Overwrite. No history is kept; the row shows the current value.
-      type_2:
+      TYPE_2:
         description: >-
           Add a row. History is preserved by versioning: a new row per change,
           bounded by a validity window and marked with a current flag.
@@ -214,18 +214,18 @@ enums:
       The temporal shape of a fact table, which determines how it is loaded
       and what its grain sentence must say.
     permissible_values:
-      transaction:
+      TRANSACTION:
         description: >-
           One row per event, at the moment the event occurs. Insert-only.
-      periodic_snapshot:
+      PERIODIC_SNAPSHOT:
         description: >-
           One row per entity per regular interval, whether or not anything
           happened. Insert-only, predictable size.
-      accumulating_snapshot:
+      ACCUMULATING_SNAPSHOT:
         description: >-
           One row per tracked item, updated in place as it passes milestones.
           The only fact shape that is routinely updated after insert.
-      factless:
+      FACTLESS:
         description: >-
           One row per event or condition, carrying no measure — coverage,
           eligibility, attendance. Counted rather than summed.
@@ -334,7 +334,7 @@ classes:
       references:
         description: >-
           The name of the class this foreign key points at. Required on every
-          column whose role is `foreign_key`, and checked: it must name a
+          column whose role is `FOREIGN_KEY`, and checked: it must name a
           class that exists and that is a dimension or a bridge.
         range: string
 
@@ -347,7 +347,7 @@ classes:
         description: >-
           The foreign key across which this measure may NOT be summed —
           almost always the date. Required when additivity is
-          `semi_additive`, and checked against the table's actual foreign
+          `SEMI_ADDITIVE`, and checked against the table's actual foreign
           keys, because naming a dimension the fact does not have is a
           constraint that silently never applies.
         range: string

@@ -14,7 +14,7 @@ Everything below builds to those.
 ## Tables have a role
 
 Every annotated class declares [`varda:role`](reference/vocabulary.md):
-`fact`, `dimension` or `bridge`. Nothing is inferred from the class name — a
+`FACT`, `DIMENSION` or `BRIDGE`. Nothing is inferred from the class name — a
 table named `FctSale` is a fact because it says so, which is what lets one
 organization write `Fct`, another `Fact`, and a third nothing at all.
 
@@ -35,13 +35,13 @@ generators and validators can reason about.
 
 | Role | On | What it is |
 | --- | --- | --- |
-| `surrogate_key` | dimension | The meaningless key facts join to. Exactly one. |
-| `natural_key` | dimension | The business identity a loader matches on. |
-| `foreign_key` | fact, bridge, dimension | A reference to another table's surrogate key. |
-| `degenerate_dimension` | fact | An identifier with no dimension table of its own. |
-| `measure` | fact, bridge | A numeric quantity that is aggregated. |
-| `attribute` | any | Descriptive context, grouped and filtered on. |
-| `version_start`, `version_end`, `is_current`, `version_number` | type-2 dimension | What marks one version of a row off from another. |
+| `SURROGATE_KEY` | dimension | The meaningless key facts join to. Exactly one. |
+| `NATURAL_KEY` | dimension | The business identity a loader matches on. |
+| `FOREIGN_KEY` | fact, bridge, dimension | A reference to another table's surrogate key. |
+| `DEGENERATE_DIMENSION` | fact | An identifier with no dimension table of its own. |
+| `MEASURE` | fact, bridge | A numeric quantity that is aggregated. |
+| `ATTRIBUTE` | any | Descriptive context, grouped and filtered on. |
+| `VERSION_START`, `VERSION_END`, `IS_CURRENT`, `VERSION_NUMBER` | type-2 dimension | What marks one version of a row off from another. |
 
 The **natural key** is what a loader matches on — what makes two source rows
 the same business entity. Without one, every load either creates duplicates or
@@ -84,9 +84,9 @@ Every measure declares `varda:additivity`.
 
 | | |
 | --- | --- |
-| `additive` | Sums across every dimension. Sales amount, quantity, cost. |
-| `semi_additive` | Sums across some dimensions but not others — almost always not across time. Account balance, inventory level, headcount. |
-| `non_additive` | Never sum. Ratios, percentages, unit prices, temperatures. Aggregate the components and recompute. |
+| `ADDITIVE` | Sums across every dimension. Sales amount, quantity, cost. |
+| `SEMI_ADDITIVE` | Sums across some dimensions but not others — almost always not across time. Account balance, inventory level, headcount. |
+| `NON_ADDITIVE` | Never sum. Ratios, percentages, unit prices, temperatures. Aggregate the components and recompute. |
 
 A semi-additive measure must also declare `varda:semi_additive_over`, naming
 the foreign key it may not be summed across, and
@@ -103,7 +103,7 @@ that silently never applies, and it looks exactly like one that does.
 ## History: what happens when a value changes
 
 `varda:scd` declares how a dimension responds when a source attribute
-changes: `type_0` retain the original, `type_1` overwrite it, `type_2` add a
+changes: `TYPE_0` retain the original, `TYPE_1` overwrite it, `TYPE_2` add a
 row.
 
 It sits on the table rather than per column, deliberately. A mixed dimension
@@ -124,9 +124,9 @@ normal use:
 
 | Strategy | Columns | The current row is |
 | --- | --- | --- |
-| window | `version_start` + `version_end` | the one whose end is null or far-future |
-| flagged | `version_start` + `is_current` | the flagged one; the end derived from the next row |
-| counter | `version_number` | the highest per natural key |
+| window | `VERSION_START` + `VERSION_END` | the one whose end is null or far-future |
+| flagged | `VERSION_START` + `IS_CURRENT` | the flagged one; the end derived from the next row |
+| counter | `VERSION_NUMBER` | the highest per natural key |
 
 Varda accepts all three, and insists only that *one* of them be marked —
 because a dimension versioning by an undeclared mechanism cannot have its
@@ -135,11 +135,11 @@ dimension is unique on its natural key **plus** the discriminator, never the
 natural key alone, which would reject the second version of every row.
 
 The period follows SQL:2011 — closed at the start, open at the end. A row is
-in force from `version_start` up to but not including `version_end`, which is
+in force from `VERSION_START` up to but not including `VERSION_END`, which is
 what stops consecutive versions overlapping at their boundary.
 
 !!! note "Version time is usually not business time"
-    `version_start` is named for the version rather than for validity because
+    `VERSION_START` is named for the version rather than for validity because
     in practice it records when the warehouse *noticed* a change, not when the
     change was true. dbt's `dbt_valid_from` and Data Vault's `LOAD_DATE` are
     both this, whatever they are called. Keeping both would be bitemporality,

@@ -21,132 +21,132 @@ classes:
   DimDate:
     description: The calendar, one row per day.
     annotations:
-      varda:role: dimension
-      varda:scd: type_0
+      varda:role: DIMENSION
+      varda:scd: TYPE_0
     attributes:
       date_key:
         description: Surrogate key, conventionally YYYYMMDD.
         range: integer
         required: true
         annotations:
-          varda:role: surrogate_key
+          varda:role: SURROGATE_KEY
       calendar_date:
         description: The day this row describes.
         range: date
         required: true
         annotations:
-          varda:role: natural_key
+          varda:role: NATURAL_KEY
       day_of_week:
         range: string
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
       fiscal_quarter:
         range: string
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
 
   DimCustomer:
     description: A purchasing party, versioned as its attributes change.
     annotations:
-      varda:role: dimension
-      varda:scd: type_2
+      varda:role: DIMENSION
+      varda:scd: TYPE_2
     attributes:
       customer_key:
         range: integer
         required: true
         annotations:
-          varda:role: surrogate_key
+          varda:role: SURROGATE_KEY
       customer_id:
         description: The identifier the source system uses.
         required: true
         annotations:
-          varda:role: natural_key
+          varda:role: NATURAL_KEY
       customer_name:
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
       country:
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
       valid_from:
         description: Start of this version's period, inclusive.
         range: datetime
         required: true
         annotations:
-          varda:role: version_start
+          varda:role: VERSION_START
       valid_to:
         description: End of this version's period, exclusive; open if null.
         range: datetime
         annotations:
-          varda:role: version_end
+          varda:role: VERSION_END
       is_current:
         description: Flags the version in force now.
         range: boolean
         required: true
         annotations:
-          varda:role: is_current
+          varda:role: IS_CURRENT
 
   DimProduct:
     description: A sellable item.
     annotations:
-      varda:role: dimension
-      varda:scd: type_1
+      varda:role: DIMENSION
+      varda:scd: TYPE_1
     attributes:
       product_key:
         range: integer
         required: true
         annotations:
-          varda:role: surrogate_key
+          varda:role: SURROGATE_KEY
       sku:
         required: true
         annotations:
-          varda:role: natural_key
+          varda:role: NATURAL_KEY
       product_name:
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
       brand:
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
 
   DimStore:
     description: A physical or online point of sale.
     annotations:
-      varda:role: dimension
-      varda:scd: type_1
+      varda:role: DIMENSION
+      varda:scd: TYPE_1
     attributes:
       store_key:
         range: integer
         required: true
         annotations:
-          varda:role: surrogate_key
+          varda:role: SURROGATE_KEY
       store_code:
         required: true
         annotations:
-          varda:role: natural_key
+          varda:role: NATURAL_KEY
       store_name:
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
       region:
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
 
   DimSegment:
     description: A marketing segment a customer may belong to.
     annotations:
-      varda:role: dimension
-      varda:scd: type_1
+      varda:role: DIMENSION
+      varda:scd: TYPE_1
     attributes:
       segment_key:
         range: integer
         required: true
         annotations:
-          varda:role: surrogate_key
+          varda:role: SURROGATE_KEY
       segment_code:
         required: true
         annotations:
-          varda:role: natural_key
+          varda:role: NATURAL_KEY
       segment_name:
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
 
   BridgeCustomerSegment:
     description: >-
@@ -154,7 +154,7 @@ classes:
       because a customer belonging to three segments must not be counted
       three times in a segment rollup.
     annotations:
-      varda:role: bridge
+      varda:role: BRIDGE
       varda:grain: [customer_key, segment_key]
       varda:grain_statement: >-
         one row per customer per segment they belong to
@@ -163,13 +163,13 @@ classes:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimCustomer
       segment_key:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimSegment
       allocation_factor:
         description: >-
@@ -178,15 +178,15 @@ classes:
         range: decimal
         required: true
         annotations:
-          varda:role: measure
-          varda:additivity: non_additive
+          varda:role: MEASURE
+          varda:additivity: NON_ADDITIVE
           varda:unit: ratio
 
   FctSale:
     description: A line on a sales receipt.
     annotations:
-      varda:role: fact
-      varda:fact_type: transaction
+      varda:role: FACT
+      varda:fact_type: TRANSACTION
       varda:grain: [order_number, product_key]
       varda:grain_statement: >-
         one row per product per line of a sales receipt
@@ -195,25 +195,25 @@ classes:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimDate
       customer_key:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimCustomer
       product_key:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimProduct
       store_key:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimStore
       order_number:
         description: >-
@@ -221,21 +221,21 @@ classes:
           of one transaction but has no attributes of its own.
         required: true
         annotations:
-          varda:role: degenerate_dimension
+          varda:role: DEGENERATE_DIMENSION
       quantity:
         range: integer
         required: true
         annotations:
-          varda:role: measure
-          varda:additivity: additive
+          varda:role: MEASURE
+          varda:additivity: ADDITIVE
           varda:unit: count
       net_amount:
         description: Line total after discount, excluding tax.
         range: decimal
         required: true
         annotations:
-          varda:role: measure
-          varda:additivity: additive
+          varda:role: MEASURE
+          varda:additivity: ADDITIVE
           varda:unit: EUR
       unit_price:
         description: >-
@@ -243,15 +243,15 @@ classes:
           produces a number with no meaning.
         range: decimal
         annotations:
-          varda:role: measure
-          varda:additivity: non_additive
+          varda:role: MEASURE
+          varda:additivity: NON_ADDITIVE
           varda:unit: EUR
 
   FctInventory:
     description: Stock position, measured at the close of each day.
     annotations:
-      varda:role: fact
-      varda:fact_type: periodic_snapshot
+      varda:role: FACT
+      varda:fact_type: PERIODIC_SNAPSHOT
       varda:grain: [date_key, product_key, store_key]
       varda:grain_statement: >-
         one row per product per store per day
@@ -260,19 +260,19 @@ classes:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimDate
       product_key:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimProduct
       store_key:
         range: integer
         required: true
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimStore
       quantity_on_hand:
         description: >-
@@ -281,7 +281,7 @@ classes:
         range: integer
         required: true
         annotations:
-          varda:role: measure
-          varda:additivity: semi_additive
+          varda:role: MEASURE
+          varda:additivity: SEMI_ADDITIVE
           varda:semi_additive_over: date_key
           varda:unit: count
