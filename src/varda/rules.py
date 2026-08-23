@@ -115,6 +115,9 @@ RULES = RuleSet(tag="V")
 #: otherwise would make V104 an argument instead of a check.
 GRAIN_MIN_WORDS = 4
 
+#: One level is a column, not a path: nothing rolls up into anything.
+HIERARCHY_MIN_LEVELS = 2
+
 
 # ---------------------------------------------------------------------------
 # V0xx — profile conformance
@@ -630,6 +633,155 @@ def v120(model: DimensionalModel) -> Iterator[Finding]:
                 f"varda:{key} describes a {' or '.join(allowed)}, and "
                 f"{table.name} is a {table.role}",
             )
+
+
+#: The column roles a hierarchy level may not have. A surrogate key is
+#: meaningless outside its own table, a measure is what gets aggregated
+#: rather than what it is grouped by, and a versioning column marks one
+#: version of a row off from another rather than locating it in a hierarchy.
+_NOT_A_LEVEL = frozenset({"SURROGATE_KEY", "MEASURE"}) | VERSIONING_ROLES
+
+
+@RULES.rule("V121", "error", "Hierarchy levels name real columns")
+def v121(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a level naming a column the table does not have.
+
+    The same check V114 makes of the grain. A level that names nothing is
+    silently dropped by every generator, so the path a reader is offered is
+    shorter than the one the model claims.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            for level in hierarchy.levels:
+                if table.column(level) is not None:
+                    continue
+                yield Finding(
+                    "V121",
+                    "error",
+                    str(hierarchy),
+                    f"level {level!r} is not a column of {table.name}",
+                )
+
+
+@RULES.rule("V122", "error", "Hierarchy levels are distinct")
+def v122(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a column appearing twice in one hierarchy.
+
+    A level that is its own ancestor is not a drill path. Usually a copy and
+    paste, and always meaningless.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            seen: set[str] = set()
+            for level in hierarchy.levels:
+                if level in seen:
+                    yield Finding(
+                        "V122",
+                        "error",
+                        str(hierarchy),
+                        f"level {level!r} appears more than once",
+                    )
+                seen.add(level)
+
+
+@RULES.rule("V123", "error", "A hierarchy has at least two levels")
+def v123(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a hierarchy of one level, or none.
+
+    One level is a column, not a path. Nothing rolls up into anything, so
+    every consumer that offers a drill-down offers a single step to nowhere.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            if len(hierarchy.levels) >= HIERARCHY_MIN_LEVELS:
+                continue
+            yield Finding(
+                "V123",
+                "error",
+                str(hierarchy),
+                f"{len(hierarchy.levels)} level(s); a hierarchy needs at "
+                "least two, coarsest first",
+            )
+
+
+@RULES.rule("V124", "error", "Hierarchy names are unique within a table")
+def v124(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag two hierarchies on one table sharing a name.
+
+    A dimension carrying several paths is the normal case — a date dimension
+    has a calendar path and a week path — and the name is the only thing
+    telling a reader which one they are drilling. Two of them answering to
+    the same name makes the choice unresolvable.
+    """
+    for table in model.tables:
+        seen = set()
+        for hierarchy in table.hierarchies:
+            if not hierarchy.name:
+                yield Finding(
+                    "V124",
+                    "error",
+                    str(table),
+                    "a hierarchy with no name; every path needs one",
+                )
+                continue
+            if hierarchy.name in seen:
+                yield Finding(
+                    "V124",
+                    "error",
+                    str(table),
+                    f"two hierarchies named {hierarchy.name!r}",
+                )
+            seen.add(hierarchy.name)
+
+
+@RULES.rule(
+    "V125", "error", "Hierarchy levels are the kind of column a level can be"
+)
+def v125(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a level whose column role cannot describe one.
+
+    A level is something rows are grouped by on the way up a hierarchy.
+    A measure is what gets aggregated, a surrogate key means nothing outside
+    its own table, and a versioning column separates versions of one row
+    rather than placing it in a hierarchy. None of them roll up.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            for column in hierarchy.level_columns:
+                if column.role not in _NOT_A_LEVEL:
+                    continue
+                yield Finding(
+                    "V125",
+                    "error",
+                    str(hierarchy),
+                    f"level {column.name!r} has role {column.role}, which "
+                    "does not roll up; a level is an ATTRIBUTE or a "
+                    "NATURAL_KEY",
+                )
+
+
+@RULES.rule("V126", "error", "Hierarchies belong to dimensions")
+def v126(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a hierarchy on a fact or a bridge.
+
+    A drill path describes descriptive context, which is what a dimension
+    is. A fact is drilled *through* its dimensions, and a bridge exists to
+    resolve a many-to-many rather than to be navigated.
+
+    V120 is this check for the other table annotations.
+    """
+    for table in model.tables:
+        if table.role is None or table.is_dimension:
+            continue  # V101 reports a missing role
+        if not table.hierarchies:
+            continue
+        yield Finding(
+            "V126",
+            "error",
+            str(table),
+            f"varda:hierarchies describes a DIMENSION, and {table.name} "
+            f"is a {table.role}",
+        )
 
 
 # ---------------------------------------------------------------------------

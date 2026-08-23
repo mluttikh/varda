@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING
@@ -23,6 +24,7 @@ from typing import TYPE_CHECKING
 from linkml_runtime.utils.schemaview import SchemaView
 
 from .anns import get, get_list, is_model_object
+from .anns import raw as raw_ann
 
 if TYPE_CHECKING:
     from linkml_runtime.linkml_model.meta import (
@@ -54,6 +56,35 @@ def physical_name(logical: str) -> str:
 VERSIONING_ROLES = frozenset(
     {"VERSION_START", "VERSION_END", "IS_CURRENT", "VERSION_NUMBER"}
 )
+
+
+@dataclass(frozen=True)
+class Hierarchy:
+    """One named drill path over a dimension's columns.
+
+    ``levels`` runs from least to most granular, which is the order every
+    system that models hierarchies uses and the order a reader drills in.
+    """
+
+    name: str
+    levels: tuple[str, ...]
+    table: Table
+
+    @property
+    def level_columns(self) -> tuple[Column, ...]:
+        """Resolve the levels to columns, skipping unknown names.
+
+        Drops what it cannot find, for the same reason ``grain_columns``
+        does: the missing names are a rule's finding to report, and a
+        generator reading a model that failed `check` wants a partial answer
+        rather than an exception.
+        """
+        found = (self.table.column(n) for n in self.levels)
+        return tuple(c for c in found if c is not None)
+
+    def __str__(self) -> str:
+        """Render as ``Table.hierarchy``, which is how findings name one."""
+        return f"{self.table.name}.{self.name}"
 
 
 @dataclass(frozen=True)
@@ -162,6 +193,36 @@ class Table:
         """
         found = (self.column(n) for n in self.grain)
         return tuple(c for c in found if c is not None)
+
+    @property
+    def hierarchies(self) -> tuple[Hierarchy, ...]:
+        """The declared drill paths, in declared order.
+
+        Reads a structured annotation, so this is where the untyped list of
+        mappings LinkML hands back becomes concrete. Entries that are not
+        mappings are dropped rather than raising: a malformed hierarchy is
+        V121's finding to report, and a property access is the wrong place to
+        fail on a model that has not been checked yet.
+        """
+        raw = raw_ann(self.cls, "hierarchies")
+        if raw is None:
+            return ()
+        entries = raw if isinstance(raw, list) else [raw]
+        out: list[Hierarchy] = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            levels = entry.get("levels")
+            if isinstance(levels, (str, bytes)):
+                levels = [levels]
+            out.append(
+                Hierarchy(
+                    name=str(entry.get("name") or ""),
+                    levels=tuple(str(v) for v in levels or ()),
+                    table=self,
+                )
+            )
+        return tuple(out)
 
     @property
     def fact_type(self) -> str | None:

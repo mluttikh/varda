@@ -145,6 +145,65 @@ what stops consecutive versions overlapping at their boundary.
     both this, whatever they are called. Keeping both would be bitemporality,
     which this core does not model.
 
+## Hierarchies: how a dimension is drilled
+
+`varda:hierarchies` declares the named paths a reader drills down. Levels run
+from least to most granular, which is the direction every system that models
+hierarchies uses:
+
+```yaml
+DimStore:
+  annotations:
+    varda:role: DIMENSION
+    varda:hierarchies:
+      - name: geography
+        levels: [country, region, store_code]
+```
+
+A hierarchy makes two claims, and only one of them is checkable. The path —
+offer country, then region, then store — is a declaration, and Varda checks
+that the levels are real columns, distinct, at least two of them, on a
+dimension, and the kind of column that can be a level. The other claim is that
+each level rolls up into exactly one member of the level above it, and that is
+a statement about data. Nothing here can test it, the same way nothing tests
+the grain sentence.
+
+Three things go wrong often enough to be worth naming.
+
+!!! warning "A level must identify its members on its own"
+    A month level declared as `month_name` is wrong. "January" is a label
+    shared by every January there has ever been, so grouping by it merges
+    January 2024 into January 2025. The level is a column like `2024-01` that
+    names exactly one of them. The same applies to `region`, `city` and every
+    other name that repeats under a different parent.
+
+**Weeks do not roll up into months.** `[year, quarter, month, week, date]`
+looks like the obvious calendar hierarchy and is wrong: a week straddles month
+boundaries and, under ISO 8601, year boundaries. Real calendars carry two
+paths that share their finest level and diverge in the middle, which is why a
+column may appear in more than one hierarchy:
+
+```yaml
+    varda:hierarchies:
+      - name: calendar
+        levels: [calendar_year, calendar_month, calendar_date]
+      - name: iso_week
+        levels: [iso_year, iso_week, calendar_date]
+```
+
+**A hierarchy in a type-1 dimension rewrites history.** Districts get redrawn
+and products get recategorized, and when the dimension overwrites, last year's
+numbers move into this year's regions. That is often what people want; it is
+never what they expect. A dimension whose hierarchy has to stay put under
+historical reporting is type 2, and the reasoning is the same one in
+[History](#history-what-happens-when-a-value-changes) — the choice is cheap to
+make now and expensive to discover later.
+
+Only fixed-depth paths are modeled. A hierarchy whose branches end at
+different depths, whose levels can be skipped, or where a child has more than
+one parent is not a list of columns — it is a bridge table, and the many-to-many
+it resolves is what [`BRIDGE`](#tables-have-a-role) is for.
+
 ## What Varda does not model
 
 Data quality — whether the *rows* are right — is a different layer with a

@@ -33,7 +33,7 @@ description: >-
   `gen-owl`, `gen-json-schema` and every other LinkML generator will consume
   happily, ignoring what they do not understand.
 
-  **Scope.** This is the deliberately small core: eleven annotations that
+  **Scope.** This is the deliberately small core: twelve annotations that
   describe a standard star schema and nothing else. Anything specific to one
   organization — cost centers, retention, data classification, ownership —
   belongs in an extension under that organization's own prefix. See
@@ -296,6 +296,35 @@ classes:
           it is most of the value.
         range: string
 
+      hierarchies:
+        description: >-
+          Named drill paths over this dimension's columns. Dimensions only.
+
+          Each hierarchy lists its levels from least to most granular —
+          `[country, region, city]`, not the reverse. A column may appear in
+          several hierarchies, which is how a date dimension carries both a
+          calendar path and a week path: weeks do not nest inside months, so
+          they are separate hierarchies rather than one chain.
+
+          Every level must name a column of this table, and that column must
+          identify its members on its own. A month level declared as
+          `month_name` is wrong, because "January" is a label shared by every
+          January there has ever been; the level is a column like
+          `year_month` that names exactly one of them.
+
+          That each level determines the one above it — that every city is in
+          exactly one region — is asserted here and not checked, because it
+          is a claim about data rather than about the schema. What is checked
+          is that the levels are real, distinct, and the kind of column a
+          level can be.
+
+          Only fixed-depth paths where each level rolls up into exactly one
+          parent. A hierarchy whose branches differ in depth, whose levels can
+          be skipped, or where a child has several parents is a bridge table.
+        range: Hierarchy
+        multivalued: true
+        inlined_as_list: true
+
       fact_type:
         description: >-
           The temporal shape of a fact table. Facts only.
@@ -356,3 +385,29 @@ classes:
         description: >-
           The column name to emit, when it differs from the slot name.
         range: string
+
+  Hierarchy:
+    description: >-
+      One named drill path over a dimension's columns.
+
+      Not an annotation class: it carries no `varda:applies_to`, because it
+      is the range of `varda:hierarchies` rather than something a model
+      annotates directly.
+    attributes:
+
+      name:
+        description: >-
+          What this path is called, unique within the table. Names it rather
+          than numbering it, because a dimension with a calendar path and a
+          fiscal path needs the reader to know which is which.
+        range: string
+        required: true
+
+      levels:
+        description: >-
+          The level columns, from least to most granular.
+
+          At least two: one level is not a hierarchy, it is a column.
+        range: string
+        multivalued: true
+        required: true

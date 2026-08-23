@@ -67,6 +67,11 @@ def _table(table: Table) -> str:
         facts.append(f"**Fact type:** {table.fact_type}")
     if table.scd:
         facts.append(f"**Slowly-changing:** {table.scd}")
+    # Rendered coarsest-first with arrows, which is the direction a reader
+    # drills rather than the direction the columns happen to be declared in.
+    for hierarchy in table.hierarchies:
+        path = " → ".join(f"`{level}`" for level in hierarchy.levels)
+        facts.append(f"**Drill path** ({hierarchy.name}): {path}")
     lines += [*facts, "", *_columns(table), ""]
     return "\n".join(lines)
 

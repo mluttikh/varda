@@ -70,7 +70,7 @@ thing to maintain than a parser.
 
 ## Why the vocabulary is this small
 
-Eleven annotations is not a first cut on the way to forty. It is the
+Twelve annotations is not a first cut on the way to forty. It is the
 deliberate size.
 
 Every annotation in the core is one a newcomer has to read before they can
@@ -82,6 +82,30 @@ core concept everybody must ignore.
 The parts deliberately left out of 0.1, with the reasoning for each, are
 listed in `SPEC.md` §4. Analytical functions, model diffing, lineage export
 and the drift gate all exist in a larger internal prototype and were cut.
+
+## Why a hierarchy is a list of columns and nothing else
+
+A level in most OLAP tools is a richer object than a column name. SML and
+AtScale give each one a `name_column` for display plus `key_columns` for
+identity, and the key is the whole path from the root — `city` is keyed by
+country, state and city together, because Springfield is not unique. SQL
+Server Analysis Services splits the same information across attribute
+relationships and user hierarchies.
+
+Varda's level is a column name. The reason is that those tools bind to source
+tables they do not control, so a compound key is their only way out when a
+column does not identify its members. Varda describes a warehouse somebody is
+designing, where the way out is better: declare a level column that identifies
+a month, rather than a label that names twelve of them and a key to disambiguate
+it. Dimensions are wide and denormalized, and a self-identifying level column is
+ordinary practice rather than a workaround.
+
+That obligation is stated in the vocabulary and cannot be checked, which is the
+same bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
+makes. If a consumer ever needs the compound form, it arrives as an annotation
+on the column — where a key belongs, since it is a property of the level rather
+than of any one path through it — and no hierarchy already written has to
+change.
 
 ## Why units are LinkML's and not Varda's
 
@@ -164,7 +188,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of twenty-nine rules disagrees with the code within two
+A hand-written table of thirty-five rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

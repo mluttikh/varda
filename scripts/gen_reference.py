@@ -60,11 +60,46 @@ def _clean(text: object) -> str:
     return " ".join(str(text).split()) if text else ""
 
 
-def _range_link(rng: str, view: Any) -> str:
-    """Link a range to its enumeration section when it names one."""
-    if rng in view.schema.enums:
+def _structured(ext: Any) -> list[str]:
+    """Name the classes an annotation may take as its range.
+
+    A profile class carrying `applies_to` declares annotations; one without
+    it is the shape of an annotation's value. Told apart by that rather than
+    by a hard-coded list, so an extension defining its own structured range
+    is documented on the same terms as the core's.
+    """
+    view = ext.profile_view
+    reader = Extension.reader(ext.prefix)
+    return [
+        str(name)
+        for name, cls in view.schema.classes.items()
+        if reader.get(cls, "applies_to") is None
+    ]
+
+
+def _range_link(rng: str, view: Any, structured: list[str]) -> str:
+    """Link a range to the section describing it, when there is one."""
+    if rng in view.schema.enums or rng in structured:
         return f"[`{rng}`](#{rng.lower()})"
     return f"`{rng}`"
+
+
+def _structure_section(view: Any, name: str) -> list[str]:
+    """Render the shape of one structured annotation value."""
+    cls = view.schema.classes[name]
+    out = [f"### {name}", ""]
+    if cls.description:
+        out += [_clean(cls.description), ""]
+    out += ["| Key | Range | Meaning |", "| --- | --- | --- |"]
+    for key, attr in (cls.attributes or {}).items():
+        rng = f"`{attr.range or 'string'}`"
+        if attr.multivalued:
+            rng = f"{rng}, list"
+        required = " **required**" if attr.required else ""
+        out.append(
+            f"| `{key}` | {rng}{required} | {_clean(attr.description)} |"
+        )
+    return [*out, ""]
 
 
 def _annotation_rows(ext: Any, target: str) -> list[str]:
@@ -74,12 +109,13 @@ def _annotation_rows(ext: Any, target: str) -> list[str]:
     # its own annotations. Reaching into `registry` would document a
     # private path as though it were supported.
     reader = Extension.reader(ext.prefix)
+    structured = _structured(ext)
     rows: list[str] = []
     for cls in view.schema.classes.values():
         if reader.get(cls, "applies_to") != target:
             continue
         for name, attr in (cls.attributes or {}).items():
-            rng = _range_link(str(attr.range or "string"), view)
+            rng = _range_link(str(attr.range or "string"), view, structured)
             # A multivalued annotation takes a YAML list, and a reference
             # that renders it identically to a scalar one teaches the wrong
             # syntax. `varda:grain` is the case: `[a, b]`, not `a`.
@@ -132,6 +168,20 @@ def _extension_vocabulary(ext: Any, *, titled: bool) -> list[str]:
                 *rows,
                 "",
             ]
+
+    structured = _structured(ext)
+    if structured:
+        out += [
+            "## Structured values",
+            "",
+            (
+                "The shapes an annotation's value takes when its range is "
+                "not a scalar."
+            ),
+            "",
+        ]
+        for name in structured:
+            out += _structure_section(view, name)
 
     if view.schema.enums:
         out += [

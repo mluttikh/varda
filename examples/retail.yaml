@@ -23,6 +23,14 @@ classes:
     annotations:
       varda:role: DIMENSION
       varda:scd: TYPE_0
+      # Two paths, sharing their finest level. They are separate rather than
+      # one chain because a fiscal quarter is not a calendar quarter, and
+      # neither contains the other.
+      varda:hierarchies:
+        - name: calendar
+          levels: [calendar_year, calendar_month, calendar_date]
+        - name: fiscal
+          levels: [fiscal_year, fiscal_quarter, calendar_date]
     attributes:
       date_key:
         description: Surrogate key, conventionally YYYYMMDD.
@@ -36,11 +44,29 @@ classes:
         required: true
         annotations:
           varda:role: NATURAL_KEY
-      day_of_week:
-        range: string
+      calendar_year:
+        range: integer
+        annotations:
+          varda:role: ATTRIBUTE
+      calendar_month:
+        description: >-
+          The month, year-qualified — `2024-03`, not `March`. A level has to
+          name one member on its own, and there is a March in every year.
+        annotations:
+          varda:role: ATTRIBUTE
+      fiscal_year:
+        range: integer
         annotations:
           varda:role: ATTRIBUTE
       fiscal_quarter:
+        description: The quarter, year-qualified — `FY24-Q3`.
+        range: string
+        annotations:
+          varda:role: ATTRIBUTE
+      day_of_week:
+        description: >-
+          Groups and filters, but belongs to no hierarchy: Tuesdays do not
+          roll up into anything.
         range: string
         annotations:
           varda:role: ATTRIBUTE
@@ -90,6 +116,9 @@ classes:
     annotations:
       varda:role: DIMENSION
       varda:scd: TYPE_1
+      varda:hierarchies:
+        - name: merchandise
+          levels: [category, brand, sku]
     attributes:
       product_key:
         range: integer
@@ -106,12 +135,18 @@ classes:
       brand:
         annotations:
           varda:role: ATTRIBUTE
+      category:
+        annotations:
+          varda:role: ATTRIBUTE
 
   DimStore:
     description: A physical or online point of sale.
     annotations:
       varda:role: DIMENSION
       varda:scd: TYPE_1
+      varda:hierarchies:
+        - name: geography
+          levels: [country, region, store_code]
     attributes:
       store_key:
         range: integer
@@ -126,6 +161,9 @@ classes:
         annotations:
           varda:role: ATTRIBUTE
       region:
+        annotations:
+          varda:role: ATTRIBUTE
+      country:
         annotations:
           varda:role: ATTRIBUTE
 

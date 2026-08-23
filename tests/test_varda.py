@@ -1706,6 +1706,145 @@ def test_v120_fact_type_on_a_dimension(tmp_path: pathlib.Path) -> None:
     assert "V120" in codes(model)
 
 
+# --- hierarchies -----------------------------------------------------------
+
+
+def _geo(*levels: str, name: str = "geography") -> dict[str, Any]:
+    """Build a dimension with geography columns and one hierarchy over them."""
+    table = dimension()
+    for level in ("country", "region", "city"):
+        table["attributes"][level] = {
+            "annotations": {"varda:role": "ATTRIBUTE"}
+        }
+    table["annotations"]["varda:hierarchies"] = [
+        {"name": name, "levels": list(levels)}
+    ]
+    return table
+
+
+def test_a_hierarchy_reaches_the_model_as_levels(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The structured annotation crosses the typed boundary intact."""
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
+    table = model.table("DimThing")
+    assert table is not None
+    (hierarchy,) = table.hierarchies
+    assert hierarchy.name == "geography"
+    assert hierarchy.levels == ("country", "region", "city")
+    assert [c.name for c in hierarchy.level_columns] == [
+        "country",
+        "region",
+        "city",
+    ]
+    assert str(hierarchy) == "DimThing.geography"
+    assert not codes(model)
+
+
+def test_a_column_may_sit_in_two_hierarchies(tmp_path: pathlib.Path) -> None:
+    """Shared levels are the normal case, not an edge case.
+
+    A date dimension carries a calendar path and a fiscal path over the same
+    days. A design where a column belongs to one hierarchy cannot express it.
+    """
+    table = _geo("country", "region", "city")
+    table["annotations"]["varda:hierarchies"].append(
+        {"name": "sales", "levels": ["region", "city"]}
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert not codes(model)
+    found = model.table("DimThing")
+    assert found is not None
+    assert [h.name for h in found.hierarchies] == ["geography", "sales"]
+
+
+def test_v121_level_is_not_a_column(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _geo("country", "nosuch")})
+    assert "V121" in codes(model)
+
+
+def test_v122_level_appears_twice(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "region")})
+    assert "V122" in codes(model)
+
+
+def test_v123_one_level_is_not_a_hierarchy(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _geo("country")})
+    assert "V123" in codes(model)
+
+
+def test_v124_two_hierarchies_share_a_name(tmp_path: pathlib.Path) -> None:
+    table = _geo("country", "region")
+    table["annotations"]["varda:hierarchies"].append(
+        {"name": "geography", "levels": ["country", "city"]}
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert "V124" in codes(model)
+
+
+def test_v124_a_hierarchy_without_a_name(tmp_path: pathlib.Path) -> None:
+    table = _geo("country", "region")
+    table["annotations"]["varda:hierarchies"] = [
+        {"levels": ["country", "region"]}
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    assert "V124" in codes(model)
+
+
+@pytest.mark.parametrize(
+    "role", ["SURROGATE_KEY", "MEASURE", "VERSION_START", "IS_CURRENT"]
+)
+def test_v125_level_role_cannot_roll_up(
+    tmp_path: pathlib.Path, role: str
+) -> None:
+    table = _geo("country", "odd")
+    table["attributes"]["odd"] = {
+        "range": "decimal" if role == "MEASURE" else "string",
+        "annotations": {"varda:role": role},
+    }
+    if role == "MEASURE":
+        table["attributes"]["odd"]["annotations"]["varda:additivity"] = (
+            "ADDITIVE"
+        )
+    model = build(tmp_path, {"DimThing": table})
+    assert "V125" in codes(model)
+
+
+def test_v125_a_natural_key_is_a_legal_leaf(tmp_path: pathlib.Path) -> None:
+    """The finest level of a dimension's path is usually its natural key."""
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "d_id")})
+    assert "V125" not in codes(model)
+
+
+def test_v126_hierarchy_on_a_fact(tmp_path: pathlib.Path) -> None:
+    fct = _fact(
+        **{
+            "varda:grain": ["d_key"],
+            "varda:grain_statement": "one row per thing",
+            "varda:hierarchies": [{"name": "nope", "levels": ["d_key", "m"]}],
+        }
+    )
+    model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
+    assert "V126" in codes(model)
+
+
+def test_a_malformed_hierarchy_does_not_raise(tmp_path: pathlib.Path) -> None:
+    """A property access is the wrong place to fail on an unchecked model."""
+    table = dimension()
+    table["annotations"]["varda:hierarchies"] = ["not a mapping"]
+    model = build(tmp_path, {"DimThing": table})
+    found = model.table("DimThing")
+    assert found is not None
+    assert found.hierarchies == ()
+
+
+def test_generated_docs_render_drill_paths(tmp_path: pathlib.Path) -> None:
+    """The path is rendered coarsest-first, the way a reader drills it."""
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
+    page = generate_docs(model)
+    assert "**Drill path** (geography): `country` → `region` → `city`" in page
+
+
 def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
     """Declaring both a start and a counter must not weaken the constraint.
 

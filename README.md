@@ -47,7 +47,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 29 rules (varda 0.1.0): 0 errors, 0 warnings
+8 tables checked against 35 rules (varda 0.1.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -64,18 +64,19 @@ Python 3.11+. The only runtime dependency is `linkml-runtime`.
 
 ## What it gives you
 
-**Eleven annotations.** Six on tables — `role`, `grain`, `grain_statement`,
-`fact_type`, `scd`, `physical_name`. Five on columns — `role`, `references`,
-`additivity`, `semi_additive_over`, `physical_name`. That is the whole core
+**Twelve annotations.** Seven on tables — `role`, `grain`,
+`grain_statement`, `hierarchies`, `fact_type`, `scd`, `physical_name`. Five on
+columns — `role`, `references`, `additivity`, `semi_additive_over`,
+`physical_name`. That is the whole core
 vocabulary, and it is deliberately the whole core vocabulary. Units are
 LinkML's own `unit`, which Varda reads rather than restates.
 
-**Twenty-nine rules** that catch the mistakes worth catching:
+**Thirty-five rules** that catch the mistakes worth catching:
 
 | | |
 | --- | --- |
 | `V001`–`V003` | the annotations themselves — typos, bad enum values, unknown prefixes |
-| `V101`–`V120` | structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
+| `V101`–`V126` | structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
 | `V201`–`V206` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
 
 The `V2xx` family exists because additivity is where the expensive errors
