@@ -29,7 +29,7 @@ from .model import VERSIONING_ROLES
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
-    from .model import DimensionalModel
+    from .model import DimensionalModel, Level, Table
 
 
 @dataclass(frozen=True)
@@ -635,32 +635,74 @@ def v120(model: DimensionalModel) -> Iterator[Finding]:
             )
 
 
-#: The column roles a hierarchy level may not have. A surrogate key is
-#: meaningless outside its own table, a measure is what gets aggregated
-#: rather than what it is grouped by, and a versioning column marks one
-#: version of a row off from another rather than locating it in a hierarchy.
-_NOT_A_LEVEL = frozenset({"SURROGATE_KEY", "MEASURE"}) | VERSIONING_ROLES
+#: The column roles that cannot name a level to a reader.
+#:
+#: A level names what someone drilling the dimension sees, so this is a
+#: question about display and not about identity. A surrogate key and a
+#: foreign key are both fine identities and neither is readable — nobody
+#: drills into `4718`. A measure is what gets aggregated rather than what it
+#: is grouped by, and a versioning column separates versions of one row
+#: rather than placing it in a hierarchy.
+_NOT_A_LEVEL = (
+    frozenset({"SURROGATE_KEY", "FOREIGN_KEY", "MEASURE"}) | VERSIONING_ROLES
+)
 
 
 @RULES.rule("V121", "error", "Hierarchy levels name real columns")
 def v121(model: DimensionalModel) -> Iterator[Finding]:
-    """Flag a level naming a column the table does not have.
+    """Flag a level naming a column that does not exist.
 
-    The same check V114 makes of the grain. A level that names nothing is
-    silently dropped by every generator, so the path a reader is offered is
-    shorter than the one the model claims.
+    The same check V114 makes of the grain, extended to the reference form.
+    A level that names nothing is silently dropped by every generator, so the
+    path a reader is offered is shorter than the one the model claims.
+
+    ``country_key.country_name`` has three ways to be wrong and each gets its
+    own message, because "not a column" would send a reader looking in the
+    wrong table.
     """
     for table in model.tables:
         for hierarchy in table.hierarchies:
-            for level in hierarchy.levels:
-                if table.column(level) is not None:
+            for level in hierarchy.resolved:
+                message = _level_fault(table, level)
+                if message is None:
                     continue
-                yield Finding(
-                    "V121",
-                    "error",
-                    str(hierarchy),
-                    f"level {level!r} is not a column of {table.name}",
-                )
+                yield Finding("V121", "error", str(hierarchy), message)
+
+
+def _level_fault(table: Table, level: Level) -> str | None:
+    """Name what is wrong with one level, or ``None`` when it resolves."""
+    if level.is_reference:
+        return _reference_fault(table, level)
+    if level.column is None:
+        return f"level {level.spec!r} is not a column of {table.name}"
+    return None
+
+
+def _reference_fault(table: Table, level: Level) -> str | None:
+    """Name what is wrong with a level reaching through a foreign key."""
+    near, _, far = level.spec.partition(".")
+    if level.via is None:
+        return (
+            f"level {level.spec!r} reaches through {near!r}, "
+            f"which is not a column of {table.name}"
+        )
+    if level.via.role != "FOREIGN_KEY":
+        return (
+            f"level {level.spec!r} reaches through {near!r}, which is a "
+            f"{level.via.role or 'column with no role'}; only a FOREIGN_KEY "
+            "leads to another table"
+        )
+    if not level.via.references:
+        return (
+            f"level {level.spec!r} reaches through {near!r}, which names no "
+            "target; see V108"
+        )
+    if level.column is None:
+        return (
+            f"level {level.spec!r} names {far!r}, which is not a column of "
+            f"{level.via.references}"
+        )
+    return None
 
 
 @RULES.rule("V122", "error", "Hierarchy levels are distinct")
@@ -738,26 +780,33 @@ def v124(model: DimensionalModel) -> Iterator[Finding]:
     "V125", "error", "Hierarchy levels are the kind of column a level can be"
 )
 def v125(model: DimensionalModel) -> Iterator[Finding]:
-    """Flag a level whose column role cannot describe one.
+    """Flag a level named by a column a reader cannot drill.
 
-    A level is something rows are grouped by on the way up a hierarchy.
-    A measure is what gets aggregated, a surrogate key means nothing outside
-    its own table, and a versioning column separates versions of one row
-    rather than placing it in a hierarchy. None of them roll up.
+    A bare foreign key gets its own message, because it is the near-miss a
+    snowflake invites: the coarser levels are their own tables, so the only
+    thing to hand is the key, and a path of keys renders as integers. The
+    reference form reaches past it to something readable.
     """
     for table in model.tables:
         for hierarchy in table.hierarchies:
-            for column in hierarchy.level_columns:
-                if column.role not in _NOT_A_LEVEL:
+            for level in hierarchy.resolved:
+                column = level.column
+                if column is None or column.role not in _NOT_A_LEVEL:
                     continue
-                yield Finding(
-                    "V125",
-                    "error",
-                    str(hierarchy),
-                    f"level {column.name!r} has role {column.role}, which "
-                    "does not roll up; a level is an ATTRIBUTE or a "
-                    "NATURAL_KEY",
-                )
+                if column.role == "FOREIGN_KEY" and not level.is_reference:
+                    target = column.references or "the dimension it points at"
+                    message = (
+                        f"level {level.spec!r} is a foreign key, which reads "
+                        f"as an integer; name what it points at instead — "
+                        f"{level.spec}.<column of {target}>"
+                    )
+                else:
+                    message = (
+                        f"level {level.spec!r} is named by a {column.role}, "
+                        "which a reader cannot drill; a level is an "
+                        "ATTRIBUTE or a NATURAL_KEY"
+                    )
+                yield Finding("V125", "error", str(hierarchy), message)
 
 
 @RULES.rule("V126", "error", "Hierarchies belong to dimensions")

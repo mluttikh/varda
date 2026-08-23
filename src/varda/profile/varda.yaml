@@ -306,11 +306,23 @@ classes:
           calendar path and a week path: weeks do not nest inside months, so
           they are separate hierarchies rather than one chain.
 
-          Every level must name a column of this table, and that column must
-          identify its members on its own. A month level declared as
-          `month_name` is wrong, because "January" is a label shared by every
-          January there has ever been; the level is a column like
-          `year_month` that names exactly one of them.
+          A level names what a reader sees when they drill, so it must be
+          a column somebody can read. A surrogate key or a foreign key is a
+          fine identity and an unreadable label — nobody drills into `4718`
+          — so neither may name a level.
+
+          Where the coarser levels are their own tables, write
+          `foreign_key.column` to reach the readable column through the key:
+          `country_key.country_name` rather than `country_key`. Both halves
+          are checked — the near column must be a foreign key of this table,
+          and the far one a column of the dimension it points at.
+
+          A level that names a column of this table must identify its
+          members on its own. A month level declared as `month_name` is
+          wrong, because "January" is a label shared by every January there
+          has ever been; the level is a column like `year_month` that names
+          exactly one of them. Reaching through a foreign key does not have
+          this problem, because the key already picks one row out.
 
           That each level determines the one above it — that every city is in
           exactly one region — is asserted here and not checked, because it

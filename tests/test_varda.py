@@ -1816,6 +1816,117 @@ def test_v125_a_natural_key_is_a_legal_leaf(tmp_path: pathlib.Path) -> None:
     assert "V125" not in codes(model)
 
 
+def _snowflake(levels: list[str]) -> dict[str, Any]:
+    """Build a city/state/country snowflake with one hierarchy over it.
+
+    The coarser levels are their own tables, which is the arrangement that
+    makes the reference form necessary: the only geography columns on
+    DimCity are the keys.
+    """
+    country = dimension()
+    country["attributes"]["country_name"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    state = dimension()
+    state["attributes"]["state_name"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    city = dimension()
+    city["annotations"]["varda:hierarchies"] = [
+        {"name": "geography", "levels": levels}
+    ]
+    city["attributes"]["city_name"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    for name, target in (
+        ("state_key", "DimState"),
+        ("country_key", "DimCountry"),
+    ):
+        city["attributes"][name] = {
+            "range": "integer",
+            "annotations": {
+                "varda:role": "FOREIGN_KEY",
+                "varda:references": target,
+            },
+        }
+    return {"DimCity": city, "DimState": state, "DimCountry": country}
+
+
+def test_a_level_reaches_through_a_foreign_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A snowflaked level resolves to a column of the table it points at."""
+    model = build(
+        tmp_path,
+        _snowflake(
+            ["country_key.country_name", "state_key.state_name", "city_name"]
+        ),
+    )
+    assert not codes(model)
+    table = model.table("DimCity")
+    assert table is not None
+    (hierarchy,) = table.hierarchies
+    country, state, city = hierarchy.resolved
+    assert country.is_reference
+    assert country.via is not None
+    assert country.via.name == "country_key"
+    assert country.column is not None
+    assert country.column.name == "country_name"
+    assert not city.is_reference
+    assert city.via is None
+    assert state.column is not None
+
+
+def test_v125_a_bare_foreign_key_is_not_a_level(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The near miss a snowflake invites: a path of unreadable integers."""
+    model = build(
+        tmp_path, _snowflake(["country_key", "state_key", "city_name"])
+    )
+    found = [f for f in rules.check(model) if f.rule == "V125"]
+    assert found
+    # The message has to carry the fix, since the right answer is one dot away.
+    assert "country_key.<column of DimCountry>" in found[0].message
+
+
+@pytest.mark.parametrize(
+    ("level", "fragment"),
+    [
+        ("nosuch.country_name", "not a column of DimCity"),
+        ("d_key.country_name", "which is a SURROGATE_KEY"),
+        ("country_key.nosuch", "not a column of DimCountry"),
+    ],
+)
+def test_v121_a_reference_level_that_does_not_resolve(
+    tmp_path: pathlib.Path, level: str, fragment: str
+) -> None:
+    """Each way a reference can fail names the half that is wrong."""
+    model = build(
+        tmp_path, _snowflake([level, "state_key.state_name", "city_name"])
+    )
+    found = [f for f in rules.check(model) if f.rule == "V121"]
+    assert found
+    assert fragment in found[0].message
+
+
+def test_docs_render_a_reference_level_qualified(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`country_name` alone would send a reader to the wrong table."""
+    model = build(
+        tmp_path,
+        _snowflake(
+            ["country_key.country_name", "state_key.state_name", "city_name"]
+        ),
+    )
+    page = generate_docs(model)
+    assert (
+        "**Drill path** (geography): `DimCountry.country_name` → "
+        "`DimState.state_name` → `city_name`" in page
+    )
+
+
 def test_v126_hierarchy_on_a_fact(tmp_path: pathlib.Path) -> None:
     fct = _fact(
         **{

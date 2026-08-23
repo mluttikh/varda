@@ -59,6 +59,37 @@ VERSIONING_ROLES = frozenset(
 
 
 @dataclass(frozen=True)
+class Level:
+    """One step of a drill path, resolved against the model.
+
+    A level names either a column of the table its hierarchy is declared on,
+    or a column of a dimension reached through one of that table's foreign
+    keys — ``country_key.country_name``. The second form is what a snowflake
+    needs: when the coarser levels are their own tables, the only thing on
+    the near side is the key, and a path of keys reads as integers.
+
+    ``column`` is the column that names the level to a reader, wherever it
+    lives. ``via`` is the foreign key it was reached through, or ``None`` for
+    a plain level. Either may be ``None`` when the level names something that
+    does not exist, which is V121's finding to report rather than an error
+    here.
+    """
+
+    spec: str
+    via: Column | None
+    column: Column | None
+
+    @property
+    def is_reference(self) -> bool:
+        """Flag whether this level reaches through a foreign key."""
+        return "." in self.spec
+
+    def __str__(self) -> str:
+        """Render as it was written, which is how findings name a level."""
+        return self.spec
+
+
+@dataclass(frozen=True)
 class Hierarchy:
     """One named drill path over a dimension's columns.
 
@@ -71,16 +102,32 @@ class Hierarchy:
     table: Table
 
     @property
-    def level_columns(self) -> tuple[Column, ...]:
-        """Resolve the levels to columns, skipping unknown names.
+    def resolved(self) -> tuple[Level, ...]:
+        """Resolve every level, in declared order.
 
-        Drops what it cannot find, for the same reason ``grain_columns``
-        does: the missing names are a rule's finding to report, and a
-        generator reading a model that failed `check` wants a partial answer
-        rather than an exception.
+        Resolution never fails: a level naming nothing resolves to a
+        ``Level`` whose parts are ``None``. The rules report those, and a
+        generator running on a model that has not passed `check` wants a
+        partial answer rather than an exception from a property access.
         """
-        found = (self.table.column(n) for n in self.levels)
-        return tuple(c for c in found if c is not None)
+        return tuple(self._resolve(spec) for spec in self.levels)
+
+    def _resolve(self, spec: str) -> Level:
+        """Resolve one level, plain or reached through a foreign key."""
+        head, dot, tail = spec.partition(".")
+        near = self.table.column(head)
+        if not dot:
+            return Level(spec=spec, via=None, column=near)
+        target = None
+        if near is not None and near.references:
+            found = self.table.model.table(near.references)
+            target = found.column(tail) if found is not None else None
+        return Level(spec=spec, via=near, column=target)
+
+    @property
+    def level_columns(self) -> tuple[Column, ...]:
+        """The columns that name the levels, skipping what does not resolve."""
+        return tuple(lv.column for lv in self.resolved if lv.column is not None)
 
     def __str__(self) -> str:
         """Render as ``Table.hierarchy``, which is how findings name one."""

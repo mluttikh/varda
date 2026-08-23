@@ -83,29 +83,54 @@ The parts deliberately left out of 0.1, with the reasoning for each, are
 listed in `SPEC.md` §4. Analytical functions, model diffing, lineage export
 and the drift gate all exist in a larger internal prototype and were cut.
 
-## Why a hierarchy is a list of columns and nothing else
+## Why a level names what a reader sees
 
-A level in most OLAP tools is a richer object than a column name. SML and
-AtScale give each one a `name_column` for display plus `key_columns` for
-identity, and the key is the whole path from the root — `city` is keyed by
-country, state and city together, because Springfield is not unique. SQL
-Server Analysis Services splits the same information across attribute
-relationships and user hierarchies.
+A level in most OLAP tools carries two things. SML and AtScale give each one
+`key_columns` for identity and a `name_column` for display; SQL Server
+Analysis Services splits the same pair across attribute relationships and
+user hierarchies. Varda's level carries only the second, and the reason is
+what a hierarchy is for here.
 
-Varda's level is a column name. The reason is that those tools bind to source
-tables they do not control, so a compound key is their only way out when a
-column does not identify its members. Varda describes a warehouse somebody is
-designing, where the way out is better: declare a level column that identifies
-a month, rather than a label that names twelve of them and a key to disambiguate
-it. Dimensions are wide and denormalized, and a self-identifying level column is
-ordinary practice rather than a workaround.
+Varda produces DDL, documentation and ontology mappings. A hierarchy emits no
+DDL — in a denormalized dimension it implies no constraint, and in a snowflake
+the foreign keys already exist on their own. What it serves is the reader:
+which columns are drill steps, in what order, under what name, shown as what.
+None of that needs to know what a query engine would group by.
 
-That obligation is stated in the vocabulary and cannot be checked, which is the
-same bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
-makes. If a consumer ever needs the compound form, it arrives as an annotation
-on the column — where a key belongs, since it is a property of the level rather
-than of any one path through it — and no hierarchy already written has to
-change.
+Identity is needed by exactly one kind of consumer — something generating a
+query model — and where that consumer exists the identity is already in the
+schema. A level reached through a foreign key is identified by that key; a
+level at a dimension's own grain is identified by its surrogate key, which
+[`V105`](reference/rules.md#v105) guarantees is exactly one column. Nothing has
+to be declared for either. So a `key` on a level would be a field nobody writes
+and nothing reads, and it stays out until a generator needs one — at which
+point it arrives as an optional override and no hierarchy already written
+changes.
+
+That is also why a surrogate key and a foreign key may not *name* a level.
+Both are good identities and neither is readable: nobody drills into `4718`.
+The reference form `country_key.country_name` exists so that a snowflake can
+say both things at once — reach through the key, show the name.
+
+What is asserted and not checked is that each level rolls up into exactly one
+member of the level above it. That is a claim about data, and it is the same
+bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
+makes. Reaching through a foreign key discharges it structurally, which makes a
+snowflaked hierarchy the safer one to declare.
+
+## The ontology mapping is a generator, not a byproduct
+
+LinkML's OWL output carries Varda's scalar annotations through as ordinary
+triples — `varda:role "DIMENSION"`, `varda:scd "TYPE_1"`. It does not do
+anything useful with `varda:hierarchies`, which arrives as one opaque string
+literal holding a printed Python structure. Nothing can query it.
+
+That is not a defect to work around by flattening the annotation. A hierarchy's
+real mapping is a small graph — QB4OLAP's `qb4o:Hierarchy` with a
+`qb4o:HierarchyStep` per consecutive pair of levels — and consecutive pairs of
+an ordered list are exactly what that needs. Emitting it is a generator's job.
+Until one exists, the OWL output should be read as carrying the roles and not
+the paths.
 
 ## Why units are LinkML's and not Varda's
 

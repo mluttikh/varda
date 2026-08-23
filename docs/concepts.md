@@ -160,6 +160,24 @@ DimStore:
         levels: [country, region, store_code]
 ```
 
+When the coarser levels are their own tables — a snowflake — the only
+geography columns on `DimCity` are the keys, and a path of keys reads as
+integers. Reach through the key instead:
+
+```yaml
+DimCity:
+  annotations:
+    varda:role: DIMENSION
+    varda:hierarchies:
+      - name: geography
+        levels: [country_key.country_name, state_key.state_name, city_name]
+```
+
+Both halves are checked: the near name must be a foreign key of this table,
+and the far one a column of the dimension it points at. A level that names a
+foreign key without reaching through it is an error, because `4718` is not
+something anyone drills into.
+
 A hierarchy makes two claims, and only one of them is checkable. The path —
 offer country, then region, then store — is a declaration, and Varda checks
 that the levels are real columns, distinct, at least two of them, on a
@@ -170,12 +188,16 @@ the grain sentence.
 
 Three things go wrong often enough to be worth naming.
 
-!!! warning "A level must identify its members on its own"
+!!! warning "A level of this table must identify its members on its own"
     A month level declared as `month_name` is wrong. "January" is a label
     shared by every January there has ever been, so grouping by it merges
     January 2024 into January 2025. The level is a column like `2024-01` that
     names exactly one of them. The same applies to `region`, `city` and every
     other name that repeats under a different parent.
+
+    Reaching through a foreign key does not have this problem: the key has
+    already picked one row out, so `state_key.state_name` is safe even where
+    a bare `state_name` would not be.
 
 **Weeks do not roll up into months.** `[year, quarter, month, week, date]`
 looks like the obvious calendar hierarchy and is wrong: a week straddles month

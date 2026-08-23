@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .ext import Context
-    from .model import DimensionalModel, Table
+    from .model import DimensionalModel, Level, Table
 
 ADDITIVITY = {
     "ADDITIVE": "sums across every dimension",
@@ -48,6 +48,19 @@ def _columns(table: Table) -> list[str]:
     return rows
 
 
+def _level(level: Level) -> str:
+    """Render one drill-path step.
+
+    Falls back to what was written when the level does not resolve, so a
+    model that has not passed `check` still documents rather than raising.
+    """
+    if level.column is None:
+        return f"`{level.spec}`"
+    if level.via is not None and level.via.references:
+        return f"`{level.via.references}.{level.column.name}`"
+    return f"`{level.column.name}`"
+
+
 def _table(table: Table) -> str:
     lines = [f"### {table.name}", ""]
     if table.description:
@@ -69,8 +82,11 @@ def _table(table: Table) -> str:
         facts.append(f"**Slowly-changing:** {table.scd}")
     # Rendered coarsest-first with arrows, which is the direction a reader
     # drills rather than the direction the columns happen to be declared in.
+    # A level reached through a foreign key is shown qualified by the table
+    # it came from, because `country_name` alone leaves a reader looking for
+    # a column this table does not have.
     for hierarchy in table.hierarchies:
-        path = " → ".join(f"`{level}`" for level in hierarchy.levels)
+        path = " → ".join(_level(lv) for lv in hierarchy.resolved)
         facts.append(f"**Drill path** ({hierarchy.name}): {path}")
     lines += [*facts, "", *_columns(table), ""]
     return "\n".join(lines)
