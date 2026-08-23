@@ -111,11 +111,11 @@ What remains is the case those defaults cannot reach: a level whose name is
 not what tells its members apart, shown as `product_name` and identified by
 `sku`. That is a single column, so `key` is a single column.
 
-The alternative was to have a level declare the columns that identify it.
-Every such declaration in practice turned out to be the ancestor path written
-by hand, which is a field that restates what the model already says — and
-worse, the default without it was one column, which is wrong for exactly the
-denormalized dimension a star schema is supposed to produce.
+The alternative is to have a level declare the columns that identify it.
+Such a declaration is the ancestor path written out by hand — a field
+restating what the ordered list already says — and a level omitting it would
+fall back to its own single column, which is wrong for exactly the
+denormalized dimension a star schema exists to produce.
 
 Nothing checks that members are distinct — that is a claim about data, the
 same bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
@@ -128,28 +128,27 @@ same distinction from the other side.
 
 ## Why uniqueness is LinkML's and roles are Varda's
 
-`varda:unit` was deleted because LinkML already had `unit` and two places to
-write one fact is how models come to disagree with themselves. `unique_keys`
-looks like the same case and is not.
-
 A role says what part a column plays: the business identity a loader matches
-on, the meaningless key facts join to, the instant a version began. A unique
-key says which combinations of columns are unique. Neither follows from the
-other — a surrogate key is unique and is not a business key, `valid_from`
-belongs in a type-2 dimension's unique key without being an identity — so both
-are read, and neither restates the other.
+on, the meaningless key facts join to, the instant a version began. LinkML's
+`unique_keys` says which combinations of columns are unique. Neither follows
+from the other — a surrogate key is unique and is not a business key,
+`valid_from` belongs in a type-2 dimension's unique key without being an
+identity — so both are read, and neither restates the other. Where a native
+does say the same thing as an annotation, the annotation goes; this is not
+that case.
 
-What did move is where the *constraint* comes from. Varda derives one from the
-roles: a type-2 dimension is unique on its natural key plus a version marker.
-That derivation assumes a dimension has one natural key, which stops being
-true the moment it is loaded from several sources that each identify the thing
-their own way. Concatenating every natural key column into one constraint
-produces something weaker than any single key, and inert as well, since a null
-on one side leaves the row unchecked.
+Where the constraint comes from is the part worth stating. Varda derives one
+from the roles: a type-2 dimension is unique on its natural key plus a version
+marker. That derivation assumes a dimension has one natural key, which stops
+being true the moment it is loaded from several sources that each identify the
+thing their own way — a product with a barcode from one and a supplier part
+number from another. Concatenating every natural key column into one
+constraint produces something weaker than any single key, and inert as well,
+since a null on one side leaves the row unchecked.
 
 So a declared `unique_keys` replaces the derived constraint rather than joining
-it. A table says it one way or the other, and the principle that killed
-`varda:unit` is kept.
+it. A table says it one way or the other, and one fact keeps one place to be
+written.
 
 One asymmetry is worth knowing. Columns inherit — `class_induced_slots` pulls
 a parent's slots down — and `unique_keys` do not: LinkML drops them from the
