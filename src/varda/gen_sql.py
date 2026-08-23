@@ -73,7 +73,7 @@ def _ordered(model: DimensionalModel) -> list[Table]:
 
 def _column_line(column: Column) -> str:
     parts = [f"    {column.physical}", sql_type(column)]
-    if column.role == "surrogate_key":
+    if column.role == "SURROGATE_KEY":
         parts.append("PRIMARY KEY")
     elif column.required:
         parts.append("NOT NULL")
@@ -121,7 +121,7 @@ def _table(table: Table, schema: str) -> str:
     # Only the discriminators that identify a version go in: a start instant
     # or a counter. `is_current` does not, because it is true of exactly one
     # version and would make the constraint vacuous.
-    if table.is_dimension and table.scd == "type_2":
+    if table.is_dimension and table.scd == "TYPE_2":
         # One discriminator, not both. Concatenating them weakens the very
         # constraint this exists to tighten: `UNIQUE (nk, start, number)`
         # permits two rows sharing a natural key and a start that differ only

@@ -52,7 +52,7 @@ def physical_name(logical: str) -> str:
 #: question — is this column one of them — and a set that lives in one place
 #: cannot drift from the profile that declares them.
 VERSIONING_ROLES = frozenset(
-    {"version_start", "version_end", "is_current", "version_number"}
+    {"VERSION_START", "VERSION_END", "IS_CURRENT", "VERSION_NUMBER"}
 )
 
 
@@ -102,11 +102,11 @@ class Column:
 
     @property
     def is_measure(self) -> bool:
-        return self.role == "measure"
+        return self.role == "MEASURE"
 
     @property
     def is_key(self) -> bool:
-        return self.role in {"surrogate_key", "foreign_key"}
+        return self.role in {"SURROGATE_KEY", "FOREIGN_KEY"}
 
     def __str__(self) -> str:
         """Render as ``Table.column``, which is how findings name a column."""
@@ -165,15 +165,15 @@ class Table:
 
     @property
     def is_fact(self) -> bool:
-        return self.role == "fact"
+        return self.role == "FACT"
 
     @property
     def is_dimension(self) -> bool:
-        return self.role == "dimension"
+        return self.role == "DIMENSION"
 
     @property
     def is_bridge(self) -> bool:
-        return self.role == "bridge"
+        return self.role == "BRIDGE"
 
     @cached_property
     def columns(self) -> tuple[Column, ...]:
@@ -195,43 +195,43 @@ class Table:
 
     @property
     def surrogate_keys(self) -> tuple[Column, ...]:
-        return self._by_role("surrogate_key")
+        return self._by_role("SURROGATE_KEY")
 
     @property
     def natural_keys(self) -> tuple[Column, ...]:
-        return self._by_role("natural_key")
+        return self._by_role("NATURAL_KEY")
 
     @property
     def foreign_keys(self) -> tuple[Column, ...]:
-        return self._by_role("foreign_key")
+        return self._by_role("FOREIGN_KEY")
 
     @property
     def measures(self) -> tuple[Column, ...]:
-        return self._by_role("measure")
+        return self._by_role("MEASURE")
 
     @property
     def attributes(self) -> tuple[Column, ...]:
-        return self._by_role("attribute")
+        return self._by_role("ATTRIBUTE")
 
     @property
     def degenerates(self) -> tuple[Column, ...]:
-        return self._by_role("degenerate_dimension")
+        return self._by_role("DEGENERATE_DIMENSION")
 
     @property
     def version_starts(self) -> tuple[Column, ...]:
-        return self._by_role("version_start")
+        return self._by_role("VERSION_START")
 
     @property
     def version_ends(self) -> tuple[Column, ...]:
-        return self._by_role("version_end")
+        return self._by_role("VERSION_END")
 
     @property
     def current_flags(self) -> tuple[Column, ...]:
-        return self._by_role("is_current")
+        return self._by_role("IS_CURRENT")
 
     @property
     def version_numbers(self) -> tuple[Column, ...]:
-        return self._by_role("version_number")
+        return self._by_role("VERSION_NUMBER")
 
     @property
     def versioning(self) -> tuple[Column, ...]:

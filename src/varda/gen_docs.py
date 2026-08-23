@@ -15,9 +15,9 @@ if TYPE_CHECKING:
     from .model import DimensionalModel, Table
 
 ADDITIVITY = {
-    "additive": "sums across every dimension",
-    "semi_additive": "does not sum across",
-    "non_additive": "never sum; recompute from components",
+    "ADDITIVE": "sums across every dimension",
+    "SEMI_ADDITIVE": "does not sum across",
+    "NON_ADDITIVE": "never sum; recompute from components",
 }
 
 
@@ -32,7 +32,7 @@ def _columns(table: Table) -> list[str]:
             notes.append(f"→ `{column.references}`")
         if column.additivity:
             phrase = ADDITIVITY.get(column.additivity, column.additivity)
-            if column.additivity == "semi_additive" and (
+            if column.additivity == "SEMI_ADDITIVE" and (
                 column.semi_additive_over
             ):
                 phrase = f"{phrase} `{column.semi_additive_over}`"

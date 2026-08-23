@@ -125,7 +125,7 @@ columns claiming one role is an error. A type-2 dimension marking none of them
 is a warning — something must distinguish the rows, and Varda cannot insist
 which.
 
-The same reasoning names the roles. `version_start` rather than `valid_from`,
+The same reasoning names the roles. `VERSION_START` rather than `valid_from`,
 because dbt's `dbt_valid_from` and Data Vault's `LOAD_DATE` both record when
 the warehouse observed a change rather than when it was true. A role named for
 validity would invite asserting business time about a load timestamp, and

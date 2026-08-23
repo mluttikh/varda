@@ -28,48 +28,48 @@ classes:
 
   DimCustomer:
     annotations:
-      varda:role: dimension
-      varda:scd: type_2
+      varda:role: DIMENSION
+      varda:scd: TYPE_2
     attributes:
       customer_key:
         range: integer
         annotations:
-          varda:role: surrogate_key
+          varda:role: SURROGATE_KEY
       customer_id:
         annotations:
-          varda:role: natural_key
+          varda:role: NATURAL_KEY
       country:
         annotations:
-          varda:role: attribute
+          varda:role: ATTRIBUTE
       valid_from:
         range: datetime
         annotations:
-          varda:role: version_start
+          varda:role: VERSION_START
       is_current:
         range: boolean
         annotations:
-          varda:role: is_current
+          varda:role: IS_CURRENT
 
   FctOrder:
     annotations:
-      varda:role: fact
-      varda:fact_type: transaction
+      varda:role: FACT
+      varda:fact_type: TRANSACTION
       varda:grain: [order_line]
       varda:grain_statement: one row per line of a customer order
     attributes:
       order_line:
         annotations:
-          varda:role: degenerate_dimension
+          varda:role: DEGENERATE_DIMENSION
       customer_key:
         range: integer
         annotations:
-          varda:role: foreign_key
+          varda:role: FOREIGN_KEY
           varda:references: DimCustomer
       net_amount:
         range: decimal
         annotations:
-          varda:role: measure
-          varda:additivity: additive
+          varda:role: MEASURE
+          varda:additivity: ADDITIVE
           varda:unit: EUR
 ```
 
