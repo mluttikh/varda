@@ -29,10 +29,11 @@ FctSale:
         varda:references: DimCustomer
     net_amount:
       range: decimal
+      unit:
+        symbol: EUR
       annotations:
         varda:role: MEASURE
         varda:additivity: ADDITIVE
-        varda:unit: EUR
 ```
 
 ```console
@@ -54,7 +55,7 @@ That is the whole reason for choosing annotations over a new format.
 
 ## The core is small on purpose
 
-**Twelve annotations.** Six on tables, six on columns. That is the entire
+**Eleven annotations.** Six on tables, five on columns. That is the entire
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 

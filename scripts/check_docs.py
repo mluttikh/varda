@@ -21,9 +21,43 @@ import sys
 import tempfile
 from pathlib import Path
 
+from varda import registry
+
 ROOT = Path(__file__).resolve().parents[1]
 FENCE = "`" * 3
 TUTORIAL = ROOT / "docs" / "getting-started.md"
+
+#: Counts small enough to argue about are written as words in the prose.
+#: Only the range the vocabulary could plausibly reach is listed, so a word
+#: that is not a number here is left alone rather than guessed at.
+NUMBER_WORDS = {
+    word: value
+    for value, word in enumerate(
+        (
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+            "sixteen",
+            "seventeen",
+            "eighteen",
+            "nineteen",
+            "twenty",
+        )
+    )
+}
 
 
 def _first_yaml_block(page: Path) -> str:
@@ -80,6 +114,28 @@ def main() -> int:
         if int(quoted) != count
     ]
 
+    # The size of the vocabulary is quoted in prose as an argument about
+    # restraint, so it is written as a word rather than a digit and is easy
+    # to leave behind when an annotation comes or goes.
+    table_anns = len(registry.declared_annotations("table"))
+    column_anns = len(registry.declared_annotations("column"))
+    quoted_counts = (
+        (r"\*\*([A-Za-z]+) annotations\.\*\*", table_anns + column_anns),
+        (r"([A-Za-z]+) annotations is", table_anns + column_anns),
+        (r"([A-Za-z]+) on tables", table_anns),
+        (r"([A-Za-z]+) on columns", column_anns),
+    )
+    for page in pages:
+        text = page.read_text()
+        for pattern, actual in quoted_counts:
+            for word in re.findall(pattern, text):
+                said = NUMBER_WORDS.get(word.lower())
+                if said is not None and said != actual:
+                    failures.append(
+                        f"{page.relative_to(ROOT)}: quotes {word.lower()} "
+                        f"where there are {actual}"
+                    )
+
     # SPEC.md quotes counts derived from the tree. They are the most
     # drift-prone sentences in the repository — every one of them has gone
     # stale at least once — so each is checked against the thing it counts.
@@ -95,6 +151,12 @@ def main() -> int:
     for label, pattern, actual in (
         ("lines of source", r"\*\*([\d,]+) lines of source\*\*", src_lines),
         ("core rules", r"the (\d+) core rules", count),
+        (
+            "annotations",
+            r"— (\d+) annotations,",
+            len(registry.declared_annotations("table"))
+            + len(registry.declared_annotations("column")),
+        ),
         ("test file lines", r"tests in\s+([\d,]+) lines", test_lines),
     ):
         found = re.search(pattern, text)

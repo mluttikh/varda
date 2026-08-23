@@ -67,10 +67,11 @@ classes:
           varda:references: DimCustomer
       net_amount:
         range: decimal
+        unit:
+          symbol: EUR
         annotations:
           varda:role: MEASURE
           varda:additivity: ADDITIVE
-          varda:unit: EUR
 ```
 
 Three things are doing the work here. `varda:role` on the class says what the

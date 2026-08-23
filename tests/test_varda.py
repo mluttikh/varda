@@ -287,10 +287,10 @@ def _fact(**annotations: Any) -> dict[str, Any]:
             "ticket": {"annotations": {"varda:role": "DEGENERATE_DIMENSION"}},
             "amount": {
                 "range": "decimal",
+                "unit": {"symbol": "EUR"},
                 "annotations": {
                     "varda:role": "MEASURE",
                     "varda:additivity": "ADDITIVE",
-                    "varda:unit": "EUR",
                 },
             },
         },
@@ -435,10 +435,10 @@ def test_v107_fact_without_foreign_key(tmp_path: pathlib.Path) -> None:
                 "attributes": {
                     "amount": {
                         "range": "decimal",
+                        "unit": {"symbol": "EUR"},
                         "annotations": {
                             "varda:role": "MEASURE",
                             "varda:additivity": "ADDITIVE",
-                            "varda:unit": "EUR",
                         },
                     }
                 },
@@ -614,10 +614,10 @@ def test_v202_semi_additive_without_exception(
     table = dimension(annotations={"varda:role": "BRIDGE"})
     table["attributes"]["amount"] = {
         "range": "decimal",
+        "unit": {"symbol": "EUR"},
         "annotations": {
             "varda:role": "MEASURE",
             "varda:additivity": "SEMI_ADDITIVE",
-            "varda:unit": "EUR",
         },
     }
     model = build(tmp_path, {"BridgeX": table})
@@ -646,11 +646,11 @@ def test_v203_semi_additive_over_is_not_a_key(
                     },
                     "balance": {
                         "range": "decimal",
+                        "unit": {"symbol": "EUR"},
                         "annotations": {
                             "varda:role": "MEASURE",
                             "varda:additivity": "SEMI_ADDITIVE",
                             "varda:semi_additive_over": "date_key",
-                            "varda:unit": "EUR",
                         },
                     },
                 },
@@ -667,10 +667,10 @@ def test_v204_measure_on_a_dimension(tmp_path: pathlib.Path) -> None:
     table = dimension()
     table["attributes"]["amount"] = {
         "range": "decimal",
+        "unit": {"symbol": "EUR"},
         "annotations": {
             "varda:role": "MEASURE",
             "varda:additivity": "ADDITIVE",
-            "varda:unit": "EUR",
         },
     }
     model = build(tmp_path, {"DimThing": table})
@@ -681,6 +681,56 @@ def test_v205_measure_without_unit(tmp_path: pathlib.Path) -> None:
     table = dimension(annotations={"varda:role": "BRIDGE"})
     table["attributes"]["amount"] = {
         "range": "decimal",
+        "annotations": {
+            "varda:role": "MEASURE",
+            "varda:additivity": "ADDITIVE",
+        },
+    }
+    model = build(tmp_path, {"BridgeX": table})
+    assert "V205" in codes(model)
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected"),
+    [
+        ({"symbol": "EUR"}, "EUR"),
+        ({"ucum_code": "kg"}, "kg"),
+        ({"abbreviation": "hr"}, "hr"),
+        ({"descriptive_name": "kilogram"}, "kilogram"),
+        # The symbol is what a reader recognizes, so it wins over the code.
+        ({"symbol": "kg", "ucum_code": "kg.m2"}, "kg"),
+    ],
+)
+def test_unit_reads_every_way_linkml_names_one(
+    tmp_path: pathlib.Path,
+    unit: dict[str, str],
+    expected: str,
+) -> None:
+    """A unit is LinkML's own, and it may be written several ways."""
+    table = dimension(annotations={"varda:role": "BRIDGE"})
+    table["attributes"]["amount"] = {
+        "range": "decimal",
+        "unit": unit,
+        "annotations": {
+            "varda:role": "MEASURE",
+            "varda:additivity": "ADDITIVE",
+        },
+    }
+    model = build(tmp_path, {"BridgeX": table})
+    bridge = model.table("BridgeX")
+    assert bridge is not None
+    column = bridge.column("amount")
+    assert column is not None
+    assert column.unit == expected
+    assert "V205" not in codes(model)
+
+
+def test_a_unit_naming_nothing_is_undeclared(tmp_path: pathlib.Path) -> None:
+    """A unit carrying only a derivation names no unit a reader could use."""
+    table = dimension(annotations={"varda:role": "BRIDGE"})
+    table["attributes"]["amount"] = {
+        "range": "decimal",
+        "unit": {"derivation": "price times quantity"},
         "annotations": {
             "varda:role": "MEASURE",
             "varda:additivity": "ADDITIVE",
@@ -1625,10 +1675,10 @@ def test_grain_is_checked_off_facts_too(tmp_path: pathlib.Path) -> None:
             },
             "w": {
                 "range": "decimal",
+                "unit": {"symbol": "ratio"},
                 "annotations": {
                     "varda:role": "MEASURE",
                     "varda:additivity": "NON_ADDITIVE",
-                    "varda:unit": "ratio",
                 },
             },
         },

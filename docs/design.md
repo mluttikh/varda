@@ -70,12 +70,12 @@ thing to maintain than a parser.
 
 ## Why the vocabulary is this small
 
-Twelve annotations is not a first cut on the way to forty. It is the
+Eleven annotations is not a first cut on the way to forty. It is the
 deliberate size.
 
 Every annotation in the core is one a newcomer has to read before they can
 write a model, and one that every organization inherits whether it wants it
-or not. Anything that differs between organizations — and cost centres,
+or not. Anything that differs between organizations — and cost centers,
 retention and classification all do — costs less as an extension than as a
 core concept everybody must ignore.
 
@@ -83,13 +83,40 @@ The parts deliberately left out of 0.1, with the reasoning for each, are
 listed in `SPEC.md` §4. Analytical functions, model diffing, lineage export
 and the drift gate all exist in a larger internal prototype and were cut.
 
+## Why units are LinkML's and not Varda's
+
+A unit is not a dimensional modeling concept. Nothing about a star schema
+changes when a measure is euros rather than kilograms: the grain, the join
+paths and the additivity rules are all the same either way. A unit is a
+property of a quantity, and quantities are older and better standardized
+than dimensional modeling is.
+
+LinkML already carries one. Its `unit` slot has `slot_uri: qudt:unit` and a
+`UnitOfMeasure` range holding `symbol`, `ucum_code`, `abbreviation`,
+`descriptive_name` and `exact_mappings` — so a model can name a unit as
+loosely or as precisely as it needs, and bind it to QUDT or UCUM, without
+Varda inventing a vocabulary for it.
+
+```yaml
+net_amount:
+  range: decimal
+  unit:
+    symbol: EUR
+```
+
+A `varda:unit` alongside that would be a second place to write one fact,
+and two places to write one fact is how models come to disagree with
+themselves. `V205` still asks every measure to declare a unit — two measures
+in different currencies add up cleanly and wrongly — it just asks the
+question of LinkML's slot.
+
 ## Why the grain sentence is not checked against the columns
 
 A fact declares its grain twice — as columns and as a sentence — and nothing
 compares them. That looks like an omission and is not.
 
 A rule that compared them would have to read English prose, and it would be
-right only for the phrasings it recognised: silent on `each row is one
+right only for the phrasings it recognized: silent on `each row is one
 shipment leg`, and wrong about `one row per order line` over a grain of order
 number and line number, which is how the sentence is normally written. A check
 that fires for some phrasings and not others is unreliable rather than weak,

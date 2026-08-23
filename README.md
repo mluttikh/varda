@@ -38,10 +38,11 @@ FctSale:
         varda:references: DimCustomer
     net_amount:
       range: decimal
+      unit:
+        symbol: EUR
       annotations:
         varda:role: MEASURE
         varda:additivity: ADDITIVE
-        varda:unit: EUR
 ```
 
 ```console
@@ -63,10 +64,11 @@ Python 3.11+. The only runtime dependency is `linkml-runtime`.
 
 ## What it gives you
 
-**Twelve annotations.** Six on tables — `role`, `grain`, `grain_statement`,
-`fact_type`, `scd`, `physical_name`. Six on columns — `role`, `references`,
-`additivity`, `semi_additive_over`, `unit`, `physical_name`. That is the whole
-core vocabulary, and it is deliberately the whole core vocabulary.
+**Eleven annotations.** Six on tables — `role`, `grain`, `grain_statement`,
+`fact_type`, `scd`, `physical_name`. Five on columns — `role`, `references`,
+`additivity`, `semi_additive_over`, `physical_name`. That is the whole core
+vocabulary, and it is deliberately the whole core vocabulary. Units are
+LinkML's own `unit`, which Varda reads rather than restates.
 
 **Twenty-nine rules** that catch the mistakes worth catching:
 

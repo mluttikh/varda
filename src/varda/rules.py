@@ -718,6 +718,12 @@ def v204(model: DimensionalModel) -> Iterator[Finding]:
 
 @RULES.rule("V205", "warning", "Every measure declares its unit")
 def v205(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a measure with no unit.
+
+    Units are LinkML's own ``unit``, so this rule reads a native rather than
+    an annotation. A ``unit`` naming the measure in none of the ways a reader
+    would recognize counts as undeclared.
+    """
     for table in model.tables:
         for column in table.measures:
             if not (column.unit or "").strip():
@@ -725,7 +731,7 @@ def v205(model: DimensionalModel) -> Iterator[Finding]:
                     "V205",
                     "warning",
                     str(column),
-                    "no varda:unit; two measures in different currencies "
+                    "no unit; two measures in different currencies "
                     "add up cleanly and wrongly",
                 )
 
