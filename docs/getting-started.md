@@ -100,18 +100,13 @@ at which rows are unique, `varda:grain_statement` as the sentence; and
     and that there are at least two of them. It cannot check the part that
     matters most: that each level rolls up into exactly one member above it.
 
-    Here `country` both names a level and identifies it, so the bare form is
-    enough. Where it would not — `city_name` holds "Springfield" for cities
-    in three states — the level says what identifies it:
-
-    ```yaml
-    levels:
-      - country
-      - {column: city_name, key: [country, region, city_name]}
-    ```
+    A level is identified by its own column preceded by every coarser level,
+    so a `city_name` holding "Springfield" for three different states still
+    identifies one of them once country and region are in front of it. That
+    comes from the order and is never written down.
 
     See [Concepts](concepts.md#hierarchies-how-a-dimension-is-drilled) for
-    that and the two calendar cases worth knowing before you write one.
+    the two calendar cases worth knowing before you write one.
 
 ## Check it
 

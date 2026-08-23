@@ -188,29 +188,36 @@ the grain sentence.
 
 Three things go wrong often enough to be worth naming.
 
-A level answers two questions. What it is *called*, and which member it *is*.
-Usually one column does both, and the bare form above says so. In a
-denormalized dimension it often does not: `city_name` holds "Springfield" for
-cities in three different states. Then the key is declared alongside the name:
+A level answers two questions. What a member is *called*, and which member
+it *is*. Usually one column does both. When it does not — `city_name` holds
+"Springfield" for cities in three states — nothing extra is needed, because
+the hierarchy has already said what tells them apart:
 
 ```yaml
-    varda:hierarchies:
-      - name: geography
-        levels:
-          - country_name
-          - {column: state_name, key: [country_name, state_name]}
-          - {column: city_name,  key: [country_name, state_name, city_name]}
+levels: [country_name, state_name, city_name]
 ```
 
-The key defaults to whatever already identifies the level — the foreign key
-for a level reached through one, the naming column otherwise — so most
-hierarchies never declare it. A surrogate key or a foreign key may appear in
-`key` and never in `column`, which is the same rule from both sides: they
-identify well and read badly.
+A level's identity is its own key preceded by the key of every coarser level,
+so `city_name` is identified by country, state and city together. Varda
+derives that from the order; it is never written out.
 
-[`V127`](reference/rules.md#v127) checks the key columns exist and are the
-kind that can identify something. Whether they are actually unique is a claim
-about data, and nothing checks it.
+Declare a `key` only when what names a level is not what tells its members
+apart — a level showing `product_name` where two products share a name:
+
+```yaml
+levels:
+  - brand
+  - {column: product_name, key: sku}
+```
+
+The key defaults to the foreign key for a level reached through one and to
+the naming column otherwise. A surrogate key or a foreign key may be a `key`
+and never a `column`, which is one rule from both sides: they identify well
+and read badly.
+
+[`V127`](reference/rules.md#v127) checks a declared key exists and is the
+kind of column that can identify something. Whether members are actually
+distinct is a claim about data, and nothing checks it.
 
 **Weeks do not roll up into months.** `[year, quarter, month, week, date]`
 looks like the obvious calendar hierarchy and is wrong: a week straddles month

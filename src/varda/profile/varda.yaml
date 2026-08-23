@@ -426,8 +426,8 @@ classes:
 
           Each is written as a column name — `city_name`, or
           `country_key.country_name` to reach through a foreign key — or as
-          a mapping carrying `column` and `key` when the naming column does
-          not identify the level's members.
+          a mapping carrying `column` and `key` when what names the level is
+          not what tells its members apart.
         range: Level
         multivalued: true
         required: true
@@ -452,18 +452,19 @@ classes:
 
       key:
         description: >-
-          The columns of this table that together identify one member of the
-          level. Naming and identifying are different jobs: `city_name` holds
-          "Springfield" for cities in several states, so it names a member
-          without identifying one.
+          The column that tells one member of this level from another under
+          the same parent, when that is not the column naming it. A level
+          showing `product_name` where two products share a name is
+          identified by `sku`.
 
-          Defaults to the foreign key for a level reached through one, and to
-          the naming column otherwise. Declare it when neither is true — a
-          city level in a denormalized dimension is identified by its country,
-          state and city columns together.
+          Rarely needed. It defaults to the foreign key for a level reached
+          through one and to the naming column otherwise, and a level's full
+          identity is that key preceded by the key of every coarser level —
+          `city_name` holds "Springfield" for cities in three states, and
+          country, state and city together hold one of them. That path is
+          what the hierarchy already says, so it is never written out.
 
-          Asserted and not checked. Varda checks that the columns exist and
-          are the kind that can identify something; whether they are actually
-          unique is a claim about data.
+          Asserted and not checked. Varda checks the column exists and is the
+          kind that can identify something; whether members are actually
+          distinct is a claim about data.
         range: string
-        multivalued: true

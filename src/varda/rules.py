@@ -831,25 +831,26 @@ def v127(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.tables:
         for hierarchy in table.hierarchies:
             for level in hierarchy.resolved:
-                for name in level.declared_key:
-                    column = table.column(name)
-                    if column is None:
-                        yield Finding(
-                            "V127",
-                            "error",
-                            str(hierarchy),
-                            f"level {level.spec!r} is keyed on {name!r}, "
-                            f"which is not a column of {table.name}",
-                        )
-                    elif column.role in _NOT_A_KEY:
-                        yield Finding(
-                            "V127",
-                            "error",
-                            str(hierarchy),
-                            f"level {level.spec!r} is keyed on {name!r}, "
-                            f"which is a {column.role} and identifies no "
-                            "member",
-                        )
+                name = level.declared_key
+                if not name:
+                    continue
+                column = table.column(name)
+                if column is None:
+                    yield Finding(
+                        "V127",
+                        "error",
+                        str(hierarchy),
+                        f"level {level.spec!r} is keyed on {name!r}, "
+                        f"which is not a column of {table.name}",
+                    )
+                elif column.role in _NOT_A_KEY:
+                    yield Finding(
+                        "V127",
+                        "error",
+                        str(hierarchy),
+                        f"level {level.spec!r} is keyed on {name!r}, "
+                        f"which is a {column.role} and identifies no member",
+                    )
 
 
 @RULES.rule("V126", "error", "Hierarchies belong to dimensions")

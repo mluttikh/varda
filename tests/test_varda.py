@@ -1939,19 +1939,28 @@ def test_a_level_key_defaults_to_what_identifies_it(
     )
     table = model.table("DimCity")
     assert table is not None
-    country, _, city = table.hierarchies[0].resolved
-    assert [c.name for c in country.key] == ["country_key"]
-    assert [c.name for c in city.key] == ["city_name"]
+    country, state, city = table.hierarchies[0].resolved
+    assert country.key is not None
+    assert country.key.name == "country_key"
+    assert city.key is not None
+    assert city.key.name == "city_name"
     assert not country.declared_key
+    # Identity is the key of every coarser level, then this one.
+    assert [c.name for c in country.identity] == ["country_key"]
+    assert [c.name for c in state.identity] == ["country_key", "state_key"]
+    assert [c.name for c in city.identity] == [
+        "country_key",
+        "state_key",
+        "city_name",
+    ]
 
 
-def test_a_denormalized_level_can_declare_a_compound_key(
-    tmp_path: pathlib.Path,
-) -> None:
-    """`city_name` names a member without identifying one.
+def test_a_denormalized_level_needs_no_key(tmp_path: pathlib.Path) -> None:
+    """`city_name` names a member without identifying one, and that is fine.
 
-    Springfield exists in several states, so the level is identified by the
-    columns above it as well. Nothing else in a flat dimension says so.
+    Springfield exists in three states, so the level is identified by the
+    columns above it as well — which the hierarchy already states. Nothing
+    has to be declared.
     """
     table = dimension()
     for level in ("country_name", "state_name", "city_name"):
@@ -1961,14 +1970,7 @@ def test_a_denormalized_level_can_declare_a_compound_key(
     table["annotations"]["varda:hierarchies"] = [
         {
             "name": "geography",
-            "levels": [
-                "country_name",
-                {"column": "state_name", "key": ["country_name", "state_name"]},
-                {
-                    "column": "city_name",
-                    "key": ["country_name", "state_name", "city_name"],
-                },
-            ],
+            "levels": ["country_name", "state_name", "city_name"],
         }
     ]
     model = build(tmp_path, {"DimThing": table})
@@ -1976,21 +1978,39 @@ def test_a_denormalized_level_can_declare_a_compound_key(
     found = model.table("DimThing")
     assert found is not None
     levels = found.hierarchies[0].resolved
-    assert levels[0].key[0].name == "country_name"
-    assert [c.name for c in levels[2].key] == [
+    assert [c.name for c in levels[2].identity] == [
         "country_name",
         "state_name",
         "city_name",
     ]
-    # The spec is still the naming column, so the path reads unchanged.
-    assert found.hierarchies[0].levels == (
-        "country_name",
-        "state_name",
-        "city_name",
-    )
 
 
-def _keyed(key: list[str]) -> dict[str, Any]:
+def test_a_level_can_be_keyed_on_another_column(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A level shown as `product_name` where `sku` is what tells them apart."""
+    table = dimension()
+    for name in ("brand", "product_name", "sku"):
+        table["attributes"][name] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    table["annotations"]["varda:hierarchies"] = [
+        {
+            "name": "merchandise",
+            "levels": ["brand", {"column": "product_name", "key": "sku"}],
+        }
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    assert not codes(model)
+    found = model.table("DimThing")
+    assert found is not None
+    product = found.hierarchies[0].resolved[1]
+    assert product.column is not None
+    assert product.column.name == "product_name"
+    assert product.key is not None
+    assert product.key.name == "sku"
+    assert [c.name for c in product.identity] == ["brand", "sku"]
+
+
+def _keyed(key: str) -> dict[str, Any]:
     """Build a dimension whose city level declares the given key."""
     table = dimension()
     table["attributes"]["city_name"] = {
@@ -2015,12 +2035,12 @@ def _keyed(key: list[str]) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("key", "fragment"),
     [
-        (["nosuch"], "not a column of DimThing"),
-        (["floor_m2"], "is a MEASURE and identifies no member"),
+        ("nosuch", "not a column of DimThing"),
+        ("floor_m2", "is a MEASURE and identifies no member"),
     ],
 )
 def test_v127_a_key_that_identifies_nothing(
-    tmp_path: pathlib.Path, key: list[str], fragment: str
+    tmp_path: pathlib.Path, key: str, fragment: str
 ) -> None:
     model = build(tmp_path, {"DimThing": _keyed(key)})
     found = [f for f in rules.check(model) if f.rule == "V127"]

@@ -58,20 +58,17 @@ VERSIONING_ROLES = frozenset(
 )
 
 
-def _level_spec(entry: Any) -> tuple[str, tuple[str, ...]]:
+def _level_spec(entry: Any) -> tuple[str, str]:
     """Read one level entry as its spec and its declared key names.
 
-    A level is written as a bare column name when the column identifies its
-    members, and as a mapping when it does not — ``{column: city_name, key:
-    [state_code, city_code]}``. The bare form is the same claim with the key
-    left to its default, not a second way of writing the mapping.
+    A level is written as a bare column name wherever that column both names
+    and identifies the level, which is the common case. The mapping form
+    — ``{column: product_name, key: sku}`` — is for a level whose name is not
+    what tells its members apart.
     """
     if isinstance(entry, Mapping):
-        key = entry.get("key")
-        if isinstance(key, (str, bytes)):
-            key = [key]
-        return str(entry.get("column") or ""), tuple(str(k) for k in key or ())
-    return str(entry), ()
+        return str(entry.get("column") or ""), str(entry.get("key") or "")
+    return str(entry), ""
 
 
 @dataclass(frozen=True)
@@ -90,18 +87,25 @@ class Level:
     does not exist, which is V121's finding to report rather than an error
     here.
 
-    ``key`` is what identifies one member of the level, which is a different
-    question from what names it: `city_name` holds "Springfield" for cities
-    in several states. It defaults to the foreign key for a reference level
-    and to the naming column otherwise, and a model says otherwise by
-    declaring one.
+    ``key`` is what tells one member of this level from another *under the
+    same parent*, which is a different question from what names it. It is the
+    foreign key for a reference level and the naming column otherwise, and a
+    model declares one only when neither is right — a level showing
+    `product_name` but identified by `sku`.
+
+    ``identity`` is what tells one member from every other: this level's key
+    preceded by the key of every coarser level. `city_name` holds
+    "Springfield" for cities in three states, and country, state and city
+    together hold one of them. That path is what a hierarchy already asserts,
+    so it is derived rather than written down.
     """
 
     spec: str
     via: Column | None
     column: Column | None
-    key: tuple[Column, ...]
-    declared_key: tuple[str, ...]
+    key: Column | None
+    identity: tuple[Column, ...]
+    declared_key: str
 
     @property
     def is_reference(self) -> bool:
@@ -122,8 +126,8 @@ class Hierarchy:
     """
 
     name: str
-    #: One ``(spec, declared key names)`` pair per level, in declared order.
-    declared: tuple[tuple[str, tuple[str, ...]], ...]
+    #: One ``(spec, declared key name)`` pair per level, in declared order.
+    declared: tuple[tuple[str, str], ...]
     table: Table
 
     @property
@@ -140,9 +144,17 @@ class Hierarchy:
         generator running on a model that has not passed `check` wants a
         partial answer rather than an exception from a property access.
         """
-        return tuple(self._resolve(spec, key) for spec, key in self.declared)
+        out: list[Level] = []
+        path: tuple[Column, ...] = ()
+        for spec, declared_key in self.declared:
+            level = self._resolve(spec, declared_key, path)
+            path = level.identity
+            out.append(level)
+        return tuple(out)
 
-    def _resolve(self, spec: str, declared_key: tuple[str, ...]) -> Level:
+    def _resolve(
+        self, spec: str, declared_key: str, ancestors: tuple[Column, ...]
+    ) -> Level:
         """Resolve one level, plain or reached through a foreign key."""
         head, dot, tail = spec.partition(".")
         near = self.table.column(head)
@@ -155,16 +167,15 @@ class Hierarchy:
                 found = self.table.model.table(near.references)
                 column = found.column(tail) if found is not None else None
         if declared_key:
-            found_key = (self.table.column(n) for n in declared_key)
-            key = tuple(c for c in found_key if c is not None)
+            key = self.table.column(declared_key)
         else:
-            default = via if dot else column
-            key = (default,) if default is not None else ()
+            key = via if dot else column
         return Level(
             spec=spec,
             via=via,
             column=column,
             key=key,
+            identity=(*ancestors, key) if key is not None else ancestors,
             declared_key=declared_key,
         )
 

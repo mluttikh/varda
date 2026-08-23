@@ -83,48 +83,44 @@ The parts deliberately left out of 0.1, with the reasoning for each, are
 listed in `SPEC.md` §4. Analytical functions, model diffing, lineage export
 and the drift gate all exist in a larger internal prototype and were cut.
 
-## Why a level carries a name and a key
+## Why a level's identity is derived and not declared
 
 A level answers two questions that look like one. *What is this called* —
 `city_name` holds "Springfield" — and *which member is it* — one of the
-Springfields in Illinois, Massachusetts and Missouri. SML and AtScale keep
-them apart as `name_column` and `key_columns`; SQL Server Analysis Services
-splits the same pair across attribute relationships and user hierarchies.
-Varda keeps them apart too, and defaults the second so that most levels do
-not have to say it.
+Springfields in Illinois, Massachusetts and Missouri. Mondrian keeps them
+apart as `column` and `nameColumn`, SQL Server Analysis Services as
+`KeyColumn` and `NameColumn`, SML and AtScale as `key_columns` and
+`name_column`. Varda keeps them apart too, and writes down almost none of it.
 
-The default is whatever already identifies the level. A level reached through
-a foreign key is identified by that key, because a foreign key selects exactly
-one row of the dimension it points at. A level naming a column of its own
-table is identified by that column. Both are right often enough that the bare
-form carries most hierarchies:
-
-```yaml
-levels: [country_key.country_name, state_key.state_name, city_name]
-```
-
-Neither is right in a denormalized dimension whose levels are labels.
-`country_name`, `state_name` and `city_name` describe a correct path, and no
-single one of them identifies a member — which is exactly the case a star
-schema produces, since denormalizing is the point. There the key is declared:
+The reason is that a hierarchy has already said what distinguishes a member.
+Mondrian does not ask for a compound key; it asks whether a level's column is
+unique across all parents, and when it is not, keys the member by the path of
+levels above it. That path is the ordered list. So a level's identity is its
+own key preceded by the key of every coarser level, and Varda derives it:
 
 ```yaml
-levels:
-  - country_name
-  - {column: state_name, key: [country_name, state_name]}
-  - {column: city_name,  key: [country_name, state_name, city_name]}
+levels: [country_name, state_name, city_name]
 ```
 
-The alternative was to require a column that identifies on its own and let a
-modeler add one. That works for a date dimension, which really does carry
-`year_month`, and not for geography, where `US-WA-Springfield` is a column
-invented to satisfy a validator. A vocabulary that asks for data to be
-reshaped to suit it has the dependency backwards.
+`city_name` is identified by country, state and city together. Nothing is
+declared, and the same list in a snowflake — `country_key.country_name` and
+the rest — derives `[country_key, state_key, city_name]` instead, because a
+reference level is keyed by the foreign key it reaches through.
 
-Nothing checks that a key is unique — that is a claim about data, the same
-bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
-makes. [`V127`](reference/rules.md#v127) checks the columns exist and are the
-kind that can identify something.
+What remains is the case those defaults cannot reach: a level whose name is
+not what tells its members apart, shown as `product_name` and identified by
+`sku`. That is a single column, so `key` is a single column.
+
+The alternative was to have a level declare the columns that identify it.
+Every such declaration in practice turned out to be the ancestor path written
+by hand, which is a field that restates what the model already says — and
+worse, the default without it was one column, which is wrong for exactly the
+denormalized dimension a star schema is supposed to produce.
+
+Nothing checks that members are distinct — that is a claim about data, the
+same bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
+makes. [`V127`](reference/rules.md#v127) checks a declared key exists and is
+the kind of column that can identify something.
 
 A surrogate key and a foreign key make good keys and bad names: nobody drills
 into `4718`. So they are legal in `key` and refused in `column`, which is the
