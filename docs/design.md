@@ -126,6 +126,37 @@ A surrogate key and a foreign key make good keys and bad names: nobody drills
 into `4718`. So they are legal in `key` and refused in `column`, which is the
 same distinction from the other side.
 
+## Why uniqueness is LinkML's and roles are Varda's
+
+`varda:unit` was deleted because LinkML already had `unit` and two places to
+write one fact is how models come to disagree with themselves. `unique_keys`
+looks like the same case and is not.
+
+A role says what part a column plays: the business identity a loader matches
+on, the meaningless key facts join to, the instant a version began. A unique
+key says which combinations of columns are unique. Neither follows from the
+other — a surrogate key is unique and is not a business key, `valid_from`
+belongs in a type-2 dimension's unique key without being an identity — so both
+are read, and neither restates the other.
+
+What did move is where the *constraint* comes from. Varda derives one from the
+roles: a type-2 dimension is unique on its natural key plus a version marker.
+That derivation assumes a dimension has one natural key, which stops being
+true the moment it is loaded from several sources that each identify the thing
+their own way. Concatenating every natural key column into one constraint
+produces something weaker than any single key, and inert as well, since a null
+on one side leaves the row unchecked.
+
+So a declared `unique_keys` replaces the derived constraint rather than joining
+it. A table says it one way or the other, and the principle that killed
+`varda:unit` is kept.
+
+One asymmetry is worth knowing. Columns inherit — `class_induced_slots` pulls
+a parent's slots down — and `unique_keys` do not: LinkML drops them from the
+induced class. Varda walks `class_ancestors` by hand, because a table that
+inherits its columns and loses the constraint over them is a disagreement
+nobody can debug.
+
 ## What LinkML's OWL output carries
 
 LinkML's OWL generator turns Varda's scalar annotations into ordinary triples
@@ -218,7 +249,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of thirty-six rules disagrees with the code within two
+A hand-written table of thirty-nine rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

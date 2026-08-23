@@ -2048,6 +2048,130 @@ def test_v127_a_key_that_identifies_nothing(
     assert fragment in found[0].message
 
 
+# --- unique keys ------------------------------------------------------------
+
+
+def _two_keyed(**extra: Any) -> dict[str, Any]:
+    """Build a type-2 dimension identified two ways by two sources."""
+    table = versioned(vs=_col("VERSION_START"))
+    table["attributes"]["gtin"] = {"annotations": {"varda:role": "NATURAL_KEY"}}
+    table["attributes"]["supplier_code"] = {
+        "annotations": {"varda:role": "NATURAL_KEY"}
+    }
+    table["unique_keys"] = {
+        "by_barcode": {"unique_key_slots": ["gtin", "vs"]},
+        "by_supplier": {"unique_key_slots": ["supplier_code", "vs"]},
+    }
+    table.update(extra)
+    return table
+
+
+def test_declared_unique_keys_become_separate_constraints(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two keys are two constraints, never one merged key.
+
+    Merging them is weaker than either alone, and inert besides: a NULL on
+    one side of a merged key leaves the whole row unconstrained.
+    """
+    table = _two_keyed()
+    table["attributes"]["d_id"]["annotations"] = {"varda:role": "ATTRIBUTE"}
+    model = build(tmp_path, {"DimProduct": table})
+    sql = generate_sql(model)
+    assert "UNIQUE (gtin, vs)" in sql
+    assert "UNIQUE (supplier_code, vs)" in sql
+    # and not the concatenation of everything
+    assert "UNIQUE (gtin, supplier_code" not in sql
+
+
+def test_declared_keys_replace_the_derived_one(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A table states its uniqueness in one place or the other, never both."""
+    model = build(tmp_path, {"DimProduct": _two_keyed()})
+    sql = generate_sql(model)
+    # `d_id` is the natural key Varda would otherwise have derived from.
+    assert "UNIQUE (d_id, vs)" not in sql
+
+
+def test_unique_keys_are_inherited(tmp_path: pathlib.Path) -> None:
+    """LinkML drops a parent's unique keys; Varda walks the ancestors.
+
+    Columns arrive through `class_induced_slots`, which inherits. A table
+    that inherits its columns and silently loses the constraint over them is
+    a disagreement nobody can debug.
+    """
+    model = build(
+        tmp_path,
+        {
+            "Auditable": {
+                "unique_keys": {
+                    "by_source_ref": {"unique_key_slots": ["source_ref"]}
+                },
+                "attributes": {
+                    "source_ref": {"annotations": {"varda:role": "ATTRIBUTE"}}
+                },
+            },
+            "DimThing": {**dimension(), "is_a": "Auditable"},
+        },
+    )
+    table = model.table("DimThing")
+    assert table is not None
+    assert [u.name for u in table.unique_keys] == ["by_source_ref"]
+    assert "UNIQUE (source_ref)" in generate_sql(model)
+
+
+def test_v128_unique_key_names_nothing(tmp_path: pathlib.Path) -> None:
+    """LinkML accepts a key over a misspelled slot without complaint."""
+    table = dimension()
+    table["unique_keys"] = {"k": {"unique_key_slots": ["d_idd"]}}
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V128"]
+    assert found
+    assert "d_idd" in found[0].message
+
+
+def test_v129_business_key_without_a_version(tmp_path: pathlib.Path) -> None:
+    """A business key on a type-2 dimension repeats once per version."""
+    table = versioned(vs=_col("VERSION_START"))
+    table["unique_keys"] = {"by_id": {"unique_key_slots": ["d_id"]}}
+    model = build(tmp_path, {"DimThing": table})
+    assert "V129" in codes(model)
+
+
+def test_v129_ignores_a_key_that_is_already_unique(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A key over the surrogate key needs no version marker added."""
+    table = versioned(vs=_col("VERSION_START"))
+    table["unique_keys"] = {"by_key": {"unique_key_slots": ["d_key"]}}
+    model = build(tmp_path, {"DimThing": table})
+    assert "V129" not in codes(model)
+
+
+def test_v130_a_natural_key_no_unique_key_covers(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Declared keys replace the derived one, so an uncovered key is loose."""
+    table = versioned(vs=_col("VERSION_START"))
+    table["attributes"]["gtin"] = {"annotations": {"varda:role": "NATURAL_KEY"}}
+    table["unique_keys"] = {
+        "by_id": {"unique_key_slots": ["d_id", "vs"]},
+    }
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V130"]
+    assert found
+    assert "gtin" in found[0].subject
+
+
+def test_v130_is_silent_without_declared_keys(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Without them Varda derives the constraint and the question is moot."""
+    model = build(tmp_path, {"DimThing": versioned(vs=_col("VERSION_START"))})
+    assert "V130" not in codes(model)
+
+
 def test_v126_hierarchy_on_a_fact(tmp_path: pathlib.Path) -> None:
     fct = _fact(
         **{

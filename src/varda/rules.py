@@ -877,6 +877,86 @@ def v126(model: DimensionalModel) -> Iterator[Finding]:
         )
 
 
+@RULES.rule("V128", "error", "Unique keys name real columns")
+def v128(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a ``unique_keys`` entry naming a column the table does not have.
+
+    LinkML accepts one without complaint — a key over a misspelled slot
+    loads clean and constrains nothing — so this is the only thing standing
+    between a declared uniqueness claim and no constraint at all.
+    """
+    for table in model.tables:
+        for unique in table.unique_keys:
+            have = {c.name for c in unique.columns}
+            for name in unique.declared:
+                if name in have:
+                    continue
+                yield Finding(
+                    "V128",
+                    "error",
+                    str(unique),
+                    f"unique key names {name!r}, which is not a column of "
+                    f"{table.name}",
+                )
+
+
+@RULES.rule("V129", "error", "A type-2 business key includes its version")
+def v129(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a business unique key on a type-2 dimension with no version.
+
+    A type-2 dimension keeps a row per change, so its business key repeats
+    once per version. A unique key over business columns alone says it does
+    not, which is false about the table and would reject the second version
+    of every row.
+
+    Only keys carrying a natural key are checked: one over the surrogate key
+    is unique already and needs nothing added.
+    """
+    for table in model.dimensions:
+        if table.scd != "TYPE_2":
+            continue
+        versions = (*table.version_starts, *table.version_numbers)
+        marks = {c.name for c in versions}
+        for unique in table.unique_keys:
+            names = {c.name for c in unique.columns}
+            if not names & {c.name for c in table.natural_keys}:
+                continue
+            if names & marks:
+                continue
+            yield Finding(
+                "V129",
+                "error",
+                str(unique),
+                "a business key on a type-2 dimension repeats once per "
+                "version; add the column that marks versions apart",
+            )
+
+
+@RULES.rule("V130", "warning", "Natural keys are covered by a unique key")
+def v130(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a natural key no declared unique key covers.
+
+    Only where a table declares its own ``unique_keys``. Without them Varda
+    derives the constraint from the natural key itself and the question does
+    not arise; with them the derived one is not emitted, so a natural key
+    named in none of them is a business identity nothing enforces.
+    """
+    for table in model.dimensions:
+        if not table.unique_keys:
+            continue
+        covered = {c.name for u in table.unique_keys for c in u.columns}
+        for column in table.natural_keys:
+            if column.name in covered:
+                continue
+            yield Finding(
+                "V130",
+                "warning",
+                str(column),
+                "a natural key in none of this table's unique keys; the "
+                "identity a loader matches on is not enforced",
+            )
+
+
 # ---------------------------------------------------------------------------
 # V2xx — measures
 #

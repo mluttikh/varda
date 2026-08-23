@@ -190,6 +190,29 @@ class Hierarchy:
 
 
 @dataclass(frozen=True)
+class UniqueKey:
+    """One named set of columns that is unique in a table.
+
+    LinkML's own ``unique_keys``, read rather than restated. It says which
+    combinations are unique; a column's ``varda:role`` says what part the
+    column plays. A surrogate key is unique and is not a business key, and
+    ``valid_from`` belongs in a type-2 dimension's unique key while being a
+    version marker rather than an identity — neither fact follows from the
+    other, which is why both are kept.
+    """
+
+    name: str
+    columns: tuple[Column, ...]
+    declared: tuple[str, ...]
+    description: str
+    table: Table
+
+    def __str__(self) -> str:
+        """Render as ``Table.key``, which is how findings name one."""
+        return f"{self.table.name}.{self.name}"
+
+
+@dataclass(frozen=True)
 class Column:
     """One slot of a table class, read through the profile."""
 
@@ -325,6 +348,38 @@ class Table:
                 )
             )
         return tuple(out)
+
+    @cached_property
+    def unique_keys(self) -> tuple[UniqueKey, ...]:
+        """Every unique key that applies to this table, by name.
+
+        Walked up the inheritance chain by hand. Columns arrive through
+        ``class_induced_slots``, which inherits, but ``unique_keys`` does not
+        — LinkML drops a parent's keys from the induced class. A table that
+        inherits its columns and silently loses the constraint over them is a
+        disagreement nobody can debug, so the ancestors are read directly.
+
+        A name declared on the table wins over the same name inherited,
+        matching how a redeclared slot behaves. Sorted by name, because the
+        SQL generator emits these and generated output is deterministic.
+        """
+        view = self.model.view
+        seen: dict[str, UniqueKey] = {}
+        for ancestor in view.class_ancestors(self.name):
+            cls = view.get_class(ancestor)
+            for name, key in (getattr(cls, "unique_keys", None) or {}).items():
+                if str(name) in seen:
+                    continue  # the nearer declaration already won
+                declared = tuple(str(s) for s in key.unique_key_slots or ())
+                found = (self.column(n) for n in declared)
+                seen[str(name)] = UniqueKey(
+                    name=str(name),
+                    columns=tuple(c for c in found if c is not None),
+                    declared=declared,
+                    description=(key.description or "").strip(),
+                    table=self,
+                )
+        return tuple(seen[n] for n in sorted(seen))
 
     @property
     def fact_type(self) -> str | None:

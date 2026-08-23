@@ -145,6 +145,56 @@ what stops consecutive versions overlapping at their boundary.
     both this, whatever they are called. Keeping both would be bitemporality,
     which this core does not model.
 
+## When one thing has two identities
+
+`varda:role` says what part a column plays. LinkML's own `unique_keys` says
+which combinations are unique. They are different claims — a surrogate key is
+unique and is not a business key, and `valid_from` belongs in a type-2
+dimension's unique key while being a version marker rather than an identity —
+so Varda reads both.
+
+Most dimensions need only the roles. Varda derives the constraint: a type-2
+dimension is unique on its natural key plus whatever marks versions apart.
+
+That derivation assumes one natural key. A dimension loaded from several
+sources often has more than one, because each source identifies the thing its
+own way:
+
+```yaml
+DimProduct:
+  annotations:
+    varda:role: DIMENSION
+    varda:scd: TYPE_2
+  unique_keys:
+    by_barcode:
+      description: Sources that supply a barcode.
+      unique_key_slots: [gtin, valid_from]
+    by_supplier_part:
+      description: Sources identifying an item by supplier and part number.
+      unique_key_slots: [supplier_code, supplier_part_number, valid_from]
+```
+
+Two keys are two constraints, and that is the whole point. Merging them into
+one is weaker than either alone, and inert as well: a row whose `gtin` is null
+passes a merged key without being checked at all. Kept apart, each row is
+caught by whichever key its own source populated.
+
+Declaring them replaces the derived constraint rather than adding to it, so a
+table states its uniqueness in one place or the other.
+[`V128`](reference/rules.md#v128) checks the columns exist, because LinkML
+accepts a key over a misspelled slot without complaint.
+[`V129`](reference/rules.md#v129) checks a business key on a type-2 dimension
+carries a version marker — without one it claims the business key does not
+repeat, which on a type-2 table is false.
+[`V130`](reference/rules.md#v130) warns about a natural key none of them
+cover.
+
+!!! note "Two sources, one thing, two rows"
+    A unique key stops one source loading the same product twice. Nothing
+    structural can tell you that a row from one source and a row from another
+    are the *same* product — that is a matching decision the ETL makes, and
+    Varda has no column for where it landed.
+
 ## Hierarchies: how a dimension is drilled
 
 `varda:hierarchies` declares the named paths a reader drills down. Levels run
