@@ -317,12 +317,15 @@ classes:
           are checked — the near column must be a foreign key of this table,
           and the far one a column of the dimension it points at.
 
-          A level that names a column of this table must identify its
-          members on its own. A month level declared as `month_name` is
-          wrong, because "January" is a label shared by every January there
-          has ever been; the level is a column like `year_month` that names
-          exactly one of them. Reaching through a foreign key does not have
-          this problem, because the key already picks one row out.
+          A level names a member of the level; whether it also identifies
+          one is a separate question. `month_name` holds "January", which
+          every year has, and `city_name` holds "Springfield", which several
+          states have. Both describe the path correctly and neither can be
+          grouped by alone. Prefer a column that identifies where one exists
+          naturally — `year_month` in a date dimension — and expect anything
+          grouping by a level that does not to carry the coarser levels with
+          it. Reaching through a foreign key avoids the question, because the
+          key has already picked one row out.
 
           That each level determines the one above it — that every city is in
           exactly one region — is asserted here and not checked, because it
