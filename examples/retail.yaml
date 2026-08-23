@@ -28,8 +28,10 @@ classes:
       # neither contains the other.
       varda:hierarchies:
         - name: calendar
+          description: How the business reports externally.
           levels: [calendar_year, calendar_month, calendar_date]
         - name: fiscal
+          description: How the business plans and closes its books.
           levels: [fiscal_year, fiscal_quarter, calendar_date]
     attributes:
       date_key:

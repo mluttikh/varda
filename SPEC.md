@@ -40,13 +40,13 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~25 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~280 | Five commands. |
 
-**3,221 lines of source**: 1,896 of code, 624 of docstrings, 159 of
+**3,226 lines of source**: 1,901 of code, 624 of docstrings, 159 of
 comment, 542 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 12 annotations, 5 enums — and 149 tests in
-2,221 lines.
+Plus `profile/varda.yaml` — 12 annotations, 5 enums — and 151 tests in
+2,247 lines.
 
 ### The four seams
 

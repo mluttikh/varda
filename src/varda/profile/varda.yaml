@@ -418,6 +418,15 @@ classes:
         range: string
         required: true
 
+      description:
+        description: >-
+          What this path is for, when the name alone does not carry it. A
+          dimension with several paths is where this earns its place:
+          `merchandise` and `finance` name two ways of rolling the same
+          products up, and which one a reader wants is not decidable from
+          the names.
+        range: string
+
       levels:
         description: >-
           The levels, from least to most granular.

@@ -87,7 +87,10 @@ def _table(table: Table) -> str:
     # a column this table does not have.
     for hierarchy in table.hierarchies:
         path = " → ".join(_level(lv) for lv in hierarchy.resolved)
-        facts.append(f"**Drill path** ({hierarchy.name}): {path}")
+        line = f"**Drill path** ({hierarchy.name}): {path}"
+        if hierarchy.description:
+            line = f"{line} — {hierarchy.description}"
+        facts.append(line)
     lines += [*facts, "", *_columns(table), ""]
     return "\n".join(lines)
 

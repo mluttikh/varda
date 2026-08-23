@@ -278,10 +278,16 @@ column may appear in more than one hierarchy:
 ```yaml
     varda:hierarchies:
       - name: calendar
+        description: How the business reports externally.
         levels: [calendar_year, calendar_month, calendar_date]
       - name: iso_week
+        description: How operations plans its weeks.
         levels: [iso_year, iso_week, calendar_date]
 ```
+
+A `description` is optional and earns its place exactly here: when a
+dimension carries several paths, the names alone rarely say which one a
+reader wants.
 
 **A hierarchy in a type-1 dimension rewrites history.** Districts get redrawn
 and products get recategorized, and when the dimension overwrites, last year's

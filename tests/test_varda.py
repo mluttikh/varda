@@ -1910,6 +1910,32 @@ def test_v121_a_reference_level_that_does_not_resolve(
     assert fragment in found[0].message
 
 
+def test_a_hierarchy_can_say_what_it_is_for(tmp_path: pathlib.Path) -> None:
+    """A dimension with several paths needs more than terse names."""
+    table = _geo("country", "region", "city")
+    table["annotations"]["varda:hierarchies"][0]["description"] = (
+        "How stores roll up for sales reporting."
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert not codes(model)
+    found = model.table("DimThing")
+    assert found is not None
+    assert found.hierarchies[0].description == (
+        "How stores roll up for sales reporting."
+    )
+    page = generate_docs(model)
+    assert "— How stores roll up for sales reporting." in page
+
+
+def test_a_hierarchy_without_a_description_renders_plainly(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The dash only appears when there is something after it."""
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
+    page = generate_docs(model)
+    assert "**Drill path** (geography): `country` → `region` → `city`\n" in page
+
+
 def test_docs_render_a_reference_level_qualified(
     tmp_path: pathlib.Path,
 ) -> None:

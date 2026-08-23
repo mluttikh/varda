@@ -126,6 +126,7 @@ class Hierarchy:
     """
 
     name: str
+    description: str
     #: One ``(spec, declared key name)`` pair per level, in declared order.
     declared: tuple[tuple[str, str], ...]
     table: Table
@@ -343,6 +344,7 @@ class Table:
             out.append(
                 Hierarchy(
                     name=str(entry.get("name") or ""),
+                    description=str(entry.get("description") or "").strip(),
                     declared=tuple(_level_spec(v) for v in levels or ()),
                     table=self,
                 )
