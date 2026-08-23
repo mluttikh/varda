@@ -118,19 +118,16 @@ bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-
 makes. Reaching through a foreign key discharges it structurally, which makes a
 snowflaked hierarchy the safer one to declare.
 
-## The ontology mapping is a generator, not a byproduct
+## What LinkML's OWL output carries
 
-LinkML's OWL output carries Varda's scalar annotations through as ordinary
-triples — `varda:role "DIMENSION"`, `varda:scd "TYPE_1"`. It does not do
-anything useful with `varda:hierarchies`, which arrives as one opaque string
-literal holding a printed Python structure. Nothing can query it.
+LinkML's OWL generator turns Varda's scalar annotations into ordinary triples
+— `varda:role "DIMENSION"`, `varda:scd "TYPE_1"`. `varda:hierarchies` is
+structured rather than scalar, and comes out as a single opaque literal
+holding a printed Python structure. Nothing can query it.
 
-That is not a defect to work around by flattening the annotation. A hierarchy's
-real mapping is a small graph — QB4OLAP's `qb4o:Hierarchy` with a
-`qb4o:HierarchyStep` per consecutive pair of levels — and consecutive pairs of
-an ordered list are exactly what that needs. Emitting it is a generator's job.
-Until one exists, the OWL output should be read as carrying the roles and not
-the paths.
+So a model's roles and SCD types reach an RDF consumer and its drill paths do
+not. That is worth knowing before reading the OWL output as a complete
+mapping of a model.
 
 ## Why units are LinkML's and not Varda's
 
