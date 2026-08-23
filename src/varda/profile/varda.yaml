@@ -352,14 +352,6 @@ classes:
           constraint that silently never applies.
         range: string
 
-      unit:
-        description: >-
-          The unit of measurement, as a symbol or short code — `EUR`, `kg`,
-          `count`. Free text in this core; an extension wanting a controlled
-          unit vocabulary should declare its own annotation for it rather
-          than constraining this one.
-        range: string
-
       physical_name:
         description: >-
           The column name to emit, when it differs from the slot name.

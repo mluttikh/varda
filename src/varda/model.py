@@ -82,7 +82,23 @@ class Column:
 
     @property
     def unit(self) -> str | None:
-        return get(self.slot, "unit")
+        """The unit of measurement, as a short label.
+
+        Units are LinkML's own ``unit``, not a Varda annotation. It holds a
+        ``UnitOfMeasure`` rather than a string, so one unit may be written as
+        a symbol, a UCUM code, an abbreviation or a name, and a model may
+        give any subset of those. Callers want one label, so the fields are
+        tried in the order a reader would recognize them.
+        """
+        unit = getattr(self.slot, "unit", None)
+        if unit is None:
+            return None
+        names = ("symbol", "ucum_code", "abbreviation", "descriptive_name")
+        for field in names:
+            value = getattr(unit, field, None)
+            if value is not None and str(value).strip():
+                return str(value)
+        return None
 
     @property
     def physical(self) -> str:
