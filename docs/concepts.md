@@ -188,22 +188,29 @@ the grain sentence.
 
 Three things go wrong often enough to be worth naming.
 
-!!! note "A level names a member; it does not always identify one"
-    `month_name` holds "January", which is a label shared by every January
-    there has ever been. `city_name` holds "Springfield", which is a label
-    shared by cities in several states. Both document a drill path correctly,
-    and neither can be grouped by on its own — the Januaries merge, the
-    Springfields merge.
+A level answers two questions. What it is *called*, and which member it *is*.
+Usually one column does both, and the bare form above says so. In a
+denormalized dimension it often does not: `city_name` holds "Springfield" for
+cities in three different states. Then the key is declared alongside the name:
 
-    Where a column identifies the level as well as naming it, prefer it:
-    `year_month` holding `2024-01` is an ordinary column in a date dimension
-    and is worth having. Where no such column exists naturally — geography
-    rarely has one — the path is still right, and anything grouping by a
-    level has to carry the coarser levels along with it.
+```yaml
+    varda:hierarchies:
+      - name: geography
+        levels:
+          - country_name
+          - {column: state_name, key: [country_name, state_name]}
+          - {column: city_name,  key: [country_name, state_name, city_name]}
+```
 
-    Reaching through a foreign key sidesteps this entirely: the key has
-    already picked one row out, so `state_key.state_name` groups cleanly
-    where a bare `state_name` would not.
+The key defaults to whatever already identifies the level — the foreign key
+for a level reached through one, the naming column otherwise — so most
+hierarchies never declare it. A surrogate key or a foreign key may appear in
+`key` and never in `column`, which is the same rule from both sides: they
+identify well and read badly.
+
+[`V127`](reference/rules.md#v127) checks the key columns exist and are the
+kind that can identify something. Whether they are actually unique is a claim
+about data, and nothing checks it.
 
 **Weeks do not roll up into months.** `[year, quarter, month, week, date]`
 looks like the obvious calendar hierarchy and is wrong: a week straddles month

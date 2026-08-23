@@ -83,40 +83,52 @@ The parts deliberately left out of 0.1, with the reasoning for each, are
 listed in `SPEC.md` §4. Analytical functions, model diffing, lineage export
 and the drift gate all exist in a larger internal prototype and were cut.
 
-## Why a level names what a reader sees
+## Why a level carries a name and a key
 
-A level in most OLAP tools carries two things. SML and AtScale give each one
-`key_columns` for identity and a `name_column` for display; SQL Server
-Analysis Services splits the same pair across attribute relationships and
-user hierarchies. Varda's level carries only the second, and the reason is
-what a hierarchy is for here.
+A level answers two questions that look like one. *What is this called* —
+`city_name` holds "Springfield" — and *which member is it* — one of the
+Springfields in Illinois, Massachusetts and Missouri. SML and AtScale keep
+them apart as `name_column` and `key_columns`; SQL Server Analysis Services
+splits the same pair across attribute relationships and user hierarchies.
+Varda keeps them apart too, and defaults the second so that most levels do
+not have to say it.
 
-Varda produces DDL, documentation and ontology mappings. A hierarchy emits no
-DDL — in a denormalized dimension it implies no constraint, and in a snowflake
-the foreign keys already exist on their own. What it serves is the reader:
-which columns are drill steps, in what order, under what name, shown as what.
-None of that needs to know what a query engine would group by.
+The default is whatever already identifies the level. A level reached through
+a foreign key is identified by that key, because a foreign key selects exactly
+one row of the dimension it points at. A level naming a column of its own
+table is identified by that column. Both are right often enough that the bare
+form carries most hierarchies:
 
-Identity is needed by exactly one kind of consumer — something generating a
-query model — and where that consumer exists the identity is already in the
-schema. A level reached through a foreign key is identified by that key; a
-level at a dimension's own grain is identified by its surrogate key, which
-[`V105`](reference/rules.md#v105) guarantees is exactly one column. Nothing has
-to be declared for either. So a `key` on a level would be a field nobody writes
-and nothing reads, and it stays out until a generator needs one — at which
-point it arrives as an optional override and no hierarchy already written
-changes.
+```yaml
+levels: [country_key.country_name, state_key.state_name, city_name]
+```
 
-That is also why a surrogate key and a foreign key may not *name* a level.
-Both are good identities and neither is readable: nobody drills into `4718`.
-The reference form `country_key.country_name` exists so that a snowflake can
-say both things at once — reach through the key, show the name.
+Neither is right in a denormalized dimension whose levels are labels.
+`country_name`, `state_name` and `city_name` describe a correct path, and no
+single one of them identifies a member — which is exactly the case a star
+schema produces, since denormalizing is the point. There the key is declared:
 
-What is asserted and not checked is that each level rolls up into exactly one
-member of the level above it. That is a claim about data, and it is the same
+```yaml
+levels:
+  - country_name
+  - {column: state_name, key: [country_name, state_name]}
+  - {column: city_name,  key: [country_name, state_name, city_name]}
+```
+
+The alternative was to require a column that identifies on its own and let a
+modeler add one. That works for a date dimension, which really does carry
+`year_month`, and not for geography, where `US-WA-Springfield` is a column
+invented to satisfy a validator. A vocabulary that asks for data to be
+reshaped to suit it has the dependency backwards.
+
+Nothing checks that a key is unique — that is a claim about data, the same
 bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
-makes. Reaching through a foreign key discharges it structurally, which makes a
-snowflaked hierarchy the safer one to declare.
+makes. [`V127`](reference/rules.md#v127) checks the columns exist and are the
+kind that can identify something.
+
+A surrogate key and a foreign key make good keys and bad names: nobody drills
+into `4718`. So they are legal in `key` and refused in `column`, which is the
+same distinction from the other side.
 
 ## What LinkML's OWL output carries
 
@@ -210,7 +222,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of thirty-five rules disagrees with the code within two
+A hand-written table of thirty-six rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

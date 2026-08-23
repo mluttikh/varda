@@ -809,6 +809,49 @@ def v125(model: DimensionalModel) -> Iterator[Finding]:
                 yield Finding("V125", "error", str(hierarchy), message)
 
 
+#: The column roles that cannot identify a level's members. A measure is a
+#: quantity rather than an identity, and a versioning column separates
+#: versions of one member rather than one member from another. Every other
+#: role identifies something: keys obviously, and an attribute whenever the
+#: modeller says it does.
+_NOT_A_KEY = frozenset({"MEASURE"}) | VERSIONING_ROLES
+
+
+@RULES.rule("V127", "error", "A declared level key identifies")
+def v127(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a level key naming a column that cannot identify one.
+
+    The key answers "which member", where the level's column answers "what
+    is it called". A key column that does not exist identifies nothing, and
+    one holding a measure or a version marker identifies the wrong thing.
+
+    Whether the columns are jointly unique is not checked, for the same
+    reason the grain sentence is not: it is a claim about data.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            for level in hierarchy.resolved:
+                for name in level.declared_key:
+                    column = table.column(name)
+                    if column is None:
+                        yield Finding(
+                            "V127",
+                            "error",
+                            str(hierarchy),
+                            f"level {level.spec!r} is keyed on {name!r}, "
+                            f"which is not a column of {table.name}",
+                        )
+                    elif column.role in _NOT_A_KEY:
+                        yield Finding(
+                            "V127",
+                            "error",
+                            str(hierarchy),
+                            f"level {level.spec!r} is keyed on {name!r}, "
+                            f"which is a {column.role} and identifies no "
+                            "member",
+                        )
+
+
 @RULES.rule("V126", "error", "Hierarchies belong to dimensions")
 def v126(model: DimensionalModel) -> Iterator[Finding]:
     """Flag a hierarchy on a fact or a bridge.

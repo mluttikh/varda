@@ -95,23 +95,29 @@ at which rows are unique, `varda:grain_statement` as the sentence; and
     they become a `UNIQUE` constraint in the generated DDL — and the sentence
     carries the intent a column list cannot.
 
-!!! warning "A hierarchy level has to name one member"
+!!! tip "A level names a member, and something identifies it"
     Varda checks that a level is a real column, that the levels are distinct
     and that there are at least two of them. It cannot check the part that
     matters most: that each level rolls up into exactly one member above it.
 
-    The usual way that goes wrong is a level named for a label rather than a
-    member. A month level declared as `month_name` merges every January that
-    has ever happened, because there is one in every year. The level is a
-    column like `2024-01` that names exactly one of them. See
-    [Concepts](concepts.md#hierarchies-how-a-dimension-is-drilled) for the
-    two other cases worth knowing before you write one.
+    Here `country` both names a level and identifies it, so the bare form is
+    enough. Where it would not — `city_name` holds "Springfield" for cities
+    in three states — the level says what identifies it:
+
+    ```yaml
+    levels:
+      - country
+      - {column: city_name, key: [country, region, city_name]}
+    ```
+
+    See [Concepts](concepts.md#hierarchies-how-a-dimension-is-drilled) for
+    that and the two calendar cases worth knowing before you write one.
 
 ## Check it
 
 ```console
 $ varda check mart.yaml
-2 tables checked against 35 rules (varda 0.1.0): 0 errors, 0 warnings
+2 tables checked against 36 rules (varda 0.1.0): 0 errors, 0 warnings
 ```
 
 Introduce a mistake — misspell `varda:grain` as `varda:grian`, say — and:
@@ -123,7 +129,7 @@ ERROR V001  FctOrder
 ERROR V103  FctOrder
         no varda:grain; name the columns at which rows are unique
 
-2 tables checked against 35 rules (varda 0.1.0): 2 errors, 0 warnings
+2 tables checked against 36 rules (varda 0.1.0): 2 errors, 0 warnings
 ```
 
 `--strict` also fails on warnings, and on an exemption that names a rule

@@ -420,9 +420,50 @@ classes:
 
       levels:
         description: >-
-          The level columns, from least to most granular.
+          The levels, from least to most granular.
 
           At least two: one level is not a hierarchy, it is a column.
-        range: string
+
+          Each is written as a column name — `city_name`, or
+          `country_key.country_name` to reach through a foreign key — or as
+          a mapping carrying `column` and `key` when the naming column does
+          not identify the level's members.
+        range: Level
         multivalued: true
         required: true
+        inlined_as_list: true
+
+  Level:
+    description: >-
+      One step of a drill path.
+
+      Written as a bare column name wherever that column identifies the
+      level's members, which is the common case. The mapping form exists for
+      the case it does not.
+    attributes:
+
+      column:
+        description: >-
+          The column that names this level to a reader. Either a column of
+          the table the hierarchy is declared on, or `foreign_key.column` to
+          reach one through a foreign key.
+        range: string
+        required: true
+
+      key:
+        description: >-
+          The columns of this table that together identify one member of the
+          level. Naming and identifying are different jobs: `city_name` holds
+          "Springfield" for cities in several states, so it names a member
+          without identifying one.
+
+          Defaults to the foreign key for a level reached through one, and to
+          the naming column otherwise. Declare it when neither is true — a
+          city level in a denormalized dimension is identified by its country,
+          state and city columns together.
+
+          Asserted and not checked. Varda checks that the columns exist and
+          are the kind that can identify something; whether they are actually
+          unique is a claim about data.
+        range: string
+        multivalued: true

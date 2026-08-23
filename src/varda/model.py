@@ -19,7 +19,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from linkml_runtime.utils.schemaview import SchemaView
 
@@ -58,6 +58,22 @@ VERSIONING_ROLES = frozenset(
 )
 
 
+def _level_spec(entry: Any) -> tuple[str, tuple[str, ...]]:
+    """Read one level entry as its spec and its declared key names.
+
+    A level is written as a bare column name when the column identifies its
+    members, and as a mapping when it does not — ``{column: city_name, key:
+    [state_code, city_code]}``. The bare form is the same claim with the key
+    left to its default, not a second way of writing the mapping.
+    """
+    if isinstance(entry, Mapping):
+        key = entry.get("key")
+        if isinstance(key, (str, bytes)):
+            key = [key]
+        return str(entry.get("column") or ""), tuple(str(k) for k in key or ())
+    return str(entry), ()
+
+
 @dataclass(frozen=True)
 class Level:
     """One step of a drill path, resolved against the model.
@@ -73,11 +89,19 @@ class Level:
     a plain level. Either may be ``None`` when the level names something that
     does not exist, which is V121's finding to report rather than an error
     here.
+
+    ``key`` is what identifies one member of the level, which is a different
+    question from what names it: `city_name` holds "Springfield" for cities
+    in several states. It defaults to the foreign key for a reference level
+    and to the naming column otherwise, and a model says otherwise by
+    declaring one.
     """
 
     spec: str
     via: Column | None
     column: Column | None
+    key: tuple[Column, ...]
+    declared_key: tuple[str, ...]
 
     @property
     def is_reference(self) -> bool:
@@ -98,8 +122,14 @@ class Hierarchy:
     """
 
     name: str
-    levels: tuple[str, ...]
+    #: One ``(spec, declared key names)`` pair per level, in declared order.
+    declared: tuple[tuple[str, tuple[str, ...]], ...]
     table: Table
+
+    @property
+    def levels(self) -> tuple[str, ...]:
+        """The level specs, as written, in declared order."""
+        return tuple(spec for spec, _ in self.declared)
 
     @property
     def resolved(self) -> tuple[Level, ...]:
@@ -110,19 +140,33 @@ class Hierarchy:
         generator running on a model that has not passed `check` wants a
         partial answer rather than an exception from a property access.
         """
-        return tuple(self._resolve(spec) for spec in self.levels)
+        return tuple(self._resolve(spec, key) for spec, key in self.declared)
 
-    def _resolve(self, spec: str) -> Level:
+    def _resolve(self, spec: str, declared_key: tuple[str, ...]) -> Level:
         """Resolve one level, plain or reached through a foreign key."""
         head, dot, tail = spec.partition(".")
         near = self.table.column(head)
-        if not dot:
-            return Level(spec=spec, via=None, column=near)
-        target = None
-        if near is not None and near.references:
-            found = self.table.model.table(near.references)
-            target = found.column(tail) if found is not None else None
-        return Level(spec=spec, via=near, column=target)
+        column = near
+        via = None
+        if dot:
+            via = near
+            column = None
+            if near is not None and near.references:
+                found = self.table.model.table(near.references)
+                column = found.column(tail) if found is not None else None
+        if declared_key:
+            found_key = (self.table.column(n) for n in declared_key)
+            key = tuple(c for c in found_key if c is not None)
+        else:
+            default = via if dot else column
+            key = (default,) if default is not None else ()
+        return Level(
+            spec=spec,
+            via=via,
+            column=column,
+            key=key,
+            declared_key=declared_key,
+        )
 
     @property
     def level_columns(self) -> tuple[Column, ...]:
@@ -260,12 +304,12 @@ class Table:
             if not isinstance(entry, Mapping):
                 continue
             levels = entry.get("levels")
-            if isinstance(levels, (str, bytes)):
+            if isinstance(levels, (str, bytes, Mapping)):
                 levels = [levels]
             out.append(
                 Hierarchy(
                     name=str(entry.get("name") or ""),
-                    levels=tuple(str(v) for v in levels or ()),
+                    declared=tuple(_level_spec(v) for v in levels or ()),
                     table=self,
                 )
             )

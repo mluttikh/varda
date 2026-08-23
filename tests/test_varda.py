@@ -1927,6 +1927,107 @@ def test_docs_render_a_reference_level_qualified(
     )
 
 
+def test_a_level_key_defaults_to_what_identifies_it(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A plain level is keyed on its column, a reference on its foreign key."""
+    model = build(
+        tmp_path,
+        _snowflake(
+            ["country_key.country_name", "state_key.state_name", "city_name"]
+        ),
+    )
+    table = model.table("DimCity")
+    assert table is not None
+    country, _, city = table.hierarchies[0].resolved
+    assert [c.name for c in country.key] == ["country_key"]
+    assert [c.name for c in city.key] == ["city_name"]
+    assert not country.declared_key
+
+
+def test_a_denormalized_level_can_declare_a_compound_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`city_name` names a member without identifying one.
+
+    Springfield exists in several states, so the level is identified by the
+    columns above it as well. Nothing else in a flat dimension says so.
+    """
+    table = dimension()
+    for level in ("country_name", "state_name", "city_name"):
+        table["attributes"][level] = {
+            "annotations": {"varda:role": "ATTRIBUTE"}
+        }
+    table["annotations"]["varda:hierarchies"] = [
+        {
+            "name": "geography",
+            "levels": [
+                "country_name",
+                {"column": "state_name", "key": ["country_name", "state_name"]},
+                {
+                    "column": "city_name",
+                    "key": ["country_name", "state_name", "city_name"],
+                },
+            ],
+        }
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    assert not codes(model)
+    found = model.table("DimThing")
+    assert found is not None
+    levels = found.hierarchies[0].resolved
+    assert levels[0].key[0].name == "country_name"
+    assert [c.name for c in levels[2].key] == [
+        "country_name",
+        "state_name",
+        "city_name",
+    ]
+    # The spec is still the naming column, so the path reads unchanged.
+    assert found.hierarchies[0].levels == (
+        "country_name",
+        "state_name",
+        "city_name",
+    )
+
+
+def _keyed(key: list[str]) -> dict[str, Any]:
+    """Build a dimension whose city level declares the given key."""
+    table = dimension()
+    table["attributes"]["city_name"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    table["attributes"]["floor_m2"] = {
+        "range": "decimal",
+        "annotations": {
+            "varda:role": "MEASURE",
+            "varda:additivity": "ADDITIVE",
+        },
+    }
+    table["annotations"]["varda:hierarchies"] = [
+        {
+            "name": "geography",
+            "levels": ["d_id", {"column": "city_name", "key": key}],
+        }
+    ]
+    return table
+
+
+@pytest.mark.parametrize(
+    ("key", "fragment"),
+    [
+        (["nosuch"], "not a column of DimThing"),
+        (["floor_m2"], "is a MEASURE and identifies no member"),
+    ],
+)
+def test_v127_a_key_that_identifies_nothing(
+    tmp_path: pathlib.Path, key: list[str], fragment: str
+) -> None:
+    model = build(tmp_path, {"DimThing": _keyed(key)})
+    found = [f for f in rules.check(model) if f.rule == "V127"]
+    assert found
+    assert fragment in found[0].message
+
+
 def test_v126_hierarchy_on_a_fact(tmp_path: pathlib.Path) -> None:
     fct = _fact(
         **{
