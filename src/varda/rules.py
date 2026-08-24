@@ -29,7 +29,7 @@ from .model import VERSIONING_ROLES
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
-    from .model import DimensionalModel
+    from .model import DimensionalModel, Level, Table
 
 
 @dataclass(frozen=True)
@@ -114,6 +114,9 @@ RULES = RuleSet(tag="V")
 #: purpose: it cannot tell a good grain from a bad one, and pretending
 #: otherwise would make V104 an argument instead of a check.
 GRAIN_MIN_WORDS = 4
+
+#: One level is a column, not a path: nothing rolls up into anything.
+HIERARCHY_MIN_LEVELS = 2
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +632,328 @@ def v120(model: DimensionalModel) -> Iterator[Finding]:
                 str(table),
                 f"varda:{key} describes a {' or '.join(allowed)}, and "
                 f"{table.name} is a {table.role}",
+            )
+
+
+#: The column roles that cannot name a level to a reader.
+#:
+#: A level names what someone drilling the dimension sees, so this is a
+#: question about display and not about identity. A surrogate key and a
+#: foreign key are both fine identities and neither is readable — nobody
+#: drills into `4718`. A measure is what gets aggregated rather than what it
+#: is grouped by, and a versioning column separates versions of one row
+#: rather than placing it in a hierarchy.
+_NOT_A_LEVEL = (
+    frozenset({"SURROGATE_KEY", "FOREIGN_KEY", "MEASURE"}) | VERSIONING_ROLES
+)
+
+
+@RULES.rule("V121", "error", "Hierarchy levels name real columns")
+def v121(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a level naming a column that does not exist.
+
+    The same check V114 makes of the grain, extended to the reference form.
+    A level that names nothing is silently dropped by every generator, so the
+    path a reader is offered is shorter than the one the model claims.
+
+    ``country_key.country_name`` has three ways to be wrong and each gets its
+    own message, because "not a column" would send a reader looking in the
+    wrong table.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            for level in hierarchy.resolved:
+                message = _level_fault(table, level)
+                if message is None:
+                    continue
+                yield Finding("V121", "error", str(hierarchy), message)
+
+
+def _level_fault(table: Table, level: Level) -> str | None:
+    """Name what is wrong with one level, or ``None`` when it resolves."""
+    if level.is_reference:
+        return _reference_fault(table, level)
+    if level.column is None:
+        return f"level {level.spec!r} is not a column of {table.name}"
+    return None
+
+
+def _reference_fault(table: Table, level: Level) -> str | None:
+    """Name what is wrong with a level reaching through a foreign key."""
+    near, _, far = level.spec.partition(".")
+    if level.via is None:
+        return (
+            f"level {level.spec!r} reaches through {near!r}, "
+            f"which is not a column of {table.name}"
+        )
+    if level.via.role != "FOREIGN_KEY":
+        return (
+            f"level {level.spec!r} reaches through {near!r}, which is a "
+            f"{level.via.role or 'column with no role'}; only a FOREIGN_KEY "
+            "leads to another table"
+        )
+    if not level.via.references:
+        return (
+            f"level {level.spec!r} reaches through {near!r}, which names no "
+            "target; see V108"
+        )
+    if level.column is None:
+        return (
+            f"level {level.spec!r} names {far!r}, which is not a column of "
+            f"{level.via.references}"
+        )
+    return None
+
+
+@RULES.rule("V122", "error", "Hierarchy levels are distinct")
+def v122(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a column appearing twice in one hierarchy.
+
+    A level that is its own ancestor is not a drill path. Usually a copy and
+    paste, and always meaningless.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            seen: set[str] = set()
+            for level in hierarchy.levels:
+                if level in seen:
+                    yield Finding(
+                        "V122",
+                        "error",
+                        str(hierarchy),
+                        f"level {level!r} appears more than once",
+                    )
+                seen.add(level)
+
+
+@RULES.rule("V123", "error", "A hierarchy has at least two levels")
+def v123(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a hierarchy of one level, or none.
+
+    One level is a column, not a path. Nothing rolls up into anything, so
+    every consumer that offers a drill-down offers a single step to nowhere.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            if len(hierarchy.levels) >= HIERARCHY_MIN_LEVELS:
+                continue
+            yield Finding(
+                "V123",
+                "error",
+                str(hierarchy),
+                f"{len(hierarchy.levels)} level(s); a hierarchy needs at "
+                "least two, coarsest first",
+            )
+
+
+@RULES.rule("V124", "error", "Hierarchy names are unique within a table")
+def v124(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag two hierarchies on one table sharing a name.
+
+    A dimension carrying several paths is the normal case — a date dimension
+    has a calendar path and a week path — and the name is the only thing
+    telling a reader which one they are drilling. Two of them answering to
+    the same name makes the choice unresolvable.
+    """
+    for table in model.tables:
+        seen = set()
+        for hierarchy in table.hierarchies:
+            if not hierarchy.name:
+                yield Finding(
+                    "V124",
+                    "error",
+                    str(table),
+                    "a hierarchy with no name; every path needs one",
+                )
+                continue
+            if hierarchy.name in seen:
+                yield Finding(
+                    "V124",
+                    "error",
+                    str(table),
+                    f"two hierarchies named {hierarchy.name!r}",
+                )
+            seen.add(hierarchy.name)
+
+
+@RULES.rule(
+    "V125", "error", "Hierarchy levels are the kind of column a level can be"
+)
+def v125(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a level named by a column a reader cannot drill.
+
+    A bare foreign key gets its own message, because it is the near-miss a
+    snowflake invites: the coarser levels are their own tables, so the only
+    thing to hand is the key, and a path of keys renders as integers. The
+    reference form reaches past it to something readable.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            for level in hierarchy.resolved:
+                column = level.column
+                if column is None or column.role not in _NOT_A_LEVEL:
+                    continue
+                if column.role == "FOREIGN_KEY" and not level.is_reference:
+                    target = column.references or "the dimension it points at"
+                    message = (
+                        f"level {level.spec!r} is a foreign key, which reads "
+                        f"as an integer; name what it points at instead — "
+                        f"{level.spec}.<column of {target}>"
+                    )
+                else:
+                    message = (
+                        f"level {level.spec!r} is named by a {column.role}, "
+                        "which a reader cannot drill; a level is an "
+                        "ATTRIBUTE or a NATURAL_KEY"
+                    )
+                yield Finding("V125", "error", str(hierarchy), message)
+
+
+#: The column roles that cannot identify a level's members. A measure is a
+#: quantity rather than an identity, and a versioning column separates
+#: versions of one member rather than one member from another. Every other
+#: role identifies something: keys obviously, and an attribute whenever the
+#: modeller says it does.
+_NOT_A_KEY = frozenset({"MEASURE"}) | VERSIONING_ROLES
+
+
+@RULES.rule("V127", "error", "A declared level key identifies")
+def v127(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a level key naming a column that cannot identify one.
+
+    The key answers "which member", where the level's column answers "what
+    is it called". A key column that does not exist identifies nothing, and
+    one holding a measure or a version marker identifies the wrong thing.
+
+    Whether the columns are jointly unique is not checked, for the same
+    reason the grain sentence is not: it is a claim about data.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            for level in hierarchy.resolved:
+                name = level.declared_key
+                if not name:
+                    continue
+                column = table.column(name)
+                if column is None:
+                    yield Finding(
+                        "V127",
+                        "error",
+                        str(hierarchy),
+                        f"level {level.spec!r} is keyed on {name!r}, "
+                        f"which is not a column of {table.name}",
+                    )
+                elif column.role in _NOT_A_KEY:
+                    yield Finding(
+                        "V127",
+                        "error",
+                        str(hierarchy),
+                        f"level {level.spec!r} is keyed on {name!r}, "
+                        f"which is a {column.role} and identifies no member",
+                    )
+
+
+@RULES.rule("V126", "error", "Hierarchies belong to dimensions")
+def v126(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a hierarchy on a fact or a bridge.
+
+    A drill path describes descriptive context, which is what a dimension
+    is. A fact is drilled *through* its dimensions, and a bridge exists to
+    resolve a many-to-many rather than to be navigated.
+
+    V120 is this check for the other table annotations.
+    """
+    for table in model.tables:
+        if table.role is None or table.is_dimension:
+            continue  # V101 reports a missing role
+        if not table.hierarchies:
+            continue
+        yield Finding(
+            "V126",
+            "error",
+            str(table),
+            f"varda:hierarchies describes a DIMENSION, and {table.name} "
+            f"is a {table.role}",
+        )
+
+
+@RULES.rule("V128", "error", "Unique keys name real columns")
+def v128(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a ``unique_keys`` entry naming a column the table does not have.
+
+    LinkML accepts one without complaint — a key over a misspelled slot
+    loads clean and constrains nothing — so this is the only thing standing
+    between a declared uniqueness claim and no constraint at all.
+    """
+    for table in model.tables:
+        for unique in table.unique_keys:
+            have = {c.name for c in unique.columns}
+            for name in unique.declared:
+                if name in have:
+                    continue
+                yield Finding(
+                    "V128",
+                    "error",
+                    str(unique),
+                    f"unique key names {name!r}, which is not a column of "
+                    f"{table.name}",
+                )
+
+
+@RULES.rule("V129", "error", "A type-2 business key includes its version")
+def v129(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a business unique key on a type-2 dimension with no version.
+
+    A type-2 dimension keeps a row per change, so its business key repeats
+    once per version. A unique key over business columns alone says it does
+    not, which is false about the table and would reject the second version
+    of every row.
+
+    Only keys carrying a natural key are checked: one over the surrogate key
+    is unique already and needs nothing added.
+    """
+    for table in model.dimensions:
+        if table.scd != "TYPE_2":
+            continue
+        versions = (*table.version_starts, *table.version_numbers)
+        marks = {c.name for c in versions}
+        for unique in table.unique_keys:
+            names = {c.name for c in unique.columns}
+            if not names & {c.name for c in table.natural_keys}:
+                continue
+            if names & marks:
+                continue
+            yield Finding(
+                "V129",
+                "error",
+                str(unique),
+                "a business key on a type-2 dimension repeats once per "
+                "version; add the column that marks versions apart",
+            )
+
+
+@RULES.rule("V130", "warning", "Natural keys are covered by a unique key")
+def v130(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a natural key no declared unique key covers.
+
+    Only where a table declares its own ``unique_keys``. Without them Varda
+    derives the constraint from the natural key itself and the question does
+    not arise; with them the derived one is not emitted, so a natural key
+    named in none of them is a business identity nothing enforces.
+    """
+    for table in model.dimensions:
+        if not table.unique_keys:
+            continue
+        covered = {c.name for u in table.unique_keys for c in u.columns}
+        for column in table.natural_keys:
+            if column.name in covered:
+                continue
+            yield Finding(
+                "V130",
+                "warning",
+                str(column),
+                "a natural key in none of this table's unique keys; the "
+                "identity a loader matches on is not enforced",
             )
 
 

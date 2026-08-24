@@ -58,8 +58,10 @@ class Reader:
     def raw(self, obj: Any, key: str) -> Any:
         """Read one annotation, with or without the prefix on ``key``.
 
-        Returns the value as LinkML stored it. Only the converters below
-        should need this; everything else wants :meth:`get`.
+        Returns the value as LinkML stored it. Only a converter turning an
+        annotation into a concrete type should need this — the ones below,
+        and the structured reads in ``model``. Everything else wants
+        :meth:`get`.
         """
         full = key if key.startswith(self.tag) else self.tag + key
         return anns(obj).get(full)
@@ -109,6 +111,7 @@ varda = Reader("varda")
 
 get = varda.get
 get_list = varda.get_list
+raw = varda.raw
 
 
 def is_model_object(obj: Any) -> bool:

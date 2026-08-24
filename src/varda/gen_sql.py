@@ -80,6 +80,61 @@ def _column_line(column: Column) -> str:
     return " ".join(parts)
 
 
+def _unique_constraints(table: Table) -> list[str]:
+    """Render the uniqueness constraints that apply to one table."""
+    out: list[str] = []
+    # The grain, as a constraint the database enforces rather than a comment
+    # it ignores. This is the whole return on declaring `varda:grain` as
+    # columns: a uniqueness claim nobody checks is a uniqueness claim that
+    # stops being true, quietly, on some load nobody is watching.
+    grain = table.grain_columns
+    if grain:
+        cols = ", ".join(c.physical for c in grain)
+        out.append(f"    UNIQUE ({cols})")
+
+    # LinkML's own `unique_keys`, when a model declares them, and nothing
+    # derived. One combination per constraint rather than every key column
+    # concatenated into one: a table identified two different ways by two
+    # different sources needs two constraints, and merging them produces one
+    # that is weaker than either — and inert besides, since a NULL on one
+    # side of a merged key makes the whole row unconstrained.
+    #
+    # Declared keys replace the derived one rather than joining it, so that
+    # a table states its uniqueness in one place or the other, never both.
+    for unique in table.unique_keys:
+        if not unique.columns:
+            continue  # V128 reports a key that names nothing
+        cols = ", ".join(c.physical for c in unique.columns)
+        out.append(f"    UNIQUE ({cols})")
+
+    # A type-2 dimension's natural key repeats once per version, so the
+    # uniqueness that applies to it is the natural key *plus* whatever marks
+    # the versions apart. Emitting the natural key alone would reject the
+    # second version of every row — the constraint would be wrong in the
+    # direction that looks like the data is broken.
+    #
+    # Only the discriminators that identify a version go in: a start instant
+    # or a counter. `is_current` does not, because it is true of exactly one
+    # version and would make the constraint vacuous.
+    if table.is_dimension and table.scd == "TYPE_2" and not table.unique_keys:
+        # One discriminator, not both. Concatenating them weakens the very
+        # constraint this exists to tighten: `UNIQUE (nk, start, number)`
+        # permits two rows sharing a natural key and a start that differ only
+        # in their counter, which either column alone would have forbidden.
+        # Declaring more versioning metadata must not buy a worse guarantee.
+        #
+        # The start wins when both are present, because a period is the more
+        # specific claim — a counter orders versions, a start says when.
+        starts = table.version_starts or table.version_numbers
+        if table.natural_keys and starts:
+            cols = ", ".join(
+                c.physical for c in (*table.natural_keys, starts[0])
+            )
+            out.append(f"    UNIQUE ({cols})")
+
+    return out
+
+
 def _table(table: Table, schema: str) -> str:
     """Render one CREATE TABLE, with its grain as a comment."""
     lines: list[str] = []
@@ -103,39 +158,7 @@ def _table(table: Table, schema: str) -> str:
             f"    FOREIGN KEY ({fk.physical}) REFERENCES "
             f"{schema}.{target.physical} ({key[0].physical})"
         )
-    # The grain, as a constraint the database enforces rather than a comment
-    # it ignores. This is the whole return on declaring `varda:grain` as
-    # columns: a uniqueness claim nobody checks is a uniqueness claim that
-    # stops being true, quietly, on some load nobody is watching.
-    grain = table.grain_columns
-    if grain:
-        cols = ", ".join(c.physical for c in grain)
-        body.append(f"    UNIQUE ({cols})")
-
-    # A type-2 dimension's natural key repeats once per version, so the
-    # uniqueness that applies to it is the natural key *plus* whatever marks
-    # the versions apart. Emitting the natural key alone would reject the
-    # second version of every row — the constraint would be wrong in the
-    # direction that looks like the data is broken.
-    #
-    # Only the discriminators that identify a version go in: a start instant
-    # or a counter. `is_current` does not, because it is true of exactly one
-    # version and would make the constraint vacuous.
-    if table.is_dimension and table.scd == "TYPE_2":
-        # One discriminator, not both. Concatenating them weakens the very
-        # constraint this exists to tighten: `UNIQUE (nk, start, number)`
-        # permits two rows sharing a natural key and a start that differ only
-        # in their counter, which either column alone would have forbidden.
-        # Declaring more versioning metadata must not buy a worse guarantee.
-        #
-        # The start wins when both are present, because a period is the more
-        # specific claim — a counter orders versions, a start says when.
-        starts = table.version_starts or table.version_numbers
-        if table.natural_keys and starts:
-            cols = ", ".join(
-                c.physical for c in (*table.natural_keys, starts[0])
-            )
-            body.append(f"    UNIQUE ({cols})")
+    body += _unique_constraints(table)
 
     lines.append(",\n".join(body))
     lines.append(");")

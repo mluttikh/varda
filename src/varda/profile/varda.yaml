@@ -33,7 +33,7 @@ description: >-
   `gen-owl`, `gen-json-schema` and every other LinkML generator will consume
   happily, ignoring what they do not understand.
 
-  **Scope.** This is the deliberately small core: eleven annotations that
+  **Scope.** This is the deliberately small core: twelve annotations that
   describe a standard star schema and nothing else. Anything specific to one
   organization — cost centers, retention, data classification, ownership —
   belongs in an extension under that organization's own prefix. See
@@ -296,6 +296,50 @@ classes:
           it is most of the value.
         range: string
 
+      hierarchies:
+        description: >-
+          Named drill paths over this dimension's columns. Dimensions only.
+
+          Each hierarchy lists its levels from least to most granular —
+          `[country, region, city]`, not the reverse. A column may appear in
+          several hierarchies, which is how a date dimension carries both a
+          calendar path and a week path: weeks do not nest inside months, so
+          they are separate hierarchies rather than one chain.
+
+          A level names what a reader sees when they drill, so it must be
+          a column somebody can read. A surrogate key or a foreign key is a
+          fine identity and an unreadable label — nobody drills into `4718`
+          — so neither may name a level.
+
+          Where the coarser levels are their own tables, write
+          `foreign_key.column` to reach the readable column through the key:
+          `country_key.country_name` rather than `country_key`. Both halves
+          are checked — the near column must be a foreign key of this table,
+          and the far one a column of the dimension it points at.
+
+          A level names a member of the level; whether it also identifies
+          one is a separate question. `month_name` holds "January", which
+          every year has, and `city_name` holds "Springfield", which several
+          states have. Both describe the path correctly and neither can be
+          grouped by alone. Prefer a column that identifies where one exists
+          naturally — `year_month` in a date dimension — and expect anything
+          grouping by a level that does not to carry the coarser levels with
+          it. Reaching through a foreign key avoids the question, because the
+          key has already picked one row out.
+
+          That each level determines the one above it — that every city is in
+          exactly one region — is asserted here and not checked, because it
+          is a claim about data rather than about the schema. What is checked
+          is that the levels are real, distinct, and the kind of column a
+          level can be.
+
+          Only fixed-depth paths where each level rolls up into exactly one
+          parent. A hierarchy whose branches differ in depth, whose levels can
+          be skipped, or where a child has several parents is a bridge table.
+        range: Hierarchy
+        multivalued: true
+        inlined_as_list: true
+
       fact_type:
         description: >-
           The temporal shape of a fact table. Facts only.
@@ -355,4 +399,81 @@ classes:
       physical_name:
         description: >-
           The column name to emit, when it differs from the slot name.
+        range: string
+
+  Hierarchy:
+    description: >-
+      One named drill path over a dimension's columns.
+
+      Not an annotation class: it carries no `varda:applies_to`, because it
+      is the range of `varda:hierarchies` rather than something a model
+      annotates directly.
+    attributes:
+
+      name:
+        description: >-
+          What this path is called, unique within the table. Names it rather
+          than numbering it, because a dimension with a calendar path and a
+          fiscal path needs the reader to know which is which.
+        range: string
+        required: true
+
+      description:
+        description: >-
+          What this path is for, when the name alone does not carry it. A
+          dimension with several paths is where this earns its place:
+          `merchandise` and `finance` name two ways of rolling the same
+          products up, and which one a reader wants is not decidable from
+          the names.
+        range: string
+
+      levels:
+        description: >-
+          The levels, from least to most granular.
+
+          At least two: one level is not a hierarchy, it is a column.
+
+          Each is written as a column name — `city_name`, or
+          `country_key.country_name` to reach through a foreign key — or as
+          a mapping carrying `column` and `key` when what names the level is
+          not what tells its members apart.
+        range: Level
+        multivalued: true
+        required: true
+        inlined_as_list: true
+
+  Level:
+    description: >-
+      One step of a drill path.
+
+      Written as a bare column name wherever that column identifies the
+      level's members, which is the common case. The mapping form exists for
+      the case it does not.
+    attributes:
+
+      column:
+        description: >-
+          The column that names this level to a reader. Either a column of
+          the table the hierarchy is declared on, or `foreign_key.column` to
+          reach one through a foreign key.
+        range: string
+        required: true
+
+      key:
+        description: >-
+          The column that tells one member of this level from another under
+          the same parent, when that is not the column naming it. A level
+          showing `product_name` where two products share a name is
+          identified by `sku`.
+
+          Rarely needed. It defaults to the foreign key for a level reached
+          through one and to the naming column otherwise, and a level's full
+          identity is that key preceded by the key of every coarser level —
+          `city_name` holds "Springfield" for cities in three states, and
+          country, state and city together hold one of them. That path is
+          what the hierarchy already says, so it is never written out.
+
+          Asserted and not checked. Varda checks the column exists and is the
+          kind that can identify something; whether members are actually
+          distinct is a claim about data.
         range: string

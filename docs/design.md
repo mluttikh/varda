@@ -70,7 +70,7 @@ thing to maintain than a parser.
 
 ## Why the vocabulary is this small
 
-Eleven annotations is not a first cut on the way to forty. It is the
+Twelve annotations is not a first cut on the way to forty. It is the
 deliberate size.
 
 Every annotation in the core is one a newcomer has to read before they can
@@ -82,6 +82,90 @@ core concept everybody must ignore.
 The parts deliberately left out of 0.1, with the reasoning for each, are
 listed in `SPEC.md` §4. Analytical functions, model diffing, lineage export
 and the drift gate all exist in a larger internal prototype and were cut.
+
+## Why a level's identity is derived and not declared
+
+A level answers two questions that look like one. *What is this called* —
+`city_name` holds "Springfield" — and *which member is it* — one of the
+Springfields in Illinois, Massachusetts and Missouri. Mondrian keeps them
+apart as `column` and `nameColumn`, SQL Server Analysis Services as
+`KeyColumn` and `NameColumn`, SML and AtScale as `key_columns` and
+`name_column`. Varda keeps them apart too, and writes down almost none of it.
+
+The reason is that a hierarchy has already said what distinguishes a member.
+Mondrian does not ask for a compound key; it asks whether a level's column is
+unique across all parents, and when it is not, keys the member by the path of
+levels above it. That path is the ordered list. So a level's identity is its
+own key preceded by the key of every coarser level, and Varda derives it:
+
+```yaml
+levels: [country_name, state_name, city_name]
+```
+
+`city_name` is identified by country, state and city together. Nothing is
+declared, and the same list in a snowflake — `country_key.country_name` and
+the rest — derives `[country_key, state_key, city_name]` instead, because a
+reference level is keyed by the foreign key it reaches through.
+
+What remains is the case those defaults cannot reach: a level whose name is
+not what tells its members apart, shown as `product_name` and identified by
+`sku`. That is a single column, so `key` is a single column.
+
+The alternative is to have a level declare the columns that identify it.
+Such a declaration is the ancestor path written out by hand — a field
+restating what the ordered list already says — and a level omitting it would
+fall back to its own single column, which is wrong for exactly the
+denormalized dimension a star schema exists to produce.
+
+Nothing checks that members are distinct — that is a claim about data, the
+same bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
+makes. [`V127`](reference/rules.md#v127) checks a declared key exists and is
+the kind of column that can identify something.
+
+A surrogate key and a foreign key make good keys and bad names: nobody drills
+into `4718`. So they are legal in `key` and refused in `column`, which is the
+same distinction from the other side.
+
+## Why uniqueness is LinkML's and roles are Varda's
+
+A role says what part a column plays: the business identity a loader matches
+on, the meaningless key facts join to, the instant a version began. LinkML's
+`unique_keys` says which combinations of columns are unique. Neither follows
+from the other — a surrogate key is unique and is not a business key,
+`valid_from` belongs in a type-2 dimension's unique key without being an
+identity — so both are read, and neither restates the other. Where a native
+does say the same thing as an annotation, the annotation goes; this is not
+that case.
+
+Where the constraint comes from is the part worth stating. Varda derives one
+from the roles: a type-2 dimension is unique on its natural key plus a version
+marker. That derivation assumes a dimension has one natural key, which stops
+being true the moment it is loaded from several sources that each identify the
+thing their own way — a product with a barcode from one and a supplier part
+number from another. Concatenating every natural key column into one
+constraint produces something weaker than any single key, and inert as well,
+since a null on one side leaves the row unchecked.
+
+So a declared `unique_keys` replaces the derived constraint rather than joining
+it. A table says it one way or the other, and one fact keeps one place to be
+written.
+
+One asymmetry is worth knowing. Columns inherit — `class_induced_slots` pulls
+a parent's slots down — and `unique_keys` do not: LinkML drops them from the
+induced class. Varda walks `class_ancestors` by hand, because a table that
+inherits its columns and loses the constraint over them is a disagreement
+nobody can debug.
+
+## What LinkML's OWL output carries
+
+LinkML's OWL generator turns Varda's scalar annotations into ordinary triples
+— `varda:role "DIMENSION"`, `varda:scd "TYPE_1"`. `varda:hierarchies` is
+structured rather than scalar, and comes out as a single opaque literal
+holding a printed Python structure. Nothing can query it.
+
+So a model's roles and SCD types reach an RDF consumer and its drill paths do
+not. That is worth knowing before reading the OWL output as a complete
+mapping of a model.
 
 ## Why units are LinkML's and not Varda's
 
@@ -164,7 +248,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of twenty-nine rules disagrees with the code within two
+A hand-written table of thirty-nine rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

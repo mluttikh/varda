@@ -1706,6 +1706,527 @@ def test_v120_fact_type_on_a_dimension(tmp_path: pathlib.Path) -> None:
     assert "V120" in codes(model)
 
 
+# --- hierarchies -----------------------------------------------------------
+
+
+def _geo(*levels: str, name: str = "geography") -> dict[str, Any]:
+    """Build a dimension with geography columns and one hierarchy over them."""
+    table = dimension()
+    for level in ("country", "region", "city"):
+        table["attributes"][level] = {
+            "annotations": {"varda:role": "ATTRIBUTE"}
+        }
+    table["annotations"]["varda:hierarchies"] = [
+        {"name": name, "levels": list(levels)}
+    ]
+    return table
+
+
+def test_a_hierarchy_reaches_the_model_as_levels(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The structured annotation crosses the typed boundary intact."""
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
+    table = model.table("DimThing")
+    assert table is not None
+    (hierarchy,) = table.hierarchies
+    assert hierarchy.name == "geography"
+    assert hierarchy.levels == ("country", "region", "city")
+    assert [c.name for c in hierarchy.level_columns] == [
+        "country",
+        "region",
+        "city",
+    ]
+    assert str(hierarchy) == "DimThing.geography"
+    assert not codes(model)
+
+
+def test_a_column_may_sit_in_two_hierarchies(tmp_path: pathlib.Path) -> None:
+    """Shared levels are the normal case, not an edge case.
+
+    A date dimension carries a calendar path and a fiscal path over the same
+    days. A design where a column belongs to one hierarchy cannot express it.
+    """
+    table = _geo("country", "region", "city")
+    table["annotations"]["varda:hierarchies"].append(
+        {"name": "sales", "levels": ["region", "city"]}
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert not codes(model)
+    found = model.table("DimThing")
+    assert found is not None
+    assert [h.name for h in found.hierarchies] == ["geography", "sales"]
+
+
+def test_v121_level_is_not_a_column(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _geo("country", "nosuch")})
+    assert "V121" in codes(model)
+
+
+def test_v122_level_appears_twice(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "region")})
+    assert "V122" in codes(model)
+
+
+def test_v123_one_level_is_not_a_hierarchy(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _geo("country")})
+    assert "V123" in codes(model)
+
+
+def test_v124_two_hierarchies_share_a_name(tmp_path: pathlib.Path) -> None:
+    table = _geo("country", "region")
+    table["annotations"]["varda:hierarchies"].append(
+        {"name": "geography", "levels": ["country", "city"]}
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert "V124" in codes(model)
+
+
+def test_v124_a_hierarchy_without_a_name(tmp_path: pathlib.Path) -> None:
+    table = _geo("country", "region")
+    table["annotations"]["varda:hierarchies"] = [
+        {"levels": ["country", "region"]}
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    assert "V124" in codes(model)
+
+
+@pytest.mark.parametrize(
+    "role", ["SURROGATE_KEY", "MEASURE", "VERSION_START", "IS_CURRENT"]
+)
+def test_v125_level_role_cannot_roll_up(
+    tmp_path: pathlib.Path, role: str
+) -> None:
+    table = _geo("country", "odd")
+    table["attributes"]["odd"] = {
+        "range": "decimal" if role == "MEASURE" else "string",
+        "annotations": {"varda:role": role},
+    }
+    if role == "MEASURE":
+        table["attributes"]["odd"]["annotations"]["varda:additivity"] = (
+            "ADDITIVE"
+        )
+    model = build(tmp_path, {"DimThing": table})
+    assert "V125" in codes(model)
+
+
+def test_v125_a_natural_key_is_a_legal_leaf(tmp_path: pathlib.Path) -> None:
+    """The finest level of a dimension's path is usually its natural key."""
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "d_id")})
+    assert "V125" not in codes(model)
+
+
+def _snowflake(levels: list[str]) -> dict[str, Any]:
+    """Build a city/state/country snowflake with one hierarchy over it.
+
+    The coarser levels are their own tables, which is the arrangement that
+    makes the reference form necessary: the only geography columns on
+    DimCity are the keys.
+    """
+    country = dimension()
+    country["attributes"]["country_name"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    state = dimension()
+    state["attributes"]["state_name"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    city = dimension()
+    city["annotations"]["varda:hierarchies"] = [
+        {"name": "geography", "levels": levels}
+    ]
+    city["attributes"]["city_name"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    for name, target in (
+        ("state_key", "DimState"),
+        ("country_key", "DimCountry"),
+    ):
+        city["attributes"][name] = {
+            "range": "integer",
+            "annotations": {
+                "varda:role": "FOREIGN_KEY",
+                "varda:references": target,
+            },
+        }
+    return {"DimCity": city, "DimState": state, "DimCountry": country}
+
+
+def test_a_level_reaches_through_a_foreign_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A snowflaked level resolves to a column of the table it points at."""
+    model = build(
+        tmp_path,
+        _snowflake(
+            ["country_key.country_name", "state_key.state_name", "city_name"]
+        ),
+    )
+    assert not codes(model)
+    table = model.table("DimCity")
+    assert table is not None
+    (hierarchy,) = table.hierarchies
+    country, state, city = hierarchy.resolved
+    assert country.is_reference
+    assert country.via is not None
+    assert country.via.name == "country_key"
+    assert country.column is not None
+    assert country.column.name == "country_name"
+    assert not city.is_reference
+    assert city.via is None
+    assert state.column is not None
+
+
+def test_v125_a_bare_foreign_key_is_not_a_level(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The near miss a snowflake invites: a path of unreadable integers."""
+    model = build(
+        tmp_path, _snowflake(["country_key", "state_key", "city_name"])
+    )
+    found = [f for f in rules.check(model) if f.rule == "V125"]
+    assert found
+    # The message has to carry the fix, since the right answer is one dot away.
+    assert "country_key.<column of DimCountry>" in found[0].message
+
+
+@pytest.mark.parametrize(
+    ("level", "fragment"),
+    [
+        ("nosuch.country_name", "not a column of DimCity"),
+        ("d_key.country_name", "which is a SURROGATE_KEY"),
+        ("country_key.nosuch", "not a column of DimCountry"),
+    ],
+)
+def test_v121_a_reference_level_that_does_not_resolve(
+    tmp_path: pathlib.Path, level: str, fragment: str
+) -> None:
+    """Each way a reference can fail names the half that is wrong."""
+    model = build(
+        tmp_path, _snowflake([level, "state_key.state_name", "city_name"])
+    )
+    found = [f for f in rules.check(model) if f.rule == "V121"]
+    assert found
+    assert fragment in found[0].message
+
+
+def test_a_hierarchy_can_say_what_it_is_for(tmp_path: pathlib.Path) -> None:
+    """A dimension with several paths needs more than terse names."""
+    table = _geo("country", "region", "city")
+    table["annotations"]["varda:hierarchies"][0]["description"] = (
+        "How stores roll up for sales reporting."
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert not codes(model)
+    found = model.table("DimThing")
+    assert found is not None
+    assert found.hierarchies[0].description == (
+        "How stores roll up for sales reporting."
+    )
+    page = generate_docs(model)
+    assert "— How stores roll up for sales reporting." in page
+
+
+def test_a_hierarchy_without_a_description_renders_plainly(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The dash only appears when there is something after it."""
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
+    page = generate_docs(model)
+    assert "**Drill path** (geography): `country` → `region` → `city`\n" in page
+
+
+def test_docs_render_a_reference_level_qualified(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`country_name` alone would send a reader to the wrong table."""
+    model = build(
+        tmp_path,
+        _snowflake(
+            ["country_key.country_name", "state_key.state_name", "city_name"]
+        ),
+    )
+    page = generate_docs(model)
+    assert (
+        "**Drill path** (geography): `DimCountry.country_name` → "
+        "`DimState.state_name` → `city_name`" in page
+    )
+
+
+def test_a_level_key_defaults_to_what_identifies_it(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A plain level is keyed on its column, a reference on its foreign key."""
+    model = build(
+        tmp_path,
+        _snowflake(
+            ["country_key.country_name", "state_key.state_name", "city_name"]
+        ),
+    )
+    table = model.table("DimCity")
+    assert table is not None
+    country, state, city = table.hierarchies[0].resolved
+    assert country.key is not None
+    assert country.key.name == "country_key"
+    assert city.key is not None
+    assert city.key.name == "city_name"
+    assert not country.declared_key
+    # Identity is the key of every coarser level, then this one.
+    assert [c.name for c in country.identity] == ["country_key"]
+    assert [c.name for c in state.identity] == ["country_key", "state_key"]
+    assert [c.name for c in city.identity] == [
+        "country_key",
+        "state_key",
+        "city_name",
+    ]
+
+
+def test_a_denormalized_level_needs_no_key(tmp_path: pathlib.Path) -> None:
+    """`city_name` names a member without identifying one, and that is fine.
+
+    Springfield exists in three states, so the level is identified by the
+    columns above it as well — which the hierarchy already states. Nothing
+    has to be declared.
+    """
+    table = dimension()
+    for level in ("country_name", "state_name", "city_name"):
+        table["attributes"][level] = {
+            "annotations": {"varda:role": "ATTRIBUTE"}
+        }
+    table["annotations"]["varda:hierarchies"] = [
+        {
+            "name": "geography",
+            "levels": ["country_name", "state_name", "city_name"],
+        }
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    assert not codes(model)
+    found = model.table("DimThing")
+    assert found is not None
+    levels = found.hierarchies[0].resolved
+    assert [c.name for c in levels[2].identity] == [
+        "country_name",
+        "state_name",
+        "city_name",
+    ]
+
+
+def test_a_level_can_be_keyed_on_another_column(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A level shown as `product_name` where `sku` is what tells them apart."""
+    table = dimension()
+    for name in ("brand", "product_name", "sku"):
+        table["attributes"][name] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    table["annotations"]["varda:hierarchies"] = [
+        {
+            "name": "merchandise",
+            "levels": ["brand", {"column": "product_name", "key": "sku"}],
+        }
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    assert not codes(model)
+    found = model.table("DimThing")
+    assert found is not None
+    product = found.hierarchies[0].resolved[1]
+    assert product.column is not None
+    assert product.column.name == "product_name"
+    assert product.key is not None
+    assert product.key.name == "sku"
+    assert [c.name for c in product.identity] == ["brand", "sku"]
+
+
+def _keyed(key: str) -> dict[str, Any]:
+    """Build a dimension whose city level declares the given key."""
+    table = dimension()
+    table["attributes"]["city_name"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    table["attributes"]["floor_m2"] = {
+        "range": "decimal",
+        "annotations": {
+            "varda:role": "MEASURE",
+            "varda:additivity": "ADDITIVE",
+        },
+    }
+    table["annotations"]["varda:hierarchies"] = [
+        {
+            "name": "geography",
+            "levels": ["d_id", {"column": "city_name", "key": key}],
+        }
+    ]
+    return table
+
+
+@pytest.mark.parametrize(
+    ("key", "fragment"),
+    [
+        ("nosuch", "not a column of DimThing"),
+        ("floor_m2", "is a MEASURE and identifies no member"),
+    ],
+)
+def test_v127_a_key_that_identifies_nothing(
+    tmp_path: pathlib.Path, key: str, fragment: str
+) -> None:
+    model = build(tmp_path, {"DimThing": _keyed(key)})
+    found = [f for f in rules.check(model) if f.rule == "V127"]
+    assert found
+    assert fragment in found[0].message
+
+
+# --- unique keys ------------------------------------------------------------
+
+
+def _two_keyed(**extra: Any) -> dict[str, Any]:
+    """Build a type-2 dimension identified two ways by two sources."""
+    table = versioned(vs=_col("VERSION_START"))
+    table["attributes"]["gtin"] = {"annotations": {"varda:role": "NATURAL_KEY"}}
+    table["attributes"]["supplier_code"] = {
+        "annotations": {"varda:role": "NATURAL_KEY"}
+    }
+    table["unique_keys"] = {
+        "by_barcode": {"unique_key_slots": ["gtin", "vs"]},
+        "by_supplier": {"unique_key_slots": ["supplier_code", "vs"]},
+    }
+    table.update(extra)
+    return table
+
+
+def test_declared_unique_keys_become_separate_constraints(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two keys are two constraints, never one merged key.
+
+    Merging them is weaker than either alone, and inert besides: a NULL on
+    one side of a merged key leaves the whole row unconstrained.
+    """
+    table = _two_keyed()
+    table["attributes"]["d_id"]["annotations"] = {"varda:role": "ATTRIBUTE"}
+    model = build(tmp_path, {"DimProduct": table})
+    sql = generate_sql(model)
+    assert "UNIQUE (gtin, vs)" in sql
+    assert "UNIQUE (supplier_code, vs)" in sql
+    # and not the concatenation of everything
+    assert "UNIQUE (gtin, supplier_code" not in sql
+
+
+def test_declared_keys_replace_the_derived_one(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A table states its uniqueness in one place or the other, never both."""
+    model = build(tmp_path, {"DimProduct": _two_keyed()})
+    sql = generate_sql(model)
+    # `d_id` is the natural key Varda would otherwise have derived from.
+    assert "UNIQUE (d_id, vs)" not in sql
+
+
+def test_unique_keys_are_inherited(tmp_path: pathlib.Path) -> None:
+    """LinkML drops a parent's unique keys; Varda walks the ancestors.
+
+    Columns arrive through `class_induced_slots`, which inherits. A table
+    that inherits its columns and silently loses the constraint over them is
+    a disagreement nobody can debug.
+    """
+    model = build(
+        tmp_path,
+        {
+            "Auditable": {
+                "unique_keys": {
+                    "by_source_ref": {"unique_key_slots": ["source_ref"]}
+                },
+                "attributes": {
+                    "source_ref": {"annotations": {"varda:role": "ATTRIBUTE"}}
+                },
+            },
+            "DimThing": {**dimension(), "is_a": "Auditable"},
+        },
+    )
+    table = model.table("DimThing")
+    assert table is not None
+    assert [u.name for u in table.unique_keys] == ["by_source_ref"]
+    assert "UNIQUE (source_ref)" in generate_sql(model)
+
+
+def test_v128_unique_key_names_nothing(tmp_path: pathlib.Path) -> None:
+    """LinkML accepts a key over a misspelled slot without complaint."""
+    table = dimension()
+    table["unique_keys"] = {"k": {"unique_key_slots": ["d_idd"]}}
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V128"]
+    assert found
+    assert "d_idd" in found[0].message
+
+
+def test_v129_business_key_without_a_version(tmp_path: pathlib.Path) -> None:
+    """A business key on a type-2 dimension repeats once per version."""
+    table = versioned(vs=_col("VERSION_START"))
+    table["unique_keys"] = {"by_id": {"unique_key_slots": ["d_id"]}}
+    model = build(tmp_path, {"DimThing": table})
+    assert "V129" in codes(model)
+
+
+def test_v129_ignores_a_key_that_is_already_unique(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A key over the surrogate key needs no version marker added."""
+    table = versioned(vs=_col("VERSION_START"))
+    table["unique_keys"] = {"by_key": {"unique_key_slots": ["d_key"]}}
+    model = build(tmp_path, {"DimThing": table})
+    assert "V129" not in codes(model)
+
+
+def test_v130_a_natural_key_no_unique_key_covers(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Declared keys replace the derived one, so an uncovered key is loose."""
+    table = versioned(vs=_col("VERSION_START"))
+    table["attributes"]["gtin"] = {"annotations": {"varda:role": "NATURAL_KEY"}}
+    table["unique_keys"] = {
+        "by_id": {"unique_key_slots": ["d_id", "vs"]},
+    }
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V130"]
+    assert found
+    assert "gtin" in found[0].subject
+
+
+def test_v130_is_silent_without_declared_keys(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Without them Varda derives the constraint and the question is moot."""
+    model = build(tmp_path, {"DimThing": versioned(vs=_col("VERSION_START"))})
+    assert "V130" not in codes(model)
+
+
+def test_v126_hierarchy_on_a_fact(tmp_path: pathlib.Path) -> None:
+    fct = _fact(
+        **{
+            "varda:grain": ["d_key"],
+            "varda:grain_statement": "one row per thing",
+            "varda:hierarchies": [{"name": "nope", "levels": ["d_key", "m"]}],
+        }
+    )
+    model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
+    assert "V126" in codes(model)
+
+
+def test_a_malformed_hierarchy_does_not_raise(tmp_path: pathlib.Path) -> None:
+    """A property access is the wrong place to fail on an unchecked model."""
+    table = dimension()
+    table["annotations"]["varda:hierarchies"] = ["not a mapping"]
+    model = build(tmp_path, {"DimThing": table})
+    found = model.table("DimThing")
+    assert found is not None
+    assert found.hierarchies == ()
+
+
+def test_generated_docs_render_drill_paths(tmp_path: pathlib.Path) -> None:
+    """The path is rendered coarsest-first, the way a reader drills it."""
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
+    page = generate_docs(model)
+    assert "**Drill path** (geography): `country` → `region` → `city`" in page
+
+
 def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
     """Declaring both a start and a counter must not weaken the constraint.
 

@@ -119,9 +119,12 @@ def main() -> int:
     # to leave behind when an annotation comes or goes.
     table_anns = len(registry.declared_annotations("table"))
     column_anns = len(registry.declared_annotations("column"))
+    # Any number word before "annotations", wherever it appears — bolded in
+    # a heading, mid-sentence, or trailing a link. A word that is not a
+    # number falls out of NUMBER_WORDS and is skipped, so "these
+    # annotations" and "17 further annotations" match nothing.
     quoted_counts = (
-        (r"\*\*([A-Za-z]+) annotations\.\*\*", table_anns + column_anns),
-        (r"([A-Za-z]+) annotations is", table_anns + column_anns),
+        (r"([A-Za-z]+) annotations", table_anns + column_anns),
         (r"([A-Za-z]+) on tables", table_anns),
         (r"([A-Za-z]+) on columns", column_anns),
     )

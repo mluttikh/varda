@@ -145,6 +145,163 @@ what stops consecutive versions overlapping at their boundary.
     both this, whatever they are called. Keeping both would be bitemporality,
     which this core does not model.
 
+## When one thing has two identities
+
+`varda:role` says what part a column plays. LinkML's own `unique_keys` says
+which combinations are unique. They are different claims — a surrogate key is
+unique and is not a business key, and `valid_from` belongs in a type-2
+dimension's unique key while being a version marker rather than an identity —
+so Varda reads both.
+
+Most dimensions need only the roles. Varda derives the constraint: a type-2
+dimension is unique on its natural key plus whatever marks versions apart.
+
+That derivation assumes one natural key. A dimension loaded from several
+sources often has more than one, because each source identifies the thing its
+own way:
+
+```yaml
+DimProduct:
+  annotations:
+    varda:role: DIMENSION
+    varda:scd: TYPE_2
+  unique_keys:
+    by_barcode:
+      description: Sources that supply a barcode.
+      unique_key_slots: [gtin, valid_from]
+    by_supplier_part:
+      description: Sources identifying an item by supplier and part number.
+      unique_key_slots: [supplier_code, supplier_part_number, valid_from]
+```
+
+Two keys are two constraints, and that is the whole point. Merging them into
+one is weaker than either alone, and inert as well: a row whose `gtin` is null
+passes a merged key without being checked at all. Kept apart, each row is
+caught by whichever key its own source populated.
+
+Declaring them replaces the derived constraint rather than adding to it, so a
+table states its uniqueness in one place or the other.
+[`V128`](reference/rules.md#v128) checks the columns exist, because LinkML
+accepts a key over a misspelled slot without complaint.
+[`V129`](reference/rules.md#v129) checks a business key on a type-2 dimension
+carries a version marker — without one it claims the business key does not
+repeat, which on a type-2 table is false.
+[`V130`](reference/rules.md#v130) warns about a natural key none of them
+cover.
+
+!!! note "Two sources, one thing, two rows"
+    A unique key stops one source loading the same product twice. Nothing
+    structural can tell you that a row from one source and a row from another
+    are the *same* product — that is a matching decision the ETL makes, and
+    Varda has no column for where it landed.
+
+## Hierarchies: how a dimension is drilled
+
+`varda:hierarchies` declares the named paths a reader drills down. Levels run
+from least to most granular, which is the direction every system that models
+hierarchies uses:
+
+```yaml
+DimStore:
+  annotations:
+    varda:role: DIMENSION
+    varda:hierarchies:
+      - name: geography
+        levels: [country, region, store_code]
+```
+
+When the coarser levels are their own tables — a snowflake — the only
+geography columns on `DimCity` are the keys, and a path of keys reads as
+integers. Reach through the key instead:
+
+```yaml
+DimCity:
+  annotations:
+    varda:role: DIMENSION
+    varda:hierarchies:
+      - name: geography
+        levels: [country_key.country_name, state_key.state_name, city_name]
+```
+
+Both halves are checked: the near name must be a foreign key of this table,
+and the far one a column of the dimension it points at. A level that names a
+foreign key without reaching through it is an error, because `4718` is not
+something anyone drills into.
+
+A hierarchy makes two claims, and only one of them is checkable. The path —
+offer country, then region, then store — is a declaration, and Varda checks
+that the levels are real columns, distinct, at least two of them, on a
+dimension, and the kind of column that can be a level. The other claim is that
+each level rolls up into exactly one member of the level above it, and that is
+a statement about data. Nothing here can test it, the same way nothing tests
+the grain sentence.
+
+Three things go wrong often enough to be worth naming.
+
+A level answers two questions. What a member is *called*, and which member
+it *is*. Usually one column does both. When it does not — `city_name` holds
+"Springfield" for cities in three states — nothing extra is needed, because
+the hierarchy has already said what tells them apart:
+
+```yaml
+levels: [country_name, state_name, city_name]
+```
+
+A level's identity is its own key preceded by the key of every coarser level,
+so `city_name` is identified by country, state and city together. Varda
+derives that from the order; it is never written out.
+
+Declare a `key` only when what names a level is not what tells its members
+apart — a level showing `product_name` where two products share a name:
+
+```yaml
+levels:
+  - brand
+  - {column: product_name, key: sku}
+```
+
+The key defaults to the foreign key for a level reached through one and to
+the naming column otherwise. A surrogate key or a foreign key may be a `key`
+and never a `column`, which is one rule from both sides: they identify well
+and read badly.
+
+[`V127`](reference/rules.md#v127) checks a declared key exists and is the
+kind of column that can identify something. Whether members are actually
+distinct is a claim about data, and nothing checks it.
+
+**Weeks do not roll up into months.** `[year, quarter, month, week, date]`
+looks like the obvious calendar hierarchy and is wrong: a week straddles month
+boundaries and, under ISO 8601, year boundaries. Real calendars carry two
+paths that share their finest level and diverge in the middle, which is why a
+column may appear in more than one hierarchy:
+
+```yaml
+    varda:hierarchies:
+      - name: calendar
+        description: How the business reports externally.
+        levels: [calendar_year, calendar_month, calendar_date]
+      - name: iso_week
+        description: How operations plans its weeks.
+        levels: [iso_year, iso_week, calendar_date]
+```
+
+A `description` is optional and earns its place exactly here: when a
+dimension carries several paths, the names alone rarely say which one a
+reader wants.
+
+**A hierarchy in a type-1 dimension rewrites history.** Districts get redrawn
+and products get recategorized, and when the dimension overwrites, last year's
+numbers move into this year's regions. That is often what people want; it is
+never what they expect. A dimension whose hierarchy has to stay put under
+historical reporting is type 2, and the reasoning is the same one in
+[History](#history-what-happens-when-a-value-changes) — the choice is cheap to
+make now and expensive to discover later.
+
+Only fixed-depth paths are modeled. A hierarchy whose branches end at
+different depths, whose levels can be skipped, or where a child has more than
+one parent is not a list of columns — it is a bridge table, and the many-to-many
+it resolves is what [`BRIDGE`](#tables-have-a-role) is for.
+
 ## What Varda does not model
 
 Data quality — whether the *rows* are right — is a different layer with a

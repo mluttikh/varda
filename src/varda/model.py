@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import pathlib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from linkml_runtime.utils.schemaview import SchemaView
 
 from .anns import get, get_list, is_model_object
+from .anns import raw as raw_ann
 
 if TYPE_CHECKING:
     from linkml_runtime.linkml_model.meta import (
@@ -54,6 +56,161 @@ def physical_name(logical: str) -> str:
 VERSIONING_ROLES = frozenset(
     {"VERSION_START", "VERSION_END", "IS_CURRENT", "VERSION_NUMBER"}
 )
+
+
+def _level_spec(entry: Any) -> tuple[str, str]:
+    """Read one level entry as its spec and its declared key names.
+
+    A level is written as a bare column name wherever that column both names
+    and identifies the level, which is the common case. The mapping form
+    — ``{column: product_name, key: sku}`` — is for a level whose name is not
+    what tells its members apart.
+    """
+    if isinstance(entry, Mapping):
+        return str(entry.get("column") or ""), str(entry.get("key") or "")
+    return str(entry), ""
+
+
+@dataclass(frozen=True)
+class Level:
+    """One step of a drill path, resolved against the model.
+
+    A level names either a column of the table its hierarchy is declared on,
+    or a column of a dimension reached through one of that table's foreign
+    keys — ``country_key.country_name``. The second form is what a snowflake
+    needs: when the coarser levels are their own tables, the only thing on
+    the near side is the key, and a path of keys reads as integers.
+
+    ``column`` is the column that names the level to a reader, wherever it
+    lives. ``via`` is the foreign key it was reached through, or ``None`` for
+    a plain level. Either may be ``None`` when the level names something that
+    does not exist, which is V121's finding to report rather than an error
+    here.
+
+    ``key`` is what tells one member of this level from another *under the
+    same parent*, which is a different question from what names it. It is the
+    foreign key for a reference level and the naming column otherwise, and a
+    model declares one only when neither is right — a level showing
+    `product_name` but identified by `sku`.
+
+    ``identity`` is what tells one member from every other: this level's key
+    preceded by the key of every coarser level. `city_name` holds
+    "Springfield" for cities in three states, and country, state and city
+    together hold one of them. That path is what a hierarchy already asserts,
+    so it is derived rather than written down.
+    """
+
+    spec: str
+    via: Column | None
+    column: Column | None
+    key: Column | None
+    identity: tuple[Column, ...]
+    declared_key: str
+
+    @property
+    def is_reference(self) -> bool:
+        """Flag whether this level reaches through a foreign key."""
+        return "." in self.spec
+
+    def __str__(self) -> str:
+        """Render as it was written, which is how findings name a level."""
+        return self.spec
+
+
+@dataclass(frozen=True)
+class Hierarchy:
+    """One named drill path over a dimension's columns.
+
+    ``levels`` runs from least to most granular, which is the order every
+    system that models hierarchies uses and the order a reader drills in.
+    """
+
+    name: str
+    description: str
+    #: One ``(spec, declared key name)`` pair per level, in declared order.
+    declared: tuple[tuple[str, str], ...]
+    table: Table
+
+    @property
+    def levels(self) -> tuple[str, ...]:
+        """The level specs, as written, in declared order."""
+        return tuple(spec for spec, _ in self.declared)
+
+    @property
+    def resolved(self) -> tuple[Level, ...]:
+        """Resolve every level, in declared order.
+
+        Resolution never fails: a level naming nothing resolves to a
+        ``Level`` whose parts are ``None``. The rules report those, and a
+        generator running on a model that has not passed `check` wants a
+        partial answer rather than an exception from a property access.
+        """
+        out: list[Level] = []
+        path: tuple[Column, ...] = ()
+        for spec, declared_key in self.declared:
+            level = self._resolve(spec, declared_key, path)
+            path = level.identity
+            out.append(level)
+        return tuple(out)
+
+    def _resolve(
+        self, spec: str, declared_key: str, ancestors: tuple[Column, ...]
+    ) -> Level:
+        """Resolve one level, plain or reached through a foreign key."""
+        head, dot, tail = spec.partition(".")
+        near = self.table.column(head)
+        column = near
+        via = None
+        if dot:
+            via = near
+            column = None
+            if near is not None and near.references:
+                found = self.table.model.table(near.references)
+                column = found.column(tail) if found is not None else None
+        if declared_key:
+            key = self.table.column(declared_key)
+        else:
+            key = via if dot else column
+        return Level(
+            spec=spec,
+            via=via,
+            column=column,
+            key=key,
+            identity=(*ancestors, key) if key is not None else ancestors,
+            declared_key=declared_key,
+        )
+
+    @property
+    def level_columns(self) -> tuple[Column, ...]:
+        """The columns that name the levels, skipping what does not resolve."""
+        return tuple(lv.column for lv in self.resolved if lv.column is not None)
+
+    def __str__(self) -> str:
+        """Render as ``Table.hierarchy``, which is how findings name one."""
+        return f"{self.table.name}.{self.name}"
+
+
+@dataclass(frozen=True)
+class UniqueKey:
+    """One named set of columns that is unique in a table.
+
+    LinkML's own ``unique_keys``, read rather than restated. It says which
+    combinations are unique; a column's ``varda:role`` says what part the
+    column plays. A surrogate key is unique and is not a business key, and
+    ``valid_from`` belongs in a type-2 dimension's unique key while being a
+    version marker rather than an identity — neither fact follows from the
+    other, which is why both are kept.
+    """
+
+    name: str
+    columns: tuple[Column, ...]
+    declared: tuple[str, ...]
+    description: str
+    table: Table
+
+    def __str__(self) -> str:
+        """Render as ``Table.key``, which is how findings name one."""
+        return f"{self.table.name}.{self.name}"
 
 
 @dataclass(frozen=True)
@@ -162,6 +319,69 @@ class Table:
         """
         found = (self.column(n) for n in self.grain)
         return tuple(c for c in found if c is not None)
+
+    @property
+    def hierarchies(self) -> tuple[Hierarchy, ...]:
+        """The declared drill paths, in declared order.
+
+        Reads a structured annotation, so this is where the untyped list of
+        mappings LinkML hands back becomes concrete. Entries that are not
+        mappings are dropped rather than raising: a malformed hierarchy is
+        V121's finding to report, and a property access is the wrong place to
+        fail on a model that has not been checked yet.
+        """
+        raw = raw_ann(self.cls, "hierarchies")
+        if raw is None:
+            return ()
+        entries = raw if isinstance(raw, list) else [raw]
+        out: list[Hierarchy] = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            levels = entry.get("levels")
+            if isinstance(levels, (str, bytes, Mapping)):
+                levels = [levels]
+            out.append(
+                Hierarchy(
+                    name=str(entry.get("name") or ""),
+                    description=str(entry.get("description") or "").strip(),
+                    declared=tuple(_level_spec(v) for v in levels or ()),
+                    table=self,
+                )
+            )
+        return tuple(out)
+
+    @cached_property
+    def unique_keys(self) -> tuple[UniqueKey, ...]:
+        """Every unique key that applies to this table, by name.
+
+        Walked up the inheritance chain by hand. Columns arrive through
+        ``class_induced_slots``, which inherits, but ``unique_keys`` does not
+        — LinkML drops a parent's keys from the induced class. A table that
+        inherits its columns and silently loses the constraint over them is a
+        disagreement nobody can debug, so the ancestors are read directly.
+
+        A name declared on the table wins over the same name inherited,
+        matching how a redeclared slot behaves. Sorted by name, because the
+        SQL generator emits these and generated output is deterministic.
+        """
+        view = self.model.view
+        seen: dict[str, UniqueKey] = {}
+        for ancestor in view.class_ancestors(self.name):
+            cls = view.get_class(ancestor)
+            for name, key in (getattr(cls, "unique_keys", None) or {}).items():
+                if str(name) in seen:
+                    continue  # the nearer declaration already won
+                declared = tuple(str(s) for s in key.unique_key_slots or ())
+                found = (self.column(n) for n in declared)
+                seen[str(name)] = UniqueKey(
+                    name=str(name),
+                    columns=tuple(c for c in found if c is not None),
+                    declared=declared,
+                    description=(key.description or "").strip(),
+                    table=self,
+                )
+        return tuple(seen[n] for n in sorted(seen))
 
     @property
     def fact_type(self) -> str | None:

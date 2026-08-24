@@ -30,6 +30,9 @@ classes:
     annotations:
       varda:role: DIMENSION
       varda:scd: TYPE_2
+      varda:hierarchies:
+        - name: geography
+          levels: [country, region, customer_id]
     attributes:
       customer_key:
         range: integer
@@ -39,6 +42,9 @@ classes:
         annotations:
           varda:role: NATURAL_KEY
       country:
+        annotations:
+          varda:role: ATTRIBUTE
+      region:
         annotations:
           varda:role: ATTRIBUTE
       valid_from:
@@ -74,10 +80,11 @@ classes:
           varda:additivity: ADDITIVE
 ```
 
-Three things are doing the work here. `varda:role` on the class says what the
-table *is*; `varda:role` on each column says what the column *is*; and the
-grain pair says what one row of the fact represents — `varda:grain` as the
-columns at which rows are unique, `varda:grain_statement` as the sentence.
+Four things are doing the work here. `varda:role` on the class says what the
+table *is*; `varda:role` on each column says what the column *is*; the grain
+pair says what one row of the fact represents — `varda:grain` as the columns
+at which rows are unique, `varda:grain_statement` as the sentence; and
+`varda:hierarchies` says how the dimension is drilled, coarsest level first.
 
 !!! tip "The grain is the most valuable thing in the file"
     A fact table whose grain nobody can state in one sentence is one whose
@@ -88,11 +95,24 @@ columns at which rows are unique, `varda:grain_statement` as the sentence.
     they become a `UNIQUE` constraint in the generated DDL — and the sentence
     carries the intent a column list cannot.
 
+!!! tip "A level names a member, and something identifies it"
+    Varda checks that a level is a real column, that the levels are distinct
+    and that there are at least two of them. It cannot check the part that
+    matters most: that each level rolls up into exactly one member above it.
+
+    A level is identified by its own column preceded by every coarser level,
+    so a `city_name` holding "Springfield" for three different states still
+    identifies one of them once country and region are in front of it. That
+    comes from the order and is never written down.
+
+    See [Concepts](concepts.md#hierarchies-how-a-dimension-is-drilled) for
+    the two calendar cases worth knowing before you write one.
+
 ## Check it
 
 ```console
 $ varda check mart.yaml
-2 tables checked against 29 rules (varda 0.1.0): 0 errors, 0 warnings
+2 tables checked against 39 rules (varda 0.1.0): 0 errors, 0 warnings
 ```
 
 Introduce a mistake — misspell `varda:grain` as `varda:grian`, say — and:
@@ -104,7 +124,7 @@ ERROR V001  FctOrder
 ERROR V103  FctOrder
         no varda:grain; name the columns at which rows are unique
 
-2 tables checked against 29 rules (varda 0.1.0): 2 errors, 0 warnings
+2 tables checked against 39 rules (varda 0.1.0): 2 errors, 0 warnings
 ```
 
 `--strict` also fails on warnings, and on an exemption that names a rule
