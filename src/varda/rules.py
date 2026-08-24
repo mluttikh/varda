@@ -22,14 +22,14 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from . import registry
-from .anns import anns
+from .anns import anns, get
 from .ext import SEVERITIES, Severity
 from .model import VERSIONING_ROLES
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
-    from .model import DimensionalModel, Level, Table
+    from .model import Column, DimensionalModel, Level, Table
 
 
 @dataclass(frozen=True)
@@ -117,6 +117,9 @@ GRAIN_MIN_WORDS = 4
 
 #: One level is a column, not a path: nothing rolls up into anything.
 HIERARCHY_MIN_LEVELS = 2
+
+#: Two claims on one physical name is the smallest collision there is.
+COLLIDING = 2
 
 
 # ---------------------------------------------------------------------------
@@ -961,6 +964,96 @@ def v130(model: DimensionalModel) -> Iterator[Finding]:
                 str(column),
                 "a natural key in none of this table's unique keys; the "
                 "identity a loader matches on is not enforced",
+            )
+
+
+def _claim(names: list[str]) -> str:
+    """Phrase the colliding names, saying when they differ only in case.
+
+    Quoting an identifier does not settle case everywhere. PostgreSQL treats
+    `"Foo"` and `"foo"` as two tables; DuckDB refuses the second as a
+    duplicate. Varda emits dialect-neutral DDL and cannot know which engine
+    the output will meet, so a pair that only some databases distinguish is
+    refused rather than left to the one it happens to run on first.
+    """
+    unique = sorted(set(names))
+    if len(unique) == 1:
+        return f"physical name {unique[0]!r} is"
+    listed = " and ".join(repr(n) for n in unique)
+    return (
+        f"physical names {listed} differ only in case, which not every "
+        f"database distinguishes, and are"
+    )
+
+
+def _named_by(obj: Any, logical: str) -> str:
+    """Say where an object's physical name came from.
+
+    The realistic collision is not two identical `varda:physical_name`
+    declarations — it is one declared name meeting one derived from a class
+    or slot name. A message that only says "duplicate" sends a reader looking
+    for an annotation that is not there.
+    """
+    if get(obj, "physical_name"):
+        return f"{logical} (varda:physical_name)"
+    return f"{logical} (derived)"
+
+
+@RULES.rule("V131", "error", "Physical table names are unique")
+def v131(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag two classes that emit one table.
+
+    Everything is generated into one schema, so a physical name identifies a
+    table or it identifies nothing. Two classes sharing one emit two
+    `CREATE TABLE` statements for the same name: the database refuses the
+    second, and the model quietly describes a table the warehouse does not
+    have.
+
+    It happens without anybody writing the same name twice. `DimCustomer`
+    and `Dim_Customer` both derive `dim_customer`.
+    """
+    claimed: dict[str, list[Table]] = {}
+    for table in model.tables:
+        claimed.setdefault(table.physical.casefold(), []).append(table)
+    for _, tables in sorted(claimed.items()):
+        if len(tables) < COLLIDING:
+            continue
+        who = " and ".join(_named_by(t.cls, t.name) for t in tables)
+        what = _claim([t.physical for t in tables])
+        yield Finding(
+            "V131",
+            "error",
+            str(tables[0]),
+            f"{what} claimed by {who}; one name cannot be two tables",
+        )
+
+
+@RULES.rule("V132", "error", "Physical column names are unique in a table")
+def v132(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag two columns of one table that emit one column.
+
+    The same mistake a level down, and the same silence: the emitted
+    `CREATE TABLE` carries the name twice and no database accepts it.
+
+    Checked over the induced columns, so a slot inherited from a parent
+    collides with a slot declared here exactly as it would if both were
+    written in the same class.
+    """
+    for table in model.tables:
+        claimed: dict[str, list[Column]] = {}
+        for column in table.columns:
+            claimed.setdefault(column.physical.casefold(), []).append(column)
+        for _, columns in sorted(claimed.items()):
+            if len(columns) < COLLIDING:
+                continue
+            who = " and ".join(_named_by(c.slot, c.name) for c in columns)
+            what = _claim([c.physical for c in columns])
+            yield Finding(
+                "V132",
+                "error",
+                str(table),
+                f"{what} claimed by columns {who}; "
+                f"one name cannot be two columns",
             )
 
 
