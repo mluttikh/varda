@@ -140,10 +140,18 @@ wrote out/sql/mart.sql
 2 artifacts from 2 generators
 ```
 
-Generation **fails closed**: every generator runs and every result is
-collected before a single byte is written, so a generator that raises leaves
-no partial output tree behind. A half-generated estate is worse than none —
-it looks complete, and the stale parts are the ones nobody thinks to check.
+Generation **fails closed**, twice over. The model is checked first and
+errors refuse the run, because artifacts built from a model that does not
+conform look finished and are not — a grain naming a column that does not
+exist emits a table with no uniqueness at all. Then every generator runs and
+every result is collected before a single byte is written, so a generator
+that raises leaves no partial output tree behind. A half-generated estate is
+worse than none: it looks complete, and the stale parts are the ones nobody
+thinks to check.
+
+`--force` generates regardless, for somebody mid-refactor who wants to see
+the output. `--strict` refuses on warnings too, and `--exempt` skips a rule,
+both meaning exactly what they mean to `check`.
 
 Output is deterministic. Nothing is timestamped and nothing depends on the
 environment, so the same model produces the same bytes and generated files

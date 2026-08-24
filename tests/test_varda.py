@@ -1338,6 +1338,89 @@ def test_generate_writes_declared_artifacts(tmp_path: pathlib.Path) -> None:
     assert (tmp_path / "out" / "docs" / "model.md").is_file()
 
 
+def _nonconforming(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Write a model with one error and one warning, and return its path."""
+    table = dimension()
+    table["attributes"]["extra_key"] = {
+        "range": "integer",
+        "annotations": {"varda:role": "SURROGATE_KEY"},  # V105: two of them
+    }
+    del table["annotations"]["varda:scd"]  # V113: a warning
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "id": "https://example.org/t",
+                "name": "t",
+                "default_prefix": "t",
+                "default_range": "string",
+                "imports": ["linkml:types"],
+                "prefixes": {
+                    "linkml": "https://w3id.org/linkml/",
+                    "varda": "https://w3id.org/varda/",
+                },
+                "classes": {"DimThing": table},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_generate_refuses_a_nonconforming_model(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Errors stop the run, and nothing reaches the disk.
+
+    Artifacts from a model that does not conform look finished and are not.
+    A grain naming a column that does not exist emits a table with no
+    uniqueness at all, and two surrogate keys emit two PRIMARY KEY clauses
+    that no database accepts.
+    """
+    out = tmp_path / "out"
+    assert (
+        cli.main(["generate", str(_nonconforming(tmp_path)), "--out", str(out)])
+        == 1
+    )
+    assert not out.exists()
+
+
+def test_generate_force_writes_anyway(tmp_path: pathlib.Path) -> None:
+    """`--force` is for somebody mid-refactor who wants to see the output."""
+    out = tmp_path / "out"
+    code = cli.main(
+        [
+            "generate",
+            str(_nonconforming(tmp_path)),
+            "--out",
+            str(out),
+            "--force",
+        ]
+    )
+    assert code == 0
+    assert (out / "sql" / "mart.sql").is_file()
+
+
+def test_generate_exempt_unblocks_one_rule(tmp_path: pathlib.Path) -> None:
+    """Exempting the rule that blocks is not the same as forcing past it.
+
+    The exemptions `check` honors are the exemptions `generate` honors, or
+    the two commands disagree about whether a model is fit to build from.
+    """
+    out = tmp_path / "out"
+    args = ["generate", str(_nonconforming(tmp_path)), "--out", str(out)]
+    assert cli.main(args) == 1
+    assert cli.main([*args, "--exempt", "V105"]) == 0
+
+
+def test_generate_strict_stops_on_warnings(tmp_path: pathlib.Path) -> None:
+    """`--strict` means the same thing here as it does in `check`."""
+    out = tmp_path / "out"
+    args = ["generate", str(_nonconforming(tmp_path)), "--out", str(out)]
+    assert cli.main([*args, "--exempt", "V105"]) == 0
+    assert cli.main([*args, "--exempt", "V105", "--strict"]) == 1
+
+
 def test_generate_fails_closed(tmp_path: pathlib.Path) -> None:
     """A failing generator leaves nothing behind.
 
