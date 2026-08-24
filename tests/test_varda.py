@@ -28,7 +28,9 @@ from varda.rules import RuleSet
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-RETAIL = pathlib.Path(__file__).parents[1] / "examples" / "retail.yaml"
+EXAMPLES = pathlib.Path(__file__).parents[1] / "examples"
+RETAIL = EXAMPLES / "retail.yaml"
+SNOWFLAKE = EXAMPLES / "snowflake.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -126,13 +128,50 @@ def test_example_loads() -> None:
     assert len(model.bridges) == 1
 
 
-def test_example_is_clean() -> None:
-    """The shipped example must pass its own rules.
+@pytest.mark.parametrize("path", [RETAIL, SNOWFLAKE], ids=lambda p: p.stem)
+def test_every_example_is_clean(path: pathlib.Path) -> None:
+    """A shipped example must pass its own rules.
 
     An example that does not conform is worse than no example: it is the
     first thing anybody copies.
     """
-    assert rules.check(DimensionalModel.load(RETAIL)) == []
+    assert rules.check(DimensionalModel.load(path)) == []
+
+
+@pytest.mark.parametrize("path", [RETAIL, SNOWFLAKE], ids=lambda p: p.stem)
+def test_every_example_generates_runnable_ddl(path: pathlib.Path) -> None:
+    """And its DDL must execute, which is a separate claim from conforming.
+
+    `snowflake.yaml` is the one that would have caught the ordering bug:
+    its dimensions reference each other, so by-name creation order emits a
+    foreign key before its target exists.
+    """
+    executes(generate_sql(DimensionalModel.load(path)))
+
+
+def test_the_snowflake_example_uses_the_forms_it_exists_for() -> None:
+    """It is there to be the runnable version of what Concepts describes.
+
+    Asserted rather than assumed: an example added to cover four forms is
+    one edit away from covering three, and nothing else would notice.
+    """
+    model = DimensionalModel.load(SNOWFLAKE)
+    levels = [
+        lv
+        for table in model.dimensions
+        for hierarchy in table.hierarchies
+        for lv in hierarchy.resolved
+    ]
+    assert any(lv.is_reference for lv in levels), "no reference level"
+    assert any(lv.declared_key for lv in levels), "no declared level key"
+    assert any(len(t.unique_keys) > 1 for t in model.dimensions), (
+        "no dimension identified two ways"
+    )
+    assert any(
+        c.references and (m := model.table(c.references)) and m.is_dimension
+        for t in model.dimensions
+        for c in t.foreign_keys
+    ), "no dimension references another dimension"
 
 
 @pytest.mark.parametrize(

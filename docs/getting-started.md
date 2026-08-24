@@ -30,9 +30,6 @@ classes:
     annotations:
       varda:role: DIMENSION
       varda:scd: TYPE_2
-      varda:hierarchies:
-        - name: geography
-          levels: [country, region, customer_id]
     attributes:
       customer_key:
         range: integer
@@ -80,11 +77,10 @@ classes:
           varda:additivity: ADDITIVE
 ```
 
-Four things are doing the work here. `varda:role` on the class says what the
-table *is*; `varda:role` on each column says what the column *is*; the grain
-pair says what one row of the fact represents — `varda:grain` as the columns
-at which rows are unique, `varda:grain_statement` as the sentence; and
-`varda:hierarchies` says how the dimension is drilled, coarsest level first.
+Three things are doing the work here. `varda:role` on the class says what the
+table *is*; `varda:role` on each column says what the column *is*; and the
+grain pair says what one row of the fact represents — `varda:grain` as the
+columns at which rows are unique, `varda:grain_statement` as the sentence.
 
 !!! tip "The grain is the most valuable thing in the file"
     A fact table whose grain nobody can state in one sentence is one whose
@@ -94,19 +90,6 @@ at which rows are unique, `varda:grain_statement` as the sentence; and
     The two halves check each other. The columns make the claim testable —
     they become a `UNIQUE` constraint in the generated DDL — and the sentence
     carries the intent a column list cannot.
-
-!!! tip "A level names a member, and something identifies it"
-    Varda checks that a level is a real column, that the levels are distinct
-    and that there are at least two of them. It cannot check the part that
-    matters most: that each level rolls up into exactly one member above it.
-
-    A level is identified by its own column preceded by every coarser level,
-    so a `city_name` holding "Springfield" for three different states still
-    identifies one of them once country and region are in front of it. That
-    comes from the order and is never written down.
-
-    See [Concepts](concepts.md#hierarchies-how-a-dimension-is-drilled) for
-    the two calendar cases worth knowing before you write one.
 
 ## Check it
 
@@ -157,6 +140,37 @@ Output is deterministic. Nothing is timestamped and nothing depends on the
 environment, so the same model produces the same bytes and generated files
 can be committed and diffed like any other source.
 
+## Add a drill path
+
+A dimension can say how it is drilled. Add this to `DimCustomer`, coarsest
+level first:
+
+```yaml
+    annotations:
+      varda:role: DIMENSION
+      varda:scd: TYPE_2
+      varda:hierarchies:
+        - name: geography
+          levels: [country, region, customer_id]
+```
+
+Regenerate, and `out/docs/model.md` gains a line:
+
+```
+**Drill path** (geography): `country` → `region` → `customer_id`
+```
+
+Varda checks that the levels are real columns, distinct, at least two of
+them, and the kind of column a reader can drill. It cannot check the part
+that matters most — that each level rolls up into exactly one member above
+it — because that is a claim about data, the same way the grain sentence is.
+
+Optional, and there is more to it than a list of columns: weeks do not nest
+inside months, a level's name is not always what tells its members apart, and
+a snowflaked dimension reaches through a foreign key to find something
+readable. [Concepts](concepts.md#hierarchies-how-a-dimension-is-drilled)
+covers those, and `examples/snowflake.yaml` is a model that uses all of them.
+
 ## In CI
 
 ```yaml title=".github/workflows/model.yml"
@@ -172,3 +186,9 @@ failed, `2` the invocation was wrong.
 - [Concepts](concepts.md) — what Varda means by grain, role, additivity and SCD
 - [Vocabulary](reference/vocabulary.md) — all twelve annotations
 - [Extending](extending.md) — adding your organization's own metadata
+
+Two worked models ship with the source. `examples/retail.yaml` is a flat star
+touching every part of the core; `examples/snowflake.yaml` carries the forms a
+flat star has no use for — dimensions referencing dimensions, levels that
+reach through a foreign key, and a dimension two sources identify
+differently.
