@@ -35,14 +35,14 @@ reason the core can stay small enough to be correct.
 | `model.py` | ~550 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
 | `ext.py` | ~180 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
 | `registry.py` | ~630 | Discovery, validation, lookup. Where colliding extensions are refused. |
-| `rules.py` | ~1330 | `RuleSet`, `Finding`, and the 43 core rules. |
+| `rules.py` | ~1400 | `RuleSet`, `Finding`, and the 43 core rules. |
 | `gen_sql.py` | ~290 | SQL DDL. |
 | `gen_docs.py` | ~120 | Markdown reference. |
 | `generators.py` | ~25 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~340 | Five commands. |
 
-**3,660 lines of source**: 2,101 of code, 764 of docstrings, 190 of
-comment, 605 blank. The prose share is deliberate and is house style —
+**3,728 lines of source**: 2,101 of code, 776 of docstrings, 233 of
+comment, 618 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -103,9 +103,13 @@ raises `GenerationError` naming the column. A column silently typed `TEXT` is
 a bug that surfaces years later as a comparison that does not do what it
 looks like.
 
-**I7 — Rule codes are permanent.** `V203` goes in commit messages and
-exemption lists. Renumbering is a breaking change to humans. Retire a code by
-deleting it; never reuse it.
+**I7 — A code names its concern, and never means two things.** The band
+says what a rule is about: `V6xx` is hierarchies, `V7xx` is measures. Within
+a released major version a code is permanent — it goes in commit messages and
+exemption lists, so renumbering is a breaking change to humans. Before 1.0
+that permanence is not yet in force, and the bands were introduced by
+renumbering all forty-three. What holds unconditionally is the second half:
+retire a code by deleting it, and never reuse it for something else.
 
 **I8 — Severity conflicts are refused, not resolved.** Two extensions naming
 different severities for one code is an error naming both parties. Resolving

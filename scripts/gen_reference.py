@@ -36,20 +36,85 @@ SEVERITY_ICON = {
 }
 
 FAMILIES = (
-    ("V0", "Profile conformance", "The annotations themselves."),
+    (
+        "V0",
+        "The annotations themselves",
+        (
+            "Whether a model's annotations are ones a profile declares. "
+            "Without these, the difference between a constraint that is "
+            "enforced and one that is not is a typo nobody can see."
+        ),
+    ),
     (
         "V1",
-        "Dimensional structure",
-        "Whether the shape is a legal dimensional model.",
+        "Roles, and where each one is legal",
+        (
+            "What a table is, what a column is, and the placements that "
+            "make no sense. Every other band reads the roles these "
+            "establish."
+        ),
     ),
     (
         "V2",
+        "Grain",
+        (
+            "What one row of a table is — declared as a column set a "
+            "validator can test, and as a sentence it cannot."
+        ),
+    ),
+    (
+        "V3",
+        "Identity",
+        (
+            "What makes two rows the same thing: the surrogate key facts "
+            "join to, the natural key a loader matches on, and the "
+            "uniqueness a model declares for itself."
+        ),
+    ),
+    (
+        "V4",
+        "References between tables",
+        (
+            "Foreign keys and what they may point at. A star becomes a "
+            "normalized schema one wrong reference at a time."
+        ),
+    ),
+    (
+        "V5",
+        "Time",
+        (
+            "How a table behaves as the data behind it changes: a fact's "
+            "temporal shape, and a dimension's answer to a source that has "
+            "been updated."
+        ),
+    ),
+    (
+        "V6",
+        "Hierarchies",
+        (
+            "The named paths a dimension is drilled down. The largest band, "
+            "and the one whose central claim is least checkable: that a "
+            "level is a real column is a question about the schema, and "
+            "that each rolls up into exactly one parent is a question about "
+            "the data."
+        ),
+    ),
+    (
+        "V7",
         "Measures",
         (
-            "The most expensive class of error a dimensional model produces. "
-            "A structural mistake usually breaks a query; an additivity "
-            "mistake returns a number that looks entirely reasonable and is "
-            "wrong, to someone who will act on it."
+            "The most expensive class of error a dimensional model "
+            "produces. A structural mistake usually breaks a query; an "
+            "additivity mistake returns a number that looks entirely "
+            "reasonable and is wrong, to someone who will act on it."
+        ),
+    ),
+    (
+        "V8",
+        "Physical naming",
+        (
+            "What the generators emit. A physical name identifies one table "
+            "or one column, or it identifies nothing."
         ),
     ),
 )

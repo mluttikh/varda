@@ -104,7 +104,7 @@ Introduce a mistake — misspell `varda:grain` as `varda:grian`, say — and:
 $ varda check mart.yaml
 ERROR V001  FctOrder
         unknown table annotation 'varda:grian'; declare it in varda.yaml or fix the typo
-ERROR V103  FctOrder
+ERROR V201  FctOrder
         no varda:grain; name the columns at which rows are unique
 
 2 tables checked against 43 rules (varda 0.2.0): 2 errors, 0 warnings

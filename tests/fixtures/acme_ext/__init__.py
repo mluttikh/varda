@@ -73,5 +73,5 @@ EXTENSION = Extension(
     profile=HERE / "acme.yaml",
     rules=RULES,
     package="acme_ext",
-    severity_defaults={"V205": "error"},
+    severity_defaults={"V705": "error"},
 )

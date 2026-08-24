@@ -62,8 +62,8 @@ A fact declares its grain twice, in two forms that do different jobs.
 `varda:grain` names the columns at which rows are unique — the set that
 together identifies exactly one row. This is the grain proper: in every formal
 treatment of dimensional modeling the grain *is* that set. Stating it makes
-the claim testable. [`V114`](reference/rules.md#v114) checks the columns
-exist, [`V115`](reference/rules.md#v115) checks each is a foreign key or a
+the claim testable. [`V203`](reference/rules.md#v203) checks the columns
+exist, [`V204`](reference/rules.md#v204) checks each is a foreign key or a
 degenerate dimension — a grain is what a row *is*, not what it records — and
 the SQL generator turns the set into a `UNIQUE` constraint the database
 enforces.
@@ -72,7 +72,7 @@ enforces.
 per …". It carries what a column list cannot: *why* those columns, and what a
 row means to somebody reading the model rather than querying it. A grain that
 cannot be stated in one sentence is a sign the table is doing two jobs, and
-writing it is most of the value. [`V104`](reference/rules.md#v104) checks it
+writing it is most of the value. [`V202`](reference/rules.md#v202) checks it
 is a sentence and nothing further.
 
 Nothing compares the sentence to the columns, deliberately — see
@@ -90,7 +90,7 @@ Every measure declares `varda:additivity`.
 
 A semi-additive measure must also declare `varda:semi_additive_over`, naming
 the foreign key it may not be summed across, and
-[`V203`](reference/rules.md#v203) checks that column actually exists on the
+[`V703`](reference/rules.md#v703) checks that column actually exists on the
 table. A constraint naming a dimension the fact does not have is a constraint
 that silently never applies, and it looks exactly like one that does.
 
@@ -111,7 +111,7 @@ It sits on the table rather than per column, deliberately. A mixed dimension
 that this core does not model. Split it into two dimensions, or handle it in
 an extension.
 
-[`V113`](reference/rules.md#v113) is a warning rather than an error, because a
+[`V502`](reference/rules.md#v502) is a warning rather than an error, because a
 great many dimensions are genuinely type 1 and saying so feels like ceremony.
 It stays a rule because "we never decided" and "we decided overwrite" look
 identical in the model and cost very differently two years later.
@@ -165,7 +165,7 @@ unique on that key plus whatever marks its versions apart.
 
 A dimension that declares no `varda:scd` gets no derived constraint, because
 the answer depends on which type it is and guessing wrong costs rows —
-[`V113`](reference/rules.md#v113) reports the missing declaration.
+[`V502`](reference/rules.md#v502) reports the missing declaration.
 
 That derivation assumes one natural key. A dimension loaded from several
 sources often has more than one, because each source identifies the thing its
@@ -192,12 +192,12 @@ caught by whichever key its own source populated.
 
 Declaring them replaces the derived constraint rather than adding to it, so a
 table states its uniqueness in one place or the other.
-[`V128`](reference/rules.md#v128) checks the columns exist, because LinkML
+[`V303`](reference/rules.md#v303) checks the columns exist, because LinkML
 accepts a key over a misspelled slot without complaint.
-[`V129`](reference/rules.md#v129) checks a business key on a type-2 dimension
+[`V304`](reference/rules.md#v304) checks a business key on a type-2 dimension
 carries a version marker — without one it claims the business key does not
 repeat, which on a type-2 table is false.
-[`V130`](reference/rules.md#v130) warns about a natural key none of them
+[`V305`](reference/rules.md#v305) warns about a natural key none of them
 cover.
 
 !!! note "Two sources, one thing, two rows"
@@ -276,7 +276,7 @@ the naming column otherwise. A surrogate key or a foreign key may be a `key`
 and never a `column`, which is one rule from both sides: they identify well
 and read badly.
 
-[`V127`](reference/rules.md#v127) checks a declared key exists and is the
+[`V607`](reference/rules.md#v607) checks a declared key exists and is the
 kind of column that can identify something. Whether members are actually
 distinct is a claim about data, and nothing checks it.
 

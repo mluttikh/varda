@@ -33,7 +33,7 @@ moving a class in the source does not reorder the output.
 that surfaces years later as a comparison that does not do what it looks
 like.
 
-**Rule codes are permanent.** `V203` goes in commit messages and exemption
+**Rule codes are permanent.** `V703` goes in commit messages and exemption
 lists. Retire a code by deleting it; never reuse it.
 
 **Severity conflicts are refused, not resolved.** See
@@ -120,7 +120,7 @@ denormalized dimension a star schema exists to produce.
 
 Nothing checks that members are distinct — that is a claim about data, the
 same bargain [the grain sentence](#why-the-grain-sentence-is-not-checked-against-the-columns)
-makes. [`V127`](reference/rules.md#v127) checks a declared key exists and is
+makes. [`V607`](reference/rules.md#v607) checks a declared key exists and is
 the kind of column that can identify something.
 
 A surrogate key and a foreign key make good keys and bad names: nobody drills
@@ -191,7 +191,7 @@ net_amount:
 
 A `varda:unit` alongside that would be a second place to write one fact,
 and two places to write one fact is how models come to disagree with
-themselves. `V205` still asks every measure to declare a unit — two measures
+themselves. `V705` still asks every measure to declare a unit — two measures
 in different currencies add up cleanly and wrongly — it just asks the
 question of LinkML's slot.
 

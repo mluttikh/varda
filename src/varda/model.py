@@ -84,7 +84,7 @@ class Level:
     ``column`` is the column that names the level to a reader, wherever it
     lives. ``via`` is the foreign key it was reached through, or ``None`` for
     a plain level. Either may be ``None`` when the level names something that
-    does not exist, which is V121's finding to report rather than an error
+    does not exist, which is V601's finding to report rather than an error
     here.
 
     ``key`` is what tells one member of this level from another *under the
@@ -336,7 +336,7 @@ class Table:
         Reads a structured annotation, so this is where the untyped list of
         mappings LinkML hands back becomes concrete. Entries that are not
         mappings are dropped rather than raising: a malformed hierarchy is
-        V121's finding to report, and a property access is the wrong place to
+        V601's finding to report, and a property access is the wrong place to
         fail on a model that has not been checked yet.
         """
         raw = raw_ann(self.cls, "hierarchies")

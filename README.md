@@ -76,15 +76,22 @@ columns — `role`, `references`, `additivity`, `semi_additive_over`,
 vocabulary, and it is deliberately the whole core vocabulary. Units are
 LinkML's own `unit`, which Varda reads rather than restates.
 
-**Forty-three rules** that catch the mistakes worth catching:
+**Forty-three rules** that catch the mistakes worth catching. A code names
+its concern, so the band tells you where to look:
 
 | | |
 | --- | --- |
-| `V001`–`V003` | the annotations themselves — typos, bad enum values, unknown prefixes |
-| `V101`–`V134` | structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
-| `V201`–`V206` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
+| `V001`–`V004` | the annotations themselves — typos, bad enum values, unknown prefixes, unknown fields |
+| `V101`–`V104` | roles — what a table is, what a column is, and where each role is legal |
+| `V201`–`V204` | grain — a fact with no grain, a grain naming a column that does not exist |
+| `V301`–`V305` | identity — a dimension with no natural key, a business key that repeats |
+| `V401`–`V405` | references — a foreign key pointing at a fact, one naming no target |
+| `V501`–`V506` | time — a version period on a dimension that keeps no versions |
+| `V601`–`V607` | hierarchies — a level that is not a column, a path of one level |
+| `V701`–`V706` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
+| `V801`–`V802` | physical naming — two classes emitting one table, two columns emitting one name |
 
-The `V2xx` family exists because additivity is where the expensive errors
+The `V7xx` family exists because additivity is where the expensive errors
 live. A structural mistake usually breaks a query. An additivity mistake
 returns a number that looks entirely reasonable and is wrong, to someone who
 will act on it.
@@ -161,9 +168,13 @@ a find-and-replace over your schema rather than a migration of anything you
 have loaded, and the model stays an ordinary LinkML schema either way —
 `gen-pydantic`, `gen-owl` and the rest carry on regardless.
 
-Two things are settled. Rule codes are permanent: none is renumbered, and a
-retired one is deleted rather than reused. And Varda will not grow syntax or
-fork the metamodel — the annotation-only design is the premise, not a stage.
+One thing is settled: Varda will not grow syntax or fork the metamodel. The
+annotation-only design is the premise, not a stage.
+
+Rule codes are not settled yet. They were all renumbered in 0.3 so that a
+code names its concern — `V6xx` is hierarchies, `V7xx` is measures — and more
+renumbering before 1.0 is possible if a band stops describing what is in it.
+A code is never reused for a different rule, and at 1.0 the numbers freeze.
 
 ## Building the documentation
 

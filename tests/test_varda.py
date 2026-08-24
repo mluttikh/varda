@@ -392,7 +392,7 @@ def test_v103_fact_without_grain(tmp_path: pathlib.Path) -> None:
             "DimThing": dimension(),
         },
     )
-    assert "V103" in codes(model)
+    assert "V201" in codes(model)
 
 
 def test_v104_fact_without_grain_statement(tmp_path: pathlib.Path) -> None:
@@ -400,7 +400,7 @@ def test_v104_fact_without_grain_statement(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {"FctX": _fact(**{"varda:grain": ["d_key"]}), "DimThing": dimension()},
     )
-    assert "V104" in codes(model)
+    assert "V202" in codes(model)
 
 
 def test_v104_grain_statement_is_a_phrase(tmp_path: pathlib.Path) -> None:
@@ -413,7 +413,7 @@ def test_v104_grain_statement_is_a_phrase(tmp_path: pathlib.Path) -> None:
             "DimThing": dimension(),
         },
     )
-    assert "V104" in codes(model)
+    assert "V202" in codes(model)
 
 
 def test_v114_grain_names_a_missing_column(tmp_path: pathlib.Path) -> None:
@@ -429,7 +429,7 @@ def test_v114_grain_names_a_missing_column(tmp_path: pathlib.Path) -> None:
             "DimThing": dimension(),
         },
     )
-    assert "V114" in codes(model)
+    assert "V203" in codes(model)
 
 
 def test_v115_grain_cannot_be_built_from_a_measure(
@@ -453,7 +453,7 @@ def test_v115_grain_cannot_be_built_from_a_measure(
             "DimThing": dimension(),
         },
     )
-    assert "V115" in codes(model)
+    assert "V204" in codes(model)
 
 
 def test_a_well_formed_grain_is_quiet(tmp_path: pathlib.Path) -> None:
@@ -477,7 +477,7 @@ def test_a_well_formed_grain_is_quiet(tmp_path: pathlib.Path) -> None:
         },
     )
     fired = codes(model)
-    assert not fired & {"V103", "V104", "V114", "V115"}
+    assert not fired & {"V201", "V202", "V203", "V204"}
 
 
 def test_v105_dimension_without_surrogate_key(
@@ -486,7 +486,7 @@ def test_v105_dimension_without_surrogate_key(
     table = dimension()
     del table["attributes"]["d_key"]
     model = build(tmp_path, {"DimThing": table})
-    assert "V105" in codes(model)
+    assert "V301" in codes(model)
 
 
 def test_v105_dimension_with_two_surrogate_keys(
@@ -498,7 +498,7 @@ def test_v105_dimension_with_two_surrogate_keys(
         "annotations": {"varda:role": "SURROGATE_KEY"},
     }
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V105"]
+    found = [f for f in rules.check(model) if f.rule == "V301"]
     assert found
     assert "found 2" in found[0].message
 
@@ -507,7 +507,7 @@ def test_v106_dimension_without_natural_key(tmp_path: pathlib.Path) -> None:
     table = dimension()
     del table["attributes"]["d_id"]
     model = build(tmp_path, {"DimThing": table})
-    assert "V106" in codes(model)
+    assert "V302" in codes(model)
 
 
 def test_v107_fact_without_foreign_key(tmp_path: pathlib.Path) -> None:
@@ -532,7 +532,7 @@ def test_v107_fact_without_foreign_key(tmp_path: pathlib.Path) -> None:
             }
         },
     )
-    assert "V107" in codes(model)
+    assert "V401" in codes(model)
 
 
 def test_v108_foreign_key_without_target(tmp_path: pathlib.Path) -> None:
@@ -553,7 +553,7 @@ def test_v108_foreign_key_without_target(tmp_path: pathlib.Path) -> None:
             }
         },
     )
-    assert "V108" in codes(model)
+    assert "V402" in codes(model)
 
 
 def test_v109_foreign_key_target_missing(tmp_path: pathlib.Path) -> None:
@@ -577,7 +577,7 @@ def test_v109_foreign_key_target_missing(tmp_path: pathlib.Path) -> None:
             }
         },
     )
-    assert "V109" in codes(model)
+    assert "V403" in codes(model)
 
 
 def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
@@ -619,7 +619,7 @@ def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
             "DimThing": dimension(),
         },
     )
-    assert "V110" in codes(model)
+    assert "V404" in codes(model)
 
 
 def test_v111_fact_without_type(tmp_path: pathlib.Path) -> None:
@@ -644,7 +644,7 @@ def test_v111_fact_without_type(tmp_path: pathlib.Path) -> None:
             "DimThing": dimension(),
         },
     )
-    assert "V111" in codes(model)
+    assert "V501" in codes(model)
 
 
 def test_v112_surrogate_key_on_a_fact(tmp_path: pathlib.Path) -> None:
@@ -674,7 +674,7 @@ def test_v112_surrogate_key_on_a_fact(tmp_path: pathlib.Path) -> None:
             "DimThing": dimension(),
         },
     )
-    assert "V112" in codes(model)
+    assert "V103" in codes(model)
 
 
 def test_v113_dimension_without_scd(tmp_path: pathlib.Path) -> None:
@@ -682,7 +682,7 @@ def test_v113_dimension_without_scd(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {"DimThing": dimension(annotations={"varda:role": "DIMENSION"})},
     )
-    assert "V113" in codes(model)
+    assert "V502" in codes(model)
 
 
 def test_v201_measure_without_additivity(tmp_path: pathlib.Path) -> None:
@@ -692,7 +692,7 @@ def test_v201_measure_without_additivity(tmp_path: pathlib.Path) -> None:
         "annotations": {"varda:role": "MEASURE"},
     }
     model = build(tmp_path, {"BridgeX": table})
-    assert "V201" in codes(model)
+    assert "V701" in codes(model)
 
 
 def test_v202_semi_additive_without_exception(
@@ -708,7 +708,7 @@ def test_v202_semi_additive_without_exception(
         },
     }
     model = build(tmp_path, {"BridgeX": table})
-    assert "V202" in codes(model)
+    assert "V702" in codes(model)
 
 
 def test_v203_semi_additive_over_is_not_a_key(
@@ -745,7 +745,7 @@ def test_v203_semi_additive_over_is_not_a_key(
             "DimThing": dimension(),
         },
     )
-    found = [f for f in rules.check(model) if f.rule == "V203"]
+    found = [f for f in rules.check(model) if f.rule == "V703"]
     assert found
     assert "date_key" in found[0].message
 
@@ -761,7 +761,7 @@ def test_v204_measure_on_a_dimension(tmp_path: pathlib.Path) -> None:
         },
     }
     model = build(tmp_path, {"DimThing": table})
-    assert "V204" in codes(model)
+    assert "V704" in codes(model)
 
 
 def test_v205_measure_without_unit(tmp_path: pathlib.Path) -> None:
@@ -774,7 +774,7 @@ def test_v205_measure_without_unit(tmp_path: pathlib.Path) -> None:
         },
     }
     model = build(tmp_path, {"BridgeX": table})
-    assert "V205" in codes(model)
+    assert "V705" in codes(model)
 
 
 @pytest.mark.parametrize(
@@ -809,7 +809,7 @@ def test_unit_reads_every_way_linkml_names_one(
     column = bridge.column("amount")
     assert column is not None
     assert column.unit == expected
-    assert "V205" not in codes(model)
+    assert "V705" not in codes(model)
 
 
 def test_a_unit_naming_nothing_is_undeclared(tmp_path: pathlib.Path) -> None:
@@ -824,7 +824,7 @@ def test_a_unit_naming_nothing_is_undeclared(tmp_path: pathlib.Path) -> None:
         },
     }
     model = build(tmp_path, {"BridgeX": table})
-    assert "V205" in codes(model)
+    assert "V705" in codes(model)
 
 
 def test_v206_fact_without_measures(tmp_path: pathlib.Path) -> None:
@@ -850,7 +850,7 @@ def test_v206_fact_without_measures(tmp_path: pathlib.Path) -> None:
             "DimThing": dimension(),
         },
     )
-    assert "V206" in codes(model)
+    assert "V706" in codes(model)
 
 
 def test_v206_silent_when_declared_factless(tmp_path: pathlib.Path) -> None:
@@ -876,7 +876,7 @@ def test_v206_silent_when_declared_factless(tmp_path: pathlib.Path) -> None:
             "DimThing": dimension(),
         },
     )
-    assert "V206" not in codes(model)
+    assert "V706" not in codes(model)
 
 
 # ---------------------------------------------------------------------------
@@ -917,9 +917,9 @@ def test_exemptions_skip_a_rule(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {"DimThing": dimension(annotations={"varda:role": "DIMENSION"})},
     )
-    assert "V113" in codes(model)
-    fired = {f.rule for f in rules.check(model, exemptions=["V113"])}
-    assert "V113" not in fired
+    assert "V502" in codes(model)
+    fired = {f.rule for f in rules.check(model, exemptions=["V502"])}
+    assert "V502" not in fired
 
 
 # ---------------------------------------------------------------------------
@@ -1004,7 +1004,7 @@ def test_extension_enum_is_checked(tmp_path: pathlib.Path) -> None:
 
 
 def test_extension_severity_default_applies(tmp_path: pathlib.Path) -> None:
-    """Acme raises V205 from warning to error."""
+    """Acme raises V705 from warning to error."""
     from acme_ext import EXTENSION  # noqa: PLC0415
 
     table = dimension(annotations={"varda:role": "BRIDGE"})
@@ -1018,7 +1018,7 @@ def test_extension_severity_default_applies(tmp_path: pathlib.Path) -> None:
     }
     with registry.using(EXTENSION):
         model = build(tmp_path, {"BridgeX": table})
-        found = [f for f in rules.check(model) if f.rule == "V205"]
+        found = [f for f in rules.check(model) if f.rule == "V705"]
         assert found
         assert found[0].severity == "error"
 
@@ -1160,22 +1160,22 @@ def test_severity_disagreement_is_refused() -> None:
     """
     with pytest.raises(ExtensionError, match="Nothing here can adjudicate"):
         activate(
-            _bare("group", "grp", severity_defaults={"V205": "error"}),
-            _bare("team", "tm", severity_defaults={"V205": "info"}),
+            _bare("group", "grp", severity_defaults={"V705": "error"}),
+            _bare("team", "tm", severity_defaults={"V705": "info"}),
         )
 
 
 def test_agreeing_severity_defaults_are_fine() -> None:
     with registry.using(
-        _bare("group", "grp", severity_defaults={"V205": "error"}),
-        _bare("team", "tm", severity_defaults={"V205": "error"}),
+        _bare("group", "grp", severity_defaults={"V705": "error"}),
+        _bare("team", "tm", severity_defaults={"V705": "error"}),
     ):
-        assert registry.severities()["V205"] == "error"
+        assert registry.severities()["V705"] == "error"
 
 
 def test_unknown_severity_is_refused() -> None:
     with pytest.raises(ExtensionError, match="not one of"):
-        activate(_bare("a", "one", severity_defaults={"V205": "loud"}))
+        activate(_bare("a", "one", severity_defaults={"V705": "loud"}))
 
 
 # ---------------------------------------------------------------------------
@@ -1382,9 +1382,9 @@ def _nonconforming(tmp_path: pathlib.Path) -> pathlib.Path:
     table = dimension()
     table["attributes"]["extra_key"] = {
         "range": "integer",
-        "annotations": {"varda:role": "SURROGATE_KEY"},  # V105: two of them
+        "annotations": {"varda:role": "SURROGATE_KEY"},  # V301: two of them
     }
-    del table["annotations"]["varda:scd"]  # V113: a warning
+    del table["annotations"]["varda:scd"]  # V502: a warning
     path = tmp_path / "bad.yaml"
     path.write_text(
         yaml.safe_dump(
@@ -1449,15 +1449,15 @@ def test_generate_exempt_unblocks_one_rule(tmp_path: pathlib.Path) -> None:
     out = tmp_path / "out"
     args = ["generate", str(_nonconforming(tmp_path)), "--out", str(out)]
     assert cli.main(args) == 1
-    assert cli.main([*args, "--exempt", "V105"]) == 0
+    assert cli.main([*args, "--exempt", "V301"]) == 0
 
 
 def test_generate_strict_stops_on_warnings(tmp_path: pathlib.Path) -> None:
     """`--strict` means the same thing here as it does in `check`."""
     out = tmp_path / "out"
     args = ["generate", str(_nonconforming(tmp_path)), "--out", str(out)]
-    assert cli.main([*args, "--exempt", "V105"]) == 0
-    assert cli.main([*args, "--exempt", "V105", "--strict"]) == 1
+    assert cli.main([*args, "--exempt", "V301"]) == 0
+    assert cli.main([*args, "--exempt", "V301", "--strict"]) == 1
 
 
 def test_generate_fails_closed(tmp_path: pathlib.Path) -> None:
@@ -1696,13 +1696,13 @@ def test_toml_severity_beats_an_extension(
         tmp_path,
         """
         [severity]
-        V205 = "info"
+        V705 = "info"
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
     with registry.using(EXTENSION):
-        assert EXTENSION.severity_defaults["V205"] == "error"
-        assert registry.severities()["V205"] == "info"
+        assert EXTENSION.severity_defaults["V705"] == "error"
+        assert registry.severities()["V705"] == "info"
 
 
 def test_toml_exemptions_are_read(
@@ -1711,12 +1711,12 @@ def test_toml_exemptions_are_read(
     path = write_config(
         tmp_path,
         """
-        exempt = ["V113", "V205"]
+        exempt = ["V502", "V705"]
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
     registry.reset_caches()
-    assert registry.exemptions() == ["V113", "V205"]
+    assert registry.exemptions() == ["V502", "V705"]
 
 
 def test_toml_missing_profile_is_refused(
@@ -1763,7 +1763,7 @@ def test_config_is_found_by_searching_upward(
     get different results.
     """
     monkeypatch.delenv("VARDA_CONFIG", raising=False)
-    write_config(tmp_path, 'exempt = ["V113"]')
+    write_config(tmp_path, 'exempt = ["V502"]')
     deep = tmp_path / "a" / "b" / "c"
     deep.mkdir(parents=True)
     assert registry.find_config(deep) == tmp_path / "varda.toml"
@@ -1836,7 +1836,7 @@ def test_version_window_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
             )
         },
     )
-    assert not codes(model) & {"V116", "V117", "V118", "V119"}
+    assert not codes(model) & {"V503", "V504", "V505", "V506"}
 
 
 def test_flagged_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
@@ -1853,7 +1853,7 @@ def test_flagged_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
             )
         },
     )
-    assert not codes(model) & {"V116", "V117", "V118", "V119"}
+    assert not codes(model) & {"V503", "V504", "V505", "V506"}
 
 
 def test_version_counter_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
@@ -1862,7 +1862,7 @@ def test_version_counter_strategy_is_accepted(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {"DimThing": versioned(v=_col("VERSION_NUMBER", "integer"))},
     )
-    assert not codes(model) & {"V116", "V117", "V118", "V119"}
+    assert not codes(model) & {"V503", "V504", "V505", "V506"}
 
 
 def test_v116_versioning_on_a_type_1_dimension(
@@ -1871,7 +1871,7 @@ def test_v116_versioning_on_a_type_1_dimension(
     table = dimension()
     table["attributes"]["vf"] = _col("VERSION_START")
     model = build(tmp_path, {"DimThing": table})
-    assert "V116" in codes(model)
+    assert "V503" in codes(model)
 
 
 def test_v112_versioning_on_a_fact(tmp_path: pathlib.Path) -> None:
@@ -1884,12 +1884,12 @@ def test_v112_versioning_on_a_fact(tmp_path: pathlib.Path) -> None:
     )
     fct["attributes"]["vf"] = _col("VERSION_START")
     model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
-    assert "V112" in codes(model)
+    assert "V103" in codes(model)
 
 
 def test_v117_version_end_without_a_start(tmp_path: pathlib.Path) -> None:
     model = build(tmp_path, {"DimThing": versioned(vt=_col("VERSION_END"))})
-    assert "V117" in codes(model)
+    assert "V504" in codes(model)
 
 
 def test_v118_two_columns_claim_one_versioning_role(
@@ -1903,7 +1903,7 @@ def test_v118_two_columns_claim_one_versioning_role(
             )
         },
     )
-    assert "V118" in codes(model)
+    assert "V505" in codes(model)
 
 
 def test_a_type_1_dimension_is_unique_on_its_natural_key(
@@ -1911,7 +1911,7 @@ def test_a_type_1_dimension_is_unique_on_its_natural_key(
 ) -> None:
     """Type 0 and type 1 keep one row per business entity.
 
-    V106 makes the natural key mandatory and calls it what a loader matches
+    V302 makes the natural key mandatory and calls it what a loader matches
     on. Only type-2 dimensions used to get a constraint, so four of the five
     dimensions in the shipped example carried an identity the database did
     not enforce.
@@ -1943,7 +1943,7 @@ def test_the_natural_key_constraint_rejects_a_repeated_load(
 def test_a_dimension_without_an_scd_gets_no_derived_key(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Silence rather than a guess, and V113 already says why.
+    """Silence rather than a guess, and V502 already says why.
 
     Emitting the natural key alone on a table that turns out to version
     would reject the second version of every row — the constraint wrong in
@@ -1953,7 +1953,7 @@ def test_a_dimension_without_an_scd_gets_no_derived_key(
     del table["annotations"]["varda:scd"]
     model = build(tmp_path, {"DimThing": table})
     assert "UNIQUE" not in generate_sql(model)
-    assert "V113" in codes(model)
+    assert "V502" in codes(model)
 
 
 def test_a_type_2_marked_only_current_is_reported(
@@ -1962,14 +1962,14 @@ def test_a_type_2_marked_only_current_is_reported(
     """`IS_CURRENT` alone discriminates nothing.
 
     It is true of exactly one version, so a key carrying it lets every
-    superseded row repeat. The dimension used to pass V119 and get no
+    superseded row repeat. The dimension used to pass V506 and get no
     constraint, which is the same hole seen from the rule side.
     """
     model = build(
         tmp_path,
         {"DimThing": versioned(cur=_col("IS_CURRENT", "boolean"))},
     )
-    assert "V119" in codes(model)
+    assert "V506" in codes(model)
     assert "UNIQUE" not in generate_sql(model)
 
 
@@ -1977,7 +1977,7 @@ def test_v119_type_2_with_no_versioning_column(
     tmp_path: pathlib.Path,
 ) -> None:
     model = build(tmp_path, {"DimThing": versioned()})
-    assert "V119" in codes(model)
+    assert "V506" in codes(model)
 
 
 def test_type_2_uniqueness_includes_the_version(
@@ -2034,7 +2034,7 @@ def test_v114_rejects_a_repeated_grain_column(
         }
     )
     model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
-    assert "V114" in codes(model)
+    assert "V203" in codes(model)
 
 
 def test_grain_is_checked_off_facts_too(tmp_path: pathlib.Path) -> None:
@@ -2069,7 +2069,7 @@ def test_grain_is_checked_off_facts_too(tmp_path: pathlib.Path) -> None:
         },
     }
     model = build(tmp_path, {"BridgeX": bridge, "DimThing": dimension()})
-    assert "V114" in codes(model)
+    assert "V203" in codes(model)
 
 
 def test_v120_scd_on_a_fact(tmp_path: pathlib.Path) -> None:
@@ -2081,14 +2081,14 @@ def test_v120_scd_on_a_fact(tmp_path: pathlib.Path) -> None:
         }
     )
     model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
-    assert "V120" in codes(model)
+    assert "V104" in codes(model)
 
 
 def test_v120_fact_type_on_a_dimension(tmp_path: pathlib.Path) -> None:
     table = dimension()
     table["annotations"]["varda:fact_type"] = "TRANSACTION"
     model = build(tmp_path, {"DimThing": table})
-    assert "V120" in codes(model)
+    assert "V104" in codes(model)
 
 
 # --- hierarchies -----------------------------------------------------------
@@ -2145,17 +2145,17 @@ def test_a_column_may_sit_in_two_hierarchies(tmp_path: pathlib.Path) -> None:
 
 def test_v121_level_is_not_a_column(tmp_path: pathlib.Path) -> None:
     model = build(tmp_path, {"DimThing": _geo("country", "nosuch")})
-    assert "V121" in codes(model)
+    assert "V601" in codes(model)
 
 
 def test_v122_level_appears_twice(tmp_path: pathlib.Path) -> None:
     model = build(tmp_path, {"DimThing": _geo("country", "region", "region")})
-    assert "V122" in codes(model)
+    assert "V602" in codes(model)
 
 
 def test_v123_one_level_is_not_a_hierarchy(tmp_path: pathlib.Path) -> None:
     model = build(tmp_path, {"DimThing": _geo("country")})
-    assert "V123" in codes(model)
+    assert "V603" in codes(model)
 
 
 def test_v124_two_hierarchies_share_a_name(tmp_path: pathlib.Path) -> None:
@@ -2164,7 +2164,7 @@ def test_v124_two_hierarchies_share_a_name(tmp_path: pathlib.Path) -> None:
         {"name": "geography", "levels": ["country", "city"]}
     )
     model = build(tmp_path, {"DimThing": table})
-    assert "V124" in codes(model)
+    assert "V604" in codes(model)
 
 
 def test_v124_a_hierarchy_without_a_name(tmp_path: pathlib.Path) -> None:
@@ -2173,7 +2173,7 @@ def test_v124_a_hierarchy_without_a_name(tmp_path: pathlib.Path) -> None:
         {"levels": ["country", "region"]}
     ]
     model = build(tmp_path, {"DimThing": table})
-    assert "V124" in codes(model)
+    assert "V604" in codes(model)
 
 
 @pytest.mark.parametrize(
@@ -2192,13 +2192,13 @@ def test_v125_level_role_cannot_roll_up(
             "ADDITIVE"
         )
     model = build(tmp_path, {"DimThing": table})
-    assert "V125" in codes(model)
+    assert "V605" in codes(model)
 
 
 def test_v125_a_natural_key_is_a_legal_leaf(tmp_path: pathlib.Path) -> None:
     """The finest level of a dimension's path is usually its natural key."""
     model = build(tmp_path, {"DimThing": _geo("country", "region", "d_id")})
-    assert "V125" not in codes(model)
+    assert "V605" not in codes(model)
 
 
 def _snowflake(levels: list[str | dict[str, str]]) -> dict[str, Any]:
@@ -2269,7 +2269,7 @@ def test_v125_a_bare_foreign_key_is_not_a_level(
     model = build(
         tmp_path, _snowflake(["country_key", "state_key", "city_name"])
     )
-    found = [f for f in rules.check(model) if f.rule == "V125"]
+    found = [f for f in rules.check(model) if f.rule == "V605"]
     assert found
     # The message has to carry the fix, since the right answer is one dot away.
     assert "country_key.<column of DimCountry>" in found[0].message
@@ -2290,7 +2290,7 @@ def test_v121_a_reference_level_that_does_not_resolve(
     model = build(
         tmp_path, _snowflake([level, "state_key.state_name", "city_name"])
     )
-    found = [f for f in rules.check(model) if f.rule == "V121"]
+    found = [f for f in rules.check(model) if f.rule == "V601"]
     assert found
     assert fragment in found[0].message
 
@@ -2454,7 +2454,7 @@ def test_v127_a_key_that_identifies_nothing(
     tmp_path: pathlib.Path, key: str, fragment: str
 ) -> None:
     model = build(tmp_path, {"DimThing": _keyed(key)})
-    found = [f for f in rules.check(model) if f.rule == "V127"]
+    found = [f for f in rules.check(model) if f.rule == "V607"]
     assert found
     assert fragment in found[0].message
 
@@ -2480,7 +2480,7 @@ def test_a_reference_level_is_keyed_in_the_table_it_names(
         "annotations": {"varda:role": "ATTRIBUTE"}
     }
     model = build(tmp_path, classes)
-    assert "V127" not in codes(model)
+    assert "V607" not in codes(model)
 
 
 def test_a_missing_reference_key_names_the_far_table(
@@ -2496,7 +2496,7 @@ def test_a_missing_reference_key_names_the_far_table(
             ]
         ),
     )
-    found = [f for f in rules.check(model) if f.rule == "V127"]
+    found = [f for f in rules.check(model) if f.rule == "V607"]
     assert found
     assert "not a column of DimCountry" in found[0].message
 
@@ -2520,7 +2520,7 @@ def test_v133_a_bridge_that_references_nothing(
         },
     }
     model = build(tmp_path, {"BridgeLonely": bridge})
-    assert "V133" in codes(model)
+    assert "V405" in codes(model)
 
 
 def test_v133_accepts_a_single_group_key(tmp_path: pathlib.Path) -> None:
@@ -2546,7 +2546,7 @@ def test_v133_accepts_a_single_group_key(tmp_path: pathlib.Path) -> None:
         },
     }
     model = build(tmp_path, {"BridgeGroup": bridge, "DimThing": dimension()})
-    assert "V133" not in codes(model)
+    assert "V405" not in codes(model)
 
 
 def test_v134_a_typo_in_a_structured_annotation(
@@ -2559,7 +2559,7 @@ def test_v134_a_typo_in_a_structured_annotation(
         {"name": "h", "levles": ["cat", "d_id"]}
     ]
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V134"]
+    found = [f for f in rules.check(model) if f.rule == "V004"]
     assert found
     assert "'levles'" in found[0].message
     assert "levels" in found[0].message
@@ -2575,7 +2575,7 @@ def test_v134_reaches_a_typo_inside_a_level(
         {"name": "h", "levels": [{"colunm": "cat", "key": "d_id"}, "d_id"]}
     ]
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V134"]
+    found = [f for f in rules.check(model) if f.rule == "V004"]
     assert found
     assert "varda:hierarchies.levels" in found[0].message
     assert "'colunm'" in found[0].message
@@ -2591,7 +2591,7 @@ def test_v134_is_silent_on_a_well_formed_hierarchy(
         {"name": "h", "description": "why", "levels": ["cat", "d_id"]}
     ]
     model = build(tmp_path, {"DimThing": table})
-    assert "V134" not in codes(model)
+    assert "V004" not in codes(model)
 
 
 # --- unique keys ------------------------------------------------------------
@@ -2672,7 +2672,7 @@ def test_v128_unique_key_names_nothing(tmp_path: pathlib.Path) -> None:
     table = dimension()
     table["unique_keys"] = {"k": {"unique_key_slots": ["d_idd"]}}
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V128"]
+    found = [f for f in rules.check(model) if f.rule == "V303"]
     assert found
     assert "d_idd" in found[0].message
 
@@ -2682,7 +2682,7 @@ def test_v129_business_key_without_a_version(tmp_path: pathlib.Path) -> None:
     table = versioned(vs=_col("VERSION_START"))
     table["unique_keys"] = {"by_id": {"unique_key_slots": ["d_id"]}}
     model = build(tmp_path, {"DimThing": table})
-    assert "V129" in codes(model)
+    assert "V304" in codes(model)
 
 
 def test_v129_ignores_a_key_that_is_already_unique(
@@ -2692,7 +2692,7 @@ def test_v129_ignores_a_key_that_is_already_unique(
     table = versioned(vs=_col("VERSION_START"))
     table["unique_keys"] = {"by_key": {"unique_key_slots": ["d_key"]}}
     model = build(tmp_path, {"DimThing": table})
-    assert "V129" not in codes(model)
+    assert "V304" not in codes(model)
 
 
 def test_v130_a_natural_key_no_unique_key_covers(
@@ -2705,7 +2705,7 @@ def test_v130_a_natural_key_no_unique_key_covers(
         "by_id": {"unique_key_slots": ["d_id", "vs"]},
     }
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V130"]
+    found = [f for f in rules.check(model) if f.rule == "V305"]
     assert found
     assert "gtin" in found[0].subject
 
@@ -2715,7 +2715,7 @@ def test_v130_is_silent_without_declared_keys(
 ) -> None:
     """Without them Varda derives the constraint and the question is moot."""
     model = build(tmp_path, {"DimThing": versioned(vs=_col("VERSION_START"))})
-    assert "V130" not in codes(model)
+    assert "V305" not in codes(model)
 
 
 # ---------------------------------------------------------------------------
@@ -2730,7 +2730,7 @@ def test_v131_two_classes_claiming_one_table_name(
     left["annotations"]["varda:physical_name"] = "dim_shared"
     right["annotations"]["varda:physical_name"] = "dim_shared"
     model = build(tmp_path, {"DimLeft": left, "DimRight": right})
-    assert "V131" in codes(model)
+    assert "V801" in codes(model)
 
 
 def test_v131_catches_a_collision_nobody_declared(
@@ -2746,7 +2746,7 @@ def test_v131_catches_a_collision_nobody_declared(
         tmp_path,
         {"DimCustomer": dimension(), "Dim_Customer": dimension()},
     )
-    found = [f for f in rules.check(model) if f.rule == "V131"]
+    found = [f for f in rules.check(model) if f.rule == "V801"]
     assert len(found) == 1
     assert "derived" in found[0].message
     assert "varda:physical_name" not in found[0].message
@@ -2767,7 +2767,7 @@ def test_v131_catches_names_that_differ_only_in_case(
     left["annotations"]["varda:physical_name"] = "DimThing"
     right["annotations"]["varda:physical_name"] = "dimthing"
     model = build(tmp_path, {"DimLeft": left, "DimRight": right})
-    found = [f for f in rules.check(model) if f.rule == "V131"]
+    found = [f for f in rules.check(model) if f.rule == "V801"]
     assert len(found) == 1
     assert "differ only in case" in found[0].message
     with pytest.raises(duckdb.Error):
@@ -2784,7 +2784,7 @@ def test_v132_two_columns_claiming_one_name(tmp_path: pathlib.Path) -> None:
             }
         }
     model = build(tmp_path, {"DimThing": table})
-    assert "V132" in codes(model)
+    assert "V802" in codes(model)
 
 
 def test_v132_sees_an_inherited_column(tmp_path: pathlib.Path) -> None:
@@ -2812,13 +2812,13 @@ def test_v132_sees_an_inherited_column(tmp_path: pathlib.Path) -> None:
         }
     }
     model = build(tmp_path, {"Base": base, "DimThing": child})
-    assert "V132" in codes(model)
+    assert "V802" in codes(model)
 
 
 def test_a_column_collision_would_not_execute(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Why V132 is an error and not a warning.
+    """Why V802 is an error and not a warning.
 
     Nothing about the model is ambiguous — the DDL is simply illegal, and
     before these rules existed `varda generate` produced it and exited 0.
@@ -2845,7 +2845,7 @@ def test_v126_hierarchy_on_a_fact(tmp_path: pathlib.Path) -> None:
         }
     )
     model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
-    assert "V126" in codes(model)
+    assert "V606" in codes(model)
 
 
 def test_a_malformed_hierarchy_does_not_raise(tmp_path: pathlib.Path) -> None:

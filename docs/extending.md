@@ -152,14 +152,14 @@ An extension may propose a different severity for any rule, including one it
 does not own:
 
 ```python
-EXTENSION = Extension(..., severity_defaults={"V205": "error"})
+EXTENSION = Extension(..., severity_defaults={"V705": "error"})
 ```
 
 Two extensions naming *different* severities for one code is refused, with
 both parties named:
 
 ```
-group wants V205 at 'error' and team wants 'info'. Nothing here can
+group wants V705 at 'error' and team wants 'info'. Nothing here can
 adjudicate that — set it in varda.toml, which overrides both
 ```
 
@@ -170,10 +170,10 @@ a difference between two machines that nothing in either repository explains.
 an upstream cannot:
 
 ```toml title="varda.toml"
-exempt = ["V205"]
+exempt = ["V705"]
 
 [severity]
-V113 = "error"
+V502 = "error"
 ```
 
 There is deliberately **no severity floor** an upstream can set and a team

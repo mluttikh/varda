@@ -78,7 +78,7 @@ classes:
       varda:scd: TYPE_1
       # Each level reaches through a foreign key to the column a reader
       # can actually drill. Writing `country_key` here would be legal YAML
-      # and a path of integers; V125 refuses it and names the fix.
+      # and a path of integers; V605 refuses it and names the fix.
       varda:hierarchies:
         - name: geography
           description: Where a city is, coarsest first.
