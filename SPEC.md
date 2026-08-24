@@ -270,11 +270,11 @@ plugins, and Material for MkDocs reaches end of life on 5 November 2026.
 
 Repository <https://github.com/mluttikh/varda>. PyPI project name `varda`.
 
-There is no documentation site yet. `varda.readthedocs.io` and the bare
-`varda` GitHub organisation are both held by an unrelated bioinformatics
-project, so the natural home is GitHub Pages at
-`mluttikh.github.io/varda` once there is something to publish. Until then
-`README.md` and this file are the documentation.
+The documentation site is GitHub Pages at
+<https://mluttikh.github.io/varda/>, built from `docs/` by
+`.github/workflows/docs.yml`. `varda.readthedocs.io` and the bare `varda`
+GitHub organization are both held by an unrelated bioinformatics project,
+which is why neither is the home.
 
 Releases go out through `.github/workflows/release.yml`, triggered by
 publishing a GitHub release. It re-runs the whole gate, checks the tag
@@ -295,7 +295,7 @@ the first real upload.
 <https://pypi.org/manage/account/publishing/> — add a pending publisher for
 project `varda`, owner `mluttikh`, repository `varda`, workflow
 `release.yml`, environment `pypi`. Until that exists the release workflow
-fails at the upload step, which is the intended behaviour rather than a
+fails at the upload step, which is the intended behavior rather than a
 surprise. Attaching required reviewers to the `pypi` environment in
 repository settings puts a human between a merged tag and a permanent
 upload.

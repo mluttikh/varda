@@ -1,6 +1,6 @@
 # Extending
 
-Varda's core is small on purpose. Cost centres, retention policy, data
+Varda's core is small on purpose. Cost centers, retention policy, data
 classification, ownership — these differ per organization, and none of them
 belong in Varda. The extension mechanism is not bolted on the side; it is the
 reason the core can stay small enough to be correct.
@@ -36,7 +36,7 @@ classes:
       acme:applies_to: table
     attributes:
       cost_center:
-        description: The cost centre that pays for this table's storage.
+        description: The cost center that pays for this table's storage.
         required: true
       retention_days:
         range: integer
@@ -89,7 +89,7 @@ RULES = RuleSet(tag="ACME")
 A = Extension.reader("acme")
 
 
-@RULES.rule("ACME101", "error", "Every table names a cost centre")
+@RULES.rule("ACME101", "error", "Every table names a cost center")
 def acme101(model):
     for table in model.tables:
         if not A.get(table.cls, "cost_center"):
@@ -163,7 +163,7 @@ group wants V205 at 'error' and team wants 'info'. Nothing here can
 adjudicate that — set it in varda.toml, which overrides both
 ```
 
-Resolving that by load order would make behaviour depend on discovery order —
+Resolving that by load order would make behavior depend on discovery order —
 a difference between two machines that nothing in either repository explains.
 
 `varda.toml` overrides everything, because the repository can see itself and

@@ -823,7 +823,7 @@ def v125(model: DimensionalModel) -> Iterator[Finding]:
 #: quantity rather than an identity, and a versioning column separates
 #: versions of one member rather than one member from another. Every other
 #: role identifies something: keys obviously, and an attribute whenever the
-#: modeller says it does.
+#: modeler says it does.
 _NOT_A_KEY = frozenset({"MEASURE"}) | VERSIONING_ROLES
 
 

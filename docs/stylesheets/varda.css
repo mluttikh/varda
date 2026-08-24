@@ -1,6 +1,6 @@
-/* Varda's palette, carried over from the specification page.
-   Cool slate neutrals rather than a warm grey, and a lichen green — the
-   colours a cairn actually is, rather than a hue picked off a palette.
+/* Varda's palette. Cool slate neutrals rather than a warm grey, and a
+   lichen green: muted enough that the three severity colors below stay the
+   loudest thing on a rules page, which is where a reader is scanning.
 
    Material stamps data-md-color-primary / -accent / -scheme on <body>, and
    its own palette.css defines the tokens against those attribute selectors.
@@ -47,7 +47,7 @@
   --md-typeset-a-color:   #6FBFA0;
 }
 
-/* Rule severities. Semantic colour, deliberately separate from the accent —
+/* Rule severities. Semantic color, deliberately separate from the accent —
    a reader scanning the rule list should spot the errors without reading a
    word. */
 .sev-error   { color: #A6483A; }

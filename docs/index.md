@@ -77,7 +77,7 @@ core vocabulary, and it is deliberately the entire core vocabulary — see the
 environment, same model in and same bytes out, so output can be committed and
 diffed.
 
-Anything specific to how *your* organization works — cost centres, retention,
+Anything specific to how *your* organization works — cost centers, retention,
 data classification, ownership — belongs in an
 [extension](extending.md) under your own prefix, and the smallest useful one
 needs no Python at all.
