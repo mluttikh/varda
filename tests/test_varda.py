@@ -2544,6 +2544,124 @@ def test_v130_is_silent_without_declared_keys(
     assert "V130" not in codes(model)
 
 
+# ---------------------------------------------------------------------------
+# Physical names — the collisions no rule used to see
+# ---------------------------------------------------------------------------
+
+
+def test_v131_two_classes_claiming_one_table_name(
+    tmp_path: pathlib.Path,
+) -> None:
+    left, right = dimension(), dimension()
+    left["annotations"]["varda:physical_name"] = "dim_shared"
+    right["annotations"]["varda:physical_name"] = "dim_shared"
+    model = build(tmp_path, {"DimLeft": left, "DimRight": right})
+    assert "V131" in codes(model)
+
+
+def test_v131_catches_a_collision_nobody_declared(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`DimCustomer` and `Dim_Customer` both derive `dim_customer`.
+
+    The message says which side came from an annotation and which from the
+    class name, because "duplicate" alone sends a reader looking for a
+    `varda:physical_name` that is not there.
+    """
+    model = build(
+        tmp_path,
+        {"DimCustomer": dimension(), "Dim_Customer": dimension()},
+    )
+    found = [f for f in rules.check(model) if f.rule == "V131"]
+    assert len(found) == 1
+    assert "derived" in found[0].message
+    assert "varda:physical_name" not in found[0].message
+
+
+def test_v131_catches_names_that_differ_only_in_case(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Quoting does not settle case, and engines disagree about it.
+
+    PostgreSQL treats `"Foo"` and `"foo"` as two tables; DuckDB refuses the
+    second as a duplicate. Varda emits dialect-neutral DDL and cannot know
+    which it will meet, so the pair is refused rather than left to whichever
+    database sees it first. The message says that is what happened, because
+    two names that look different are the confusing case to be told about.
+    """
+    left, right = dimension(), dimension()
+    left["annotations"]["varda:physical_name"] = "DimThing"
+    right["annotations"]["varda:physical_name"] = "dimthing"
+    model = build(tmp_path, {"DimLeft": left, "DimRight": right})
+    found = [f for f in rules.check(model) if f.rule == "V131"]
+    assert len(found) == 1
+    assert "differ only in case" in found[0].message
+    with pytest.raises(duckdb.Error):
+        duckdb.connect().execute(generate_sql(model))
+
+
+def test_v132_two_columns_claiming_one_name(tmp_path: pathlib.Path) -> None:
+    table = dimension()
+    for slot in ("name_one", "name_two"):
+        table["attributes"][slot] = {
+            "annotations": {
+                "varda:role": "ATTRIBUTE",
+                "varda:physical_name": "label",
+            }
+        }
+    model = build(tmp_path, {"DimThing": table})
+    assert "V132" in codes(model)
+
+
+def test_v132_sees_an_inherited_column(tmp_path: pathlib.Path) -> None:
+    """A slot from a parent collides exactly as a local one would.
+
+    Columns are read through `class_induced_slots`, so the emitted table
+    carries both — and a rule reading only `attributes` would miss it.
+    """
+    child = dimension()
+    child["is_a"] = "Base"
+    child["attributes"]["local"] = {
+        "annotations": {
+            "varda:role": "ATTRIBUTE",
+            "varda:physical_name": "label",
+        }
+    }
+    base = {
+        "attributes": {
+            "inherited": {
+                "annotations": {
+                    "varda:role": "ATTRIBUTE",
+                    "varda:physical_name": "label",
+                }
+            }
+        }
+    }
+    model = build(tmp_path, {"Base": base, "DimThing": child})
+    assert "V132" in codes(model)
+
+
+def test_a_column_collision_would_not_execute(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Why V132 is an error and not a warning.
+
+    Nothing about the model is ambiguous — the DDL is simply illegal, and
+    before these rules existed `varda generate` produced it and exited 0.
+    """
+    table = dimension()
+    for slot in ("name_one", "name_two"):
+        table["attributes"][slot] = {
+            "annotations": {
+                "varda:role": "ATTRIBUTE",
+                "varda:physical_name": "label",
+            }
+        }
+    sql = generate_sql(build(tmp_path, {"DimThing": table}))
+    with pytest.raises(duckdb.Error):
+        duckdb.connect().execute(sql)
+
+
 def test_v126_hierarchy_on_a_fact(tmp_path: pathlib.Path) -> None:
     fct = _fact(
         **{
