@@ -2,6 +2,12 @@
 
 **Dimensional modeling for [LinkML](https://linkml.io).**
 
+!!! warning "Experimental"
+    Varda is published so it can be tried, not because the design has
+    settled. The vocabulary will change, sometimes in ways that break a
+    model written against an earlier version. Pin `varda~=0.1.0` — see
+    [Status](#status).
+
 Varda is a *profile* of LinkML: a small vocabulary that lets you say a class
 is a fact table, that a column is a semi-additive measure, that a dimension
 keeps history. It then checks those claims and generates from them.
@@ -64,7 +70,7 @@ core vocabulary, and it is deliberately the entire core vocabulary — see the
 | | |
 | --- | --- |
 | `V001`–`V003` | The annotations themselves — typos, bad enum values, unknown prefixes |
-| `V101`–`V113` | Structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
+| `V101`–`V130` | Structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
 | `V201`–`V206` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
 
 **Two generators**, `sql` and `docs`. Both deterministic: no timestamps, no
@@ -85,3 +91,19 @@ wrong, to someone who will act on it. Summing an account balance across time,
 or averaging a ratio, produces output that passes every sanity check a person
 applies by eye. That is why `varda:additivity` is required on every measure
 and why a semi-additive measure must name the dimension it cannot cross.
+
+## Status
+
+**0.1.0 — experimental.** The code is tested and the generators are
+deterministic; what is unsettled is the vocabulary itself. Expect it to change,
+sometimes in ways that break a model written against an earlier version. No
+warehouse of real size has been modeled in Varda yet, and no third party has
+written an extension.
+
+The cost of a break is bounded. A Varda model is annotated YAML, so it is a
+find-and-replace over your schema rather than a migration of anything you have
+loaded, and the model stays an ordinary LinkML schema either way.
+
+Two things are settled. Rule codes are permanent: none is renumbered, and a
+retired one is deleted rather than reused. And Varda will not grow syntax or
+fork the metamodel — the annotation-only design is the premise, not a stage.

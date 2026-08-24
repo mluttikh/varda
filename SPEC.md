@@ -1,7 +1,8 @@
 # Varda — implementation specification
 
 **Version 0.1.0 · status: reference implementation complete, ready to hand
-over**
+over. The vocabulary it implements is experimental and will change; 1.0 is
+where that stops.**
 
 This document is the brief for whoever takes Varda forward. It says what
 exists, what was deliberately left out, which decisions must not be quietly

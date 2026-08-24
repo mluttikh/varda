@@ -4,8 +4,13 @@
 [![PyPI](https://img.shields.io/pypi/v/varda)](https://pypi.org/project/varda/)
 [![Python](https://img.shields.io/pypi/pyversions/varda)](https://pypi.org/project/varda/)
 [![Docs](https://img.shields.io/badge/docs-mluttikh.github.io%2Fvarda-2F6B57)](https://mluttikh.github.io/varda/)
+[![Status: experimental](https://img.shields.io/badge/status-experimental-orange)](#status)
 
 **Dimensional modeling for [LinkML](https://linkml.io).**
+
+> **Experimental.** Varda is published so it can be tried, not because the
+> design has settled. The vocabulary will change, sometimes in ways that break
+> a model written against an earlier version. Pin `varda~=0.1.0`.
 
 Varda is a *profile* of LinkML: a small vocabulary that lets you say a class
 is a fact table, that a column is a semi-additive measure, that a dimension
@@ -142,10 +147,23 @@ failed, `2` the invocation was wrong.
 
 ## Status
 
-**0.1.0 — alpha.** The vocabulary and rule codes are stable enough to build
-on; rule codes will not be renumbered. Analytical functions, model diffing,
-lineage and the drift gate are deliberately not here yet — see `SPEC.md` for
-what is deferred and why.
+**0.1.0 — experimental.** Published so it can be tried, not because the design
+has settled. Expect the vocabulary to change, sometimes in ways that break a
+model written against an earlier version. No warehouse of real size has been
+modeled in it yet, and no third party has written an extension. Pin it:
+
+```
+varda~=0.1.0
+```
+
+The cost of a break is bounded. A Varda model is annotated YAML, so a break is
+a find-and-replace over your schema rather than a migration of anything you
+have loaded, and the model stays an ordinary LinkML schema either way —
+`gen-pydantic`, `gen-owl` and the rest carry on regardless.
+
+Two things are settled. Rule codes are permanent: none is renumbered, and a
+retired one is deleted rather than reused. And Varda will not grow syntax or
+fork the metamodel — the annotation-only design is the premise, not a stage.
 
 ## Building the documentation
 
