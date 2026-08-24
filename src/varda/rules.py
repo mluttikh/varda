@@ -587,23 +587,30 @@ def v118(model: DimensionalModel) -> Iterator[Finding]:
 
 @RULES.rule("V119", "warning", "A type-2 dimension says how it versions")
 def v119(model: DimensionalModel) -> Iterator[Finding]:
-    """Flag a type-2 dimension with no versioning column marked.
+    """Flag a type-2 dimension nothing can tell the versions of apart.
 
-    Type 2 keeps a row per change, so something must distinguish those rows
-    — a period, a flag, a counter. Varda does not insist which, because the
-    field uses all three and calling any of them mandatory would reject
-    working designs. It does insist that one of them be *named*, because a
-    dimension that versions by a mechanism nobody declared cannot have its
-    uniqueness generated or its current row found by anything but guesswork.
+    Type 2 keeps a row per change, so something must distinguish those rows.
+    Varda does not insist on a mechanism — the field uses a period, a flag
+    and a counter, and calling any one mandatory would reject working
+    designs. It insists that a *discriminator* be named, because a dimension
+    versioning by a mechanism nobody declared cannot have its uniqueness
+    generated or its current row found by anything but guesswork.
+
+    A start instant and a counter discriminate; `IS_CURRENT` does not. It is
+    true of exactly one version, so a key carrying it permits every superseded
+    row to repeat — the constraint would be there and mean nothing. All three
+    strategies Varda documents pair the flag with a start for this reason.
     """
     for table in model.dimensions:
-        if table.scd == "TYPE_2" and not table.versioning:
+        marks = (*table.version_starts, *table.version_numbers)
+        if table.scd == "TYPE_2" and not marks:
             yield Finding(
                 "V119",
                 "warning",
                 str(table),
-                "TYPE_2 but no VERSION_START, IS_CURRENT or VERSION_NUMBER; "
-                "nothing marks one version off from another",
+                "TYPE_2 but no VERSION_START or VERSION_NUMBER; nothing "
+                "tells one version from another, so no uniqueness can be "
+                "generated (IS_CURRENT alone cannot: it marks one row)",
             )
 
 

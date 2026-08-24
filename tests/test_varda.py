@@ -1784,6 +1784,73 @@ def test_v118_two_columns_claim_one_versioning_role(
     assert "V118" in codes(model)
 
 
+def test_a_type_1_dimension_is_unique_on_its_natural_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Type 0 and type 1 keep one row per business entity.
+
+    V106 makes the natural key mandatory and calls it what a loader matches
+    on. Only type-2 dimensions used to get a constraint, so four of the five
+    dimensions in the shipped example carried an identity the database did
+    not enforce.
+    """
+    for scd in ("TYPE_0", "TYPE_1"):
+        table = dimension()
+        table["annotations"]["varda:scd"] = scd
+        sql = generate_sql(build(tmp_path, {"DimThing": table}))
+        assert 'UNIQUE ("d_id")' in sql, scd
+
+
+def test_the_natural_key_constraint_rejects_a_repeated_load(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The constraint does its job, not merely appear in the file.
+
+    A uniqueness claim is only worth generating if the database refuses the
+    second row, so this loads one and asks it to.
+    """
+    model = build(tmp_path, {"DimThing": dimension()})
+    con = duckdb.connect()
+    con.execute(generate_sql(model))
+    insert = 'INSERT INTO "mart"."dim_thing" ("d_key", "d_id") VALUES'
+    con.execute(f"{insert} (1, 'abc')")
+    with pytest.raises(duckdb.ConstraintException):
+        con.execute(f"{insert} (2, 'abc')")
+
+
+def test_a_dimension_without_an_scd_gets_no_derived_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Silence rather than a guess, and V113 already says why.
+
+    Emitting the natural key alone on a table that turns out to version
+    would reject the second version of every row — the constraint wrong in
+    the direction that looks like broken source data.
+    """
+    table = dimension()
+    del table["annotations"]["varda:scd"]
+    model = build(tmp_path, {"DimThing": table})
+    assert "UNIQUE" not in generate_sql(model)
+    assert "V113" in codes(model)
+
+
+def test_a_type_2_marked_only_current_is_reported(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`IS_CURRENT` alone discriminates nothing.
+
+    It is true of exactly one version, so a key carrying it lets every
+    superseded row repeat. The dimension used to pass V119 and get no
+    constraint, which is the same hole seen from the rule side.
+    """
+    model = build(
+        tmp_path,
+        {"DimThing": versioned(cur=_col("IS_CURRENT", "boolean"))},
+    )
+    assert "V119" in codes(model)
+    assert "UNIQUE" not in generate_sql(model)
+
+
 def test_v119_type_2_with_no_versioning_column(
     tmp_path: pathlib.Path,
 ) -> None:
