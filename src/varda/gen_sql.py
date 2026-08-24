@@ -1,8 +1,9 @@
 """SQL DDL generation.
 
 Emits ``CREATE TABLE`` for every table in the model, in an order that lets the
-whole file run against an empty database: dimensions first, then bridges, then
-facts, because a foreign key cannot be declared before its target exists.
+whole file run against an empty database: every table follows the ones it
+references, because a foreign key cannot be declared before its target exists.
+Facts fall last on their own, since nothing may reference a fact.
 
 Nothing here is timestamped and nothing depends on the environment. That is
 not a stylistic preference — a generated file that changes when nothing about
@@ -66,9 +67,68 @@ def _comment(text: str, label: str = "") -> list[str]:
     return [f"-- {line}" for line in textwrap.wrap(body, width=77)]
 
 
+def _pending(table: Table, remaining: dict[str, Table]) -> set[str]:
+    """Name the tables this one references that are not yet created.
+
+    A self-reference is not pending. `FOREIGN KEY (manager_key) REFERENCES
+    dim_employee` inside `CREATE TABLE dim_employee` is legal SQL, and a
+    recursive dimension is common enough that treating it as a cycle would
+    refuse a normal model.
+    """
+    targets = {(c.references or "") for c in table.foreign_keys}
+    return (targets & set(remaining)) - {table.name}
+
+
+def _by_dependency(tables: tuple[Table, ...]) -> list[Table]:
+    """Order tables so every reference target precedes the table using it.
+
+    Sorting by name is not enough once one dimension references another,
+    which is what a snowflake is: `DimCity` sorts before `DimState` and
+    references it, so the emitted file creates a table whose target does not
+    exist yet and stops there.
+
+    Ties are broken by name, so a model with no dimension-to-dimension
+    references emits in exactly the order it did before — a flat star sees no
+    diff.
+    """
+    remaining = {t.name: t for t in tables}
+    out: list[Table] = []
+    while remaining:
+        ready = sorted(
+            name
+            for name, table in remaining.items()
+            if not _pending(table, remaining)
+        )
+        if not ready:
+            # Every remaining table waits on another one. With the foreign
+            # keys inline in CREATE TABLE there is no order that works, so
+            # this raises rather than emitting a file that cannot run —
+            # the same treatment an unmapped range gets. Breaking the cycle
+            # needs ALTER TABLE after creation, which is a feature and not
+            # a fallback.
+            names = ", ".join(sorted(remaining))
+            msg = (
+                f"foreign keys form a cycle among: {names}. "
+                f"No CREATE TABLE order satisfies them."
+            )
+            raise GenerationError(msg)
+        out += [remaining.pop(name) for name in ready]
+    return out
+
+
 def _ordered(model: DimensionalModel) -> list[Table]:
-    """Order tables so every foreign key's target is already created."""
-    return [*model.dimensions, *model.bridges, *model.facts]
+    """Order tables so every foreign key's target is already created.
+
+    Dimensions and bridges are ordered together rather than as two blocks.
+    A bridge references dimensions, but a dimension may reference a bridge
+    too — V110 permits both — and two fixed blocks cannot express that.
+    Facts come last and need no ordering among themselves, because nothing
+    may reference a fact.
+    """
+    return [
+        *_by_dependency((*model.dimensions, *model.bridges)),
+        *model.facts,
+    ]
 
 
 def _column_line(column: Column) -> str:

@@ -1153,6 +1153,101 @@ def test_sql_orders_dimensions_before_facts() -> None:
     assert sql.index("dim_customer (") < sql.index("fct_sale (")
 
 
+def _creates_before_references(sql: str, model: DimensionalModel) -> None:
+    """Assert every table is created after everything it references.
+
+    Written over the model rather than against named pairs, because the
+    ordering bug this guards was invisible to a test that asserted one pair:
+    dimensions did precede facts while a dimension preceded the dimension it
+    referenced.
+    """
+    where = {t.name: sql.index(f"{t.physical} (") for t in model.tables}
+    for table in model.tables:
+        for column in table.foreign_keys:
+            target = model.table(column.references or "")
+            if target is None or target.name == table.name:
+                continue
+            assert where[target.name] < where[table.name], (
+                f"{table.physical} references {target.physical}, "
+                f"which is created after it"
+            )
+
+
+def test_sql_creates_a_snowflake_in_dependency_order(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A dimension referencing another is created after it.
+
+    Sorting dimensions by name puts DimCity first and DimState third, so the
+    file created a table whose target did not exist and stopped there. The
+    reference form of a hierarchy level exists for exactly this arrangement,
+    so it is not a corner the generator can decline to handle.
+    """
+    model = build(
+        tmp_path,
+        _snowflake(["country_key.country_name", "state_key.state_name"]),
+    )
+    _creates_before_references(generate_sql(model), model)
+
+
+def test_sql_orders_a_flat_star_as_before() -> None:
+    """Dependency ordering breaks ties by name, so a star does not move."""
+    sql = generate_sql(DimensionalModel.load(RETAIL))
+    tables = ["dim_customer", "dim_date", "dim_product", "dim_segment"]
+    positions = [sql.index(f"{name} (") for name in tables]
+    assert positions == sorted(positions)
+
+
+def test_sql_allows_a_dimension_to_reference_itself(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A recursive dimension is not a cycle.
+
+    `FOREIGN KEY (manager_key) REFERENCES dim_employee` inside its own
+    CREATE TABLE is legal SQL, and a reporting line is a normal thing to
+    model, so refusing it as unorderable would reject a working design.
+    """
+    employee = dimension()
+    employee["attributes"]["manager_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimEmployee",
+        },
+    }
+    sql = generate_sql(build(tmp_path, {"DimEmployee": employee}))
+    assert "FOREIGN KEY (manager_key) REFERENCES mart.dim_employee" in sql
+
+
+def test_sql_refuses_a_cycle_between_dimensions(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two dimensions referencing each other have no legal emission order.
+
+    Raising names both tables. Emitting them in name order would produce a
+    file that fails in the database instead, which is the failure this whole
+    ordering exists to prevent.
+    """
+    left, right = dimension(), dimension()
+    left["attributes"]["r_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimRight",
+        },
+    }
+    right["attributes"]["l_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimLeft",
+        },
+    }
+    model = build(tmp_path, {"DimLeft": left, "DimRight": right})
+    with pytest.raises(GenerationError, match="DimLeft, DimRight"):
+        generate_sql(model)
+
+
 def test_sql_emits_foreign_keys() -> None:
     sql = generate_sql(DimensionalModel.load(RETAIL))
     assert (
