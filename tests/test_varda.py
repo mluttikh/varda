@@ -35,12 +35,19 @@ RETAIL = pathlib.Path(__file__).parents[1] / "examples" / "retail.yaml"
 # ---------------------------------------------------------------------------
 
 
-def build(tmp_path: pathlib.Path, classes: dict[str, Any]) -> DimensionalModel:
+def build(
+    tmp_path: pathlib.Path,
+    classes: dict[str, Any],
+    imports: list[str] | None = None,
+) -> DimensionalModel:
     """Write a minimal LinkML schema and load it as a model.
 
     Tests state only the classes they care about. Everything a rule needs to
     be *provoked* is in the class; everything else is boilerplate that would
     otherwise be repeated thirty times and read past.
+
+    Loaded through the import map, the way the CLI loads one, so a test can
+    write ``imports=["varda"]`` and resolve the installed profile.
     """
     schema = {
         "id": "https://example.org/t",
@@ -51,12 +58,12 @@ def build(tmp_path: pathlib.Path, classes: dict[str, Any]) -> DimensionalModel:
         },
         "default_prefix": "t",
         "default_range": "string",
-        "imports": ["linkml:types"],
+        "imports": ["linkml:types", *(imports or [])],
         "classes": classes,
     }
     path = tmp_path / "t.yaml"
     path.write_text(yaml.safe_dump(schema), encoding="utf-8")
-    return DimensionalModel.load(path)
+    return DimensionalModel.load(path, importmap=registry.importmap())
 
 
 def codes(model: DimensionalModel) -> set[str]:
@@ -180,6 +187,46 @@ def test_columns_include_inherited(tmp_path: pathlib.Path) -> None:
     table = model.table("DimThing")
     assert table is not None
     assert "audit_ts" in {c.name for c in table.columns}
+
+
+def test_a_model_may_import_the_profile(tmp_path: pathlib.Path) -> None:
+    """`imports: - varda` resolves and changes nothing about the model.
+
+    The reason `varda importmap` exists. A profile is an ordinary LinkML
+    schema, so importing it brings its classes into the model's view — and
+    the classes declaring the vocabulary must not become tables. Checked
+    end to end rather than against `is_model_object` alone, because the
+    symptom was sixteen findings, not one predicate.
+    """
+    model = build(tmp_path, {"DimThing": dimension()}, imports=["varda"])
+    assert [t.name for t in model.tables] == ["DimThing"]
+    assert codes(model) == set()
+
+
+def test_a_class_declaring_vocabulary_is_not_a_table(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Flag a class that declares annotations rather than using them.
+
+    Matched across prefixes, so an extension's own declaration class is
+    excluded on the same terms as Varda's — an extension that had to be
+    special-cased here would not be using the mechanism the core uses.
+    """
+    model = build(
+        tmp_path,
+        {
+            "DimThing": dimension(),
+            "MyTableAnnotations": {
+                "annotations": {"varda:applies_to": "table"},
+                "attributes": {"whatever": {"range": "string"}},
+            },
+            "AcmeTableAnnotations": {
+                "annotations": {"acme:applies_to": "table"},
+                "attributes": {"cost_center": {"range": "string"}},
+            },
+        },
+    )
+    assert [t.name for t in model.tables] == ["DimThing"]
 
 
 # ---------------------------------------------------------------------------

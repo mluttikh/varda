@@ -31,7 +31,7 @@ reason the core can stay small enough to be correct.
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
-| `anns.py` | ~130 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
+| `anns.py` | ~150 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
 | `model.py` | ~550 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
 | `ext.py` | ~180 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
 | `registry.py` | ~590 | Discovery, validation, lookup. Where colliding extensions are refused. |
@@ -41,13 +41,13 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~25 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~280 | Five commands. |
 
-**3,226 lines of source**: 1,901 of code, 624 of docstrings, 159 of
-comment, 542 blank. The prose share is deliberate and is house style —
+**3,246 lines of source**: 1,905 of code, 632 of docstrings, 164 of
+comment, 545 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 12 annotations, 5 enums — and 151 tests in
-2,247 lines.
+Plus `profile/varda.yaml` — 12 annotations, 5 enums — and 153 tests in
+2,294 lines.
 
 ### The four seams
 
