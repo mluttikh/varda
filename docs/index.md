@@ -44,7 +44,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 41 rules (varda 0.1.0): 0 errors, 0 warnings
+8 tables checked against 43 rules (varda 0.1.0): 0 errors, 0 warnings
 ```
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -65,12 +65,12 @@ That is the whole reason for choosing annotations over a new format.
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 
-**Forty-one rules**, in three families:
+**Forty-three rules**, in three families:
 
 | | |
 | --- | --- |
 | `V001`–`V003` | The annotations themselves — typos, bad enum values, unknown prefixes |
-| `V101`–`V132` | Structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
+| `V101`–`V134` | Structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
 | `V201`–`V206` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
 
 **Two generators**, `sql` and `docs`. Both deterministic: no timestamps, no

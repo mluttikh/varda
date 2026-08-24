@@ -2162,7 +2162,7 @@ def test_v125_a_natural_key_is_a_legal_leaf(tmp_path: pathlib.Path) -> None:
     assert "V125" not in codes(model)
 
 
-def _snowflake(levels: list[str]) -> dict[str, Any]:
+def _snowflake(levels: list[str | dict[str, str]]) -> dict[str, Any]:
     """Build a city/state/country snowflake with one hierarchy over it.
 
     The coarser levels are their own tables, which is the arrangement that
@@ -2418,6 +2418,141 @@ def test_v127_a_key_that_identifies_nothing(
     found = [f for f in rules.check(model) if f.rule == "V127"]
     assert found
     assert fragment in found[0].message
+
+
+def test_a_reference_level_is_keyed_in_the_table_it_names(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`column` and `key` describe one level, so they resolve together.
+
+    A level written `country_key.country_name` is named by DimCountry, so a
+    key declared for it is a column of DimCountry. Looking in the near table
+    reported `country_code` missing from DimCity, where it was never meant
+    to be.
+    """
+    classes = _snowflake(
+        [
+            {"column": "country_key.country_name", "key": "country_code"},
+            "city_name",
+        ]
+    )
+    # Only DimCountry has it, so resolving in DimCity cannot pass by luck.
+    classes["DimCountry"]["attributes"]["country_code"] = {
+        "annotations": {"varda:role": "ATTRIBUTE"}
+    }
+    model = build(tmp_path, classes)
+    assert "V127" not in codes(model)
+
+
+def test_a_missing_reference_key_names_the_far_table(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The message sends a reader to the table the key belongs in."""
+    model = build(
+        tmp_path,
+        _snowflake(
+            [
+                {"column": "country_key.country_name", "key": "nonsense"},
+                "city_name",
+            ]
+        ),
+    )
+    found = [f for f in rules.check(model) if f.rule == "V127"]
+    assert found
+    assert "not a column of DimCountry" in found[0].message
+
+
+# --- bridges and structured annotations -------------------------------------
+
+
+def test_v133_a_bridge_that_references_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    bridge = {
+        "annotations": {"varda:role": "BRIDGE"},
+        "attributes": {
+            "weight": {
+                "range": "decimal",
+                "annotations": {
+                    "varda:role": "MEASURE",
+                    "varda:additivity": "ADDITIVE",
+                },
+            }
+        },
+    }
+    model = build(tmp_path, {"BridgeLonely": bridge})
+    assert "V133" in codes(model)
+
+
+def test_v133_accepts_a_single_group_key(tmp_path: pathlib.Path) -> None:
+    """Kimball's group-key bridge carries one foreign key, not two.
+
+    The fact points at a group and the bridge maps that group to a
+    dimension, so demanding a pair would refuse a standard design.
+    """
+    bridge = {
+        "annotations": {"varda:role": "BRIDGE"},
+        "attributes": {
+            "group_key": {
+                "range": "integer",
+                "annotations": {"varda:role": "DEGENERATE_DIMENSION"},
+            },
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            },
+        },
+    }
+    model = build(tmp_path, {"BridgeGroup": bridge, "DimThing": dimension()})
+    assert "V133" not in codes(model)
+
+
+def test_v134_a_typo_in_a_structured_annotation(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`levles` was reported as a hierarchy with zero levels."""
+    table = dimension()
+    table["attributes"]["cat"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    table["annotations"]["varda:hierarchies"] = [
+        {"name": "h", "levles": ["cat", "d_id"]}
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V134"]
+    assert found
+    assert "'levles'" in found[0].message
+    assert "levels" in found[0].message
+
+
+def test_v134_reaches_a_typo_inside_a_level(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`colunm` was reported as ``level '' is not a column``."""
+    table = dimension()
+    table["attributes"]["cat"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    table["annotations"]["varda:hierarchies"] = [
+        {"name": "h", "levels": [{"colunm": "cat", "key": "d_id"}, "d_id"]}
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V134"]
+    assert found
+    assert "varda:hierarchies.levels" in found[0].message
+    assert "'colunm'" in found[0].message
+
+
+def test_v134_is_silent_on_a_well_formed_hierarchy(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A bare string level is not a mapping and has no fields to check."""
+    table = dimension()
+    table["attributes"]["cat"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    table["annotations"]["varda:hierarchies"] = [
+        {"name": "h", "description": "why", "levels": ["cat", "d_id"]}
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    assert "V134" not in codes(model)
 
 
 # --- unique keys ------------------------------------------------------------
