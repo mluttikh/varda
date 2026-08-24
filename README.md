@@ -52,7 +52,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 41 rules (varda 0.1.0): 0 errors, 0 warnings
+8 tables checked against 43 rules (varda 0.1.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -76,12 +76,12 @@ columns — `role`, `references`, `additivity`, `semi_additive_over`,
 vocabulary, and it is deliberately the whole core vocabulary. Units are
 LinkML's own `unit`, which Varda reads rather than restates.
 
-**Forty-one rules** that catch the mistakes worth catching:
+**Forty-three rules** that catch the mistakes worth catching:
 
 | | |
 | --- | --- |
 | `V001`–`V003` | the annotations themselves — typos, bad enum values, unknown prefixes |
-| `V101`–`V132` | structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
+| `V101`–`V134` | structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
 | `V201`–`V206` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
 
 The `V2xx` family exists because additivity is where the expensive errors

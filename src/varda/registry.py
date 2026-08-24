@@ -495,6 +495,44 @@ def annotation_enum(target: Target, tag: str) -> str | None:
     return None
 
 
+@cache
+def annotation_shape(target: Target, tag: str) -> dict[str, str] | None:
+    """Name the fields a structured annotation may carry, and their ranges.
+
+    ``None`` when the annotation's range is a scalar or an enum, which is the
+    common case — only an annotation whose range is a class declared in the
+    same profile has a shape to check against.
+    """
+    prefix, _, name = tag.partition(":")
+    for ext, cls in _annotation_classes(target):
+        if ext.prefix != prefix:
+            continue
+        attr = (cls.attributes or {}).get(name)
+        if attr is not None:
+            return structured_shape(prefix, str(attr.range or ""))
+    return None
+
+
+@cache
+def structured_shape(prefix: str, name: str) -> dict[str, str] | None:
+    """Name the fields of one structured range, and the range of each.
+
+    ``None`` when the extension owning ``prefix`` declares no class by that
+    name, which is how a scalar range and a typo are told apart.
+    """
+    for ext in extensions():
+        if ext.prefix != prefix or ext.profile_view is None:
+            continue
+        cls = ext.profile_view.schema.classes.get(name)
+        if cls is None:
+            return None
+        return {
+            str(field): str(attr.range or "")
+            for field, attr in (cls.attributes or {}).items()
+        }
+    return None
+
+
 def _annotation_classes(target: Target) -> Iterator[tuple[Extension, Any]]:
     """Walk the annotation classes that apply to one kind of object."""
     for ext in extensions():

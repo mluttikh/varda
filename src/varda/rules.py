@@ -18,6 +18,7 @@ Renumbering a rule is a breaking change to the humans.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -823,8 +824,21 @@ def v125(model: DimensionalModel) -> Iterator[Finding]:
 #: quantity rather than an identity, and a versioning column separates
 #: versions of one member rather than one member from another. Every other
 #: role identifies something: keys obviously, and an attribute whenever the
-#: modeller says it does.
+#: modeler says it does.
 _NOT_A_KEY = frozenset({"MEASURE"}) | VERSIONING_ROLES
+
+
+def _key_owner(table: Table, level: Level) -> str:
+    """Name the table a level's declared key must be a column of.
+
+    The one the level's column came from. `column` and `key` describe one
+    level, so a level written `country_key.country_name` is named and
+    identified by DimCountry, and reporting DimCity would send a reader to
+    look for the key where it was never meant to be.
+    """
+    if level.is_reference and level.via is not None and level.via.references:
+        return level.via.references
+    return table.name
 
 
 @RULES.rule("V127", "error", "A declared level key identifies")
@@ -835,6 +849,10 @@ def v127(model: DimensionalModel) -> Iterator[Finding]:
     is it called". A key column that does not exist identifies nothing, and
     one holding a measure or a version marker identifies the wrong thing.
 
+    A key is looked for in whichever table supplied the level's column, so a
+    level reached through a foreign key is keyed in the dimension it names
+    rather than in the near table.
+
     Whether the columns are jointly unique is not checked, for the same
     reason the grain sentence is not: it is a claim about data.
     """
@@ -844,14 +862,14 @@ def v127(model: DimensionalModel) -> Iterator[Finding]:
                 name = level.declared_key
                 if not name:
                     continue
-                column = table.column(name)
+                column = level.key
                 if column is None:
                     yield Finding(
                         "V127",
                         "error",
                         str(hierarchy),
                         f"level {level.spec!r} is keyed on {name!r}, "
-                        f"which is not a column of {table.name}",
+                        f"which is not a column of {_key_owner(table, level)}",
                     )
                 elif column.role in _NOT_A_KEY:
                     yield Finding(
@@ -1055,6 +1073,85 @@ def v132(model: DimensionalModel) -> Iterator[Finding]:
                 f"{what} claimed by columns {who}; "
                 f"one name cannot be two columns",
             )
+
+
+@RULES.rule("V133", "error", "A bridge references something")
+def v133(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a bridge with no foreign key.
+
+    A bridge exists to resolve a many-to-many. One referencing nothing
+    relates nothing, and V107 makes the same demand of a fact for the same
+    reason: a table whose whole purpose is to connect others must name at
+    least one.
+
+    One rather than two, deliberately. The obvious reading of a bridge is
+    two keys and a weight, but Kimball's group-key form carries only one —
+    the fact points at a group, and the bridge maps that group to a
+    dimension — so requiring a pair would refuse a standard design.
+    """
+    for table in model.bridges:
+        if table.foreign_keys:
+            continue
+        yield Finding(
+            "V133",
+            "error",
+            str(table),
+            "no FOREIGN_KEY column; a bridge resolves a many-to-many, and "
+            "one that references nothing resolves nothing",
+        )
+
+
+@RULES.rule("V134", "error", "Structured annotations use declared fields")
+def v134(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a field name inside a structured annotation that is not declared.
+
+    V001 catches a misspelled annotation *name*, and stops there. One level
+    down the same typo is just as silent and reads worse: `levles:` for
+    `levels:` was reported as a hierarchy with zero levels, and `colunm:` for
+    `column:` as ``level '' is not a column``. Neither message names the
+    mistake, and both describe a model nobody wrote.
+
+    Checked against the profile that declares the range, so an extension
+    introducing its own structured annotation is checked on the same terms as
+    `varda:hierarchies`.
+    """
+    for subject, target, tag, value in _annotated(model):
+        shape = registry.annotation_shape(target, tag)
+        if shape is None:
+            continue  # a scalar or an enum; V002's business if anything
+        prefix = tag.split(":", 1)[0]
+        for path, unknown, expected in _stray_fields(value, shape, prefix):
+            yield Finding(
+                "V134",
+                "error",
+                subject,
+                f"{tag}{path} has no field {unknown!r}; "
+                f"expected one of {', '.join(expected)}",
+            )
+
+
+def _stray_fields(
+    value: Any, shape: dict[str, str], prefix: str, path: str = ""
+) -> Iterator[tuple[str, str, list[str]]]:
+    """Walk a structured value, yielding every field its range does not name.
+
+    Recurses wherever a declared field's own range is structured, which is
+    how a typo inside a hierarchy's `levels` is reached.
+    """
+    entries = value if isinstance(value, list) else [value]
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue  # a bare level is a string, and legal
+        for key, nested in entry.items():
+            name = str(key)
+            if name not in shape:
+                yield path, name, sorted(shape)
+                continue
+            deeper = registry.structured_shape(prefix, shape[name])
+            if deeper:
+                yield from _stray_fields(
+                    nested, deeper, prefix, f"{path}.{name}"
+                )
 
 
 # ---------------------------------------------------------------------------

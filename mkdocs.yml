@@ -22,13 +22,13 @@ theme:
     - search.highlight
     - toc.follow
   palette:
-    # Colours are set in stylesheets/varda.css rather than by naming one of
-    # Material's built-in hues, so the docs match the specification page:
-    # cool slate neutrals and a lichen green, which is where a cairn's own
-    # palette actually is.
+    # Colors are set in stylesheets/varda.css rather than by naming one of
+    # Material's built-in hues: cool slate neutrals and a lichen green,
+    # which keeps the accent legible on both schemes without competing with
+    # the severity colors the rules pages depend on.
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      # `custom` is not a colour Material ships; it is the hook that makes it
+      # `custom` is not a color Material ships; it is the hook that makes it
       # stamp data-md-color-primary="custom" on <body>, which is what lets
       # stylesheets/varda.css define the palette. Without it Material stamps
       # "indigo" and its own block shadows ours from further down the tree.

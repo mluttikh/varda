@@ -91,7 +91,9 @@ class Level:
     same parent*, which is a different question from what names it. It is the
     foreign key for a reference level and the naming column otherwise, and a
     model declares one only when neither is right — a level showing
-    `product_name` but identified by `sku`.
+    `product_name` but identified by `sku`. A declared key names a column of
+    whichever table supplied ``column``, which for a reference level is the
+    dimension reached through the key rather than the near one.
 
     ``identity`` is what tells one member from every other: this level's key
     preceded by the key of every coarser level. `city_name` holds
@@ -161,14 +163,21 @@ class Hierarchy:
         near = self.table.column(head)
         column = near
         via = None
+        owner = self.table
         if dot:
             via = near
             column = None
             if near is not None and near.references:
                 found = self.table.model.table(near.references)
+                owner = found or self.table
                 column = found.column(tail) if found is not None else None
         if declared_key:
-            key = self.table.column(declared_key)
+            # Looked up wherever the naming column came from. `column` and
+            # `key` describe one level, so a level reached through a foreign
+            # key is named and identified by the same dimension — asking for
+            # the key on the near table would report `country_code` missing
+            # from DimCity when it was never meant to be there.
+            key = owner.column(declared_key)
         else:
             key = via if dot else column
         return Level(

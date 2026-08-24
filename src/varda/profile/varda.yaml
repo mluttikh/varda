@@ -5,7 +5,7 @@
 # The reason is that this IRI is copied into the `prefixes:` block of every
 # model anyone writes, and into every RDF graph generated from one. It can
 # therefore never change. A domain can lapse, be sold, or outlive the
-# organisation that registered it, and a lapsed domain baked into published
+# organization that registered it, and a lapsed domain baked into published
 # schemas is unrecoverable. w3id separates the identifier, which is
 # permanent, from the redirect target, which is a one-line change.
 #
@@ -110,8 +110,15 @@ enums:
           window — must be unique.
       FOREIGN_KEY:
         description: >-
-          A reference from a fact or bridge to a dimension's surrogate key.
-          Must declare `varda:references`.
+          A reference to the surrogate key of a dimension or a bridge. Must
+          declare `varda:references`.
+
+          Legal on any table. A fact referencing its dimensions is the common
+          case, and a dimension referencing another is a snowflake — which is
+          why a hierarchy level may be written `country_key.country_name`, to
+          reach a readable column through the key. What a foreign key may not
+          do is point at a fact: that join is fact-to-fact, the grain of the
+          result is neither table's, and no aggregate over it is safe.
       MEASURE:
         description: >-
           A numeric quantity that is aggregated. Must declare
@@ -379,7 +386,8 @@ classes:
         description: >-
           The name of the class this foreign key points at. Required on every
           column whose role is `FOREIGN_KEY`, and checked: it must name a
-          class that exists and that is a dimension or a bridge.
+          class that exists and that is a dimension or a bridge. The table
+          holding the key may be any of the three.
         range: string
 
       additivity:
@@ -449,6 +457,11 @@ classes:
       Written as a bare column name wherever that column identifies the
       level's members, which is the common case. The mapping form exists for
       the case it does not.
+
+      Declared as a class so the shape is documented and machine-readable,
+      not because LinkML enforces it: annotation values are opaque to LinkML,
+      so a level naming a field this class does not have is caught by Varda's
+      own rules rather than by the schema.
     attributes:
 
       column:
