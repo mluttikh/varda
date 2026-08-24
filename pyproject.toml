@@ -58,6 +58,12 @@ dev = [
     # ever runs on a push, so a mistake in them is otherwise found by
     # pushing a broken one and reading the failure.
     "actionlint-py>=1.7",
+    # Runs the generated DDL. The SQL generator's whole contract is that
+    # its output executes, and reading that output as text cannot check it:
+    # a column named `select` and a CREATE TABLE ordered before its own
+    # foreign key target both read fine and both fail in a database.
+    # DuckDB is one wheel with no server, so the check costs a second.
+    "duckdb>=1.0",
 ]
 docs = [
     "mkdocs-material>=9.5",
