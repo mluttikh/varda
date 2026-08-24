@@ -114,13 +114,33 @@ get_list = varda.get_list
 raw = varda.raw
 
 
+#: The suffix of the annotation by which a class declares vocabulary instead
+#: of using it. Matched across prefixes — ``varda:applies_to`` and
+#: ``acme:applies_to`` both say "this class names annotations that are legal
+#: elsewhere" — and only with the colon, because an unprefixed ``applies_to``
+#: belongs to nobody, on the same reasoning as :class:`Reader`.
+_DECLARES_VOCABULARY = ":applies_to"
+
+
 def is_model_object(obj: Any) -> bool:
     """Flag whether an object participates in the dimensional model.
 
-    Deliberately *not* prefix-aware. A class is part of the model because
-    Varda says it is, and a class carrying only ``acme:`` annotations is a
-    class an extension has decorated — not one it has enrolled. Making this
-    prefix-aware would let an extension pull arbitrary classes into the model
-    by annotating them, which is exactly the authority extensions do not have.
+    Deliberately *not* prefix-aware in either direction. A class is part of
+    the model because Varda says it is, and a class carrying only ``acme:``
+    annotations is a class an extension has decorated — not one it has
+    enrolled. Making that prefix-aware would let an extension pull arbitrary
+    classes into the model by annotating them, which is exactly the authority
+    extensions do not have.
+
+    A class declaring ``applies_to`` is excluded, whoever it belongs to. Such
+    a class *is* a profile's vocabulary declaration, and a profile is an
+    ordinary LinkML schema that a domain model may import — which is what
+    ``imports: - varda`` and :func:`varda.registry.importmap` are for.
+    Without this, importing the profile enrolls ``TableAnnotations`` and
+    ``ColumnAnnotations`` as tables and reports every annotation they declare
+    as a column with no role.
     """
+    tags = anns(obj)
+    if any(tag.endswith(_DECLARES_VOCABULARY) for tag in tags):
+        return False
     return varda.present(obj)
