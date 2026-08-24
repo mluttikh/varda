@@ -13,6 +13,7 @@ import pathlib
 import textwrap
 from typing import TYPE_CHECKING, Any
 
+import duckdb
 import pytest
 import yaml
 
@@ -1143,21 +1144,169 @@ def test_unknown_severity_is_refused() -> None:
 # ---------------------------------------------------------------------------
 
 
+def executes(sql: str) -> None:
+    """Run the DDL against a real database, and fail with its own message.
+
+    The SQL generator's whole contract is that its output runs, and reading
+    the output as text cannot check it. A CREATE TABLE emitted before the
+    table it references, a column named `select`, and two columns sharing a
+    physical name all read as reasonable SQL and all fail here — none of
+    them is a case anyone thinks to write a string assertion for.
+
+    DuckDB rather than a server: one wheel, in-memory, and strict about the
+    parts that matter. It is not the warehouse anyone ships to, so this
+    checks that the DDL is legal, never that it is optimal.
+    """
+    try:
+        duckdb.connect().execute(sql)
+    except duckdb.Error as exc:
+        pytest.fail(f"generated DDL did not execute: {exc}")
+
+
 def test_sql_is_deterministic() -> None:
     model = DimensionalModel.load(RETAIL)
     assert generate_sql(model) == generate_sql(model)
 
 
+def test_the_example_ddl_executes() -> None:
+    """The shipped example runs against an empty database."""
+    executes(generate_sql(DimensionalModel.load(RETAIL)))
+
+
+def test_a_snowflake_ddl_executes(tmp_path: pathlib.Path) -> None:
+    """A dimension referencing another runs, not only sorts correctly.
+
+    The end-to-end half of `test_sql_creates_a_snowflake_in_dependency_order`:
+    that one says the order is right, this one says the file works.
+    """
+    model = build(
+        tmp_path,
+        _snowflake(["country_key.country_name", "state_key.state_name"]),
+    )
+    executes(generate_sql(model))
+
+
+def test_reserved_words_survive_as_identifiers(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A column named after a SQL keyword still produces a legal table.
+
+    `select` passes every rule — it is a perfectly good slot name — and
+    unquoted it produced a file no parser accepts. Identifiers are quoted,
+    so the only thing that decides a legal name is the database.
+    """
+    table = dimension()
+    for name in ("select", "from", "order", "group", "table"):
+        table["attributes"][name] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    executes(generate_sql(build(tmp_path, {"DimKeyword": table})))
+
+
 def test_sql_orders_dimensions_before_facts() -> None:
     sql = generate_sql(DimensionalModel.load(RETAIL))
-    assert sql.index("dim_customer (") < sql.index("fct_sale (")
+    assert sql.index('"dim_customer" (') < sql.index('"fct_sale" (')
+
+
+def _creates_before_references(sql: str, model: DimensionalModel) -> None:
+    """Assert every table is created after everything it references.
+
+    Written over the model rather than against named pairs, because the
+    ordering bug this guards was invisible to a test that asserted one pair:
+    dimensions did precede facts while a dimension preceded the dimension it
+    referenced.
+    """
+    where = {t.name: sql.index(f'"{t.physical}" (') for t in model.tables}
+    for table in model.tables:
+        for column in table.foreign_keys:
+            target = model.table(column.references or "")
+            if target is None or target.name == table.name:
+                continue
+            assert where[target.name] < where[table.name], (
+                f"{table.physical} references {target.physical}, "
+                f"which is created after it"
+            )
+
+
+def test_sql_creates_a_snowflake_in_dependency_order(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A dimension referencing another is created after it.
+
+    Sorting dimensions by name puts DimCity first and DimState third, so the
+    file created a table whose target did not exist and stopped there. The
+    reference form of a hierarchy level exists for exactly this arrangement,
+    so it is not a corner the generator can decline to handle.
+    """
+    model = build(
+        tmp_path,
+        _snowflake(["country_key.country_name", "state_key.state_name"]),
+    )
+    _creates_before_references(generate_sql(model), model)
+
+
+def test_sql_orders_a_flat_star_as_before() -> None:
+    """Dependency ordering breaks ties by name, so a star does not move."""
+    sql = generate_sql(DimensionalModel.load(RETAIL))
+    tables = ["dim_customer", "dim_date", "dim_product", "dim_segment"]
+    positions = [sql.index(f'"{name}" (') for name in tables]
+    assert positions == sorted(positions)
+
+
+def test_sql_allows_a_dimension_to_reference_itself(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A recursive dimension is not a cycle.
+
+    `FOREIGN KEY (manager_key) REFERENCES dim_employee` inside its own
+    CREATE TABLE is legal SQL, and a reporting line is a normal thing to
+    model, so refusing it as unorderable would reject a working design.
+    """
+    employee = dimension()
+    employee["attributes"]["manager_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimEmployee",
+        },
+    }
+    sql = generate_sql(build(tmp_path, {"DimEmployee": employee}))
+    assert 'FOREIGN KEY ("manager_key")' in sql
+    assert 'REFERENCES "mart"."dim_employee" ("d_key")' in sql
+
+
+def test_sql_refuses_a_cycle_between_dimensions(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two dimensions referencing each other have no legal emission order.
+
+    Raising names both tables. Emitting them in name order would produce a
+    file that fails in the database instead, which is the failure this whole
+    ordering exists to prevent.
+    """
+    left, right = dimension(), dimension()
+    left["attributes"]["r_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimRight",
+        },
+    }
+    right["attributes"]["l_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimLeft",
+        },
+    }
+    model = build(tmp_path, {"DimLeft": left, "DimRight": right})
+    with pytest.raises(GenerationError, match="DimLeft, DimRight"):
+        generate_sql(model)
 
 
 def test_sql_emits_foreign_keys() -> None:
     sql = generate_sql(DimensionalModel.load(RETAIL))
     assert (
-        "FOREIGN KEY (customer_key) REFERENCES mart.dim_customer "
-        "(customer_key)" in sql
+        'FOREIGN KEY ("customer_key")\n'
+        '        REFERENCES "mart"."dim_customer" ("customer_key")' in sql
     )
 
 
@@ -1659,8 +1808,8 @@ def test_type_2_uniqueness_includes_the_version(
         },
     )
     sql = generate_sql(model)
-    assert "UNIQUE (d_id, vf)" in sql
-    assert "UNIQUE (d_id)" not in sql
+    assert 'UNIQUE ("d_id", "vf")' in sql
+    assert 'UNIQUE ("d_id")' not in sql
 
 
 def test_generated_docs_lead_with_the_grain_sentence(
@@ -2151,10 +2300,10 @@ def test_declared_unique_keys_become_separate_constraints(
     table["attributes"]["d_id"]["annotations"] = {"varda:role": "ATTRIBUTE"}
     model = build(tmp_path, {"DimProduct": table})
     sql = generate_sql(model)
-    assert "UNIQUE (gtin, vs)" in sql
-    assert "UNIQUE (supplier_code, vs)" in sql
+    assert 'UNIQUE ("gtin", "vs")' in sql
+    assert 'UNIQUE ("supplier_code", "vs")' in sql
     # and not the concatenation of everything
-    assert "UNIQUE (gtin, supplier_code" not in sql
+    assert 'UNIQUE ("gtin", "supplier_code' not in sql
 
 
 def test_declared_keys_replace_the_derived_one(
@@ -2164,7 +2313,7 @@ def test_declared_keys_replace_the_derived_one(
     model = build(tmp_path, {"DimProduct": _two_keyed()})
     sql = generate_sql(model)
     # `d_id` is the natural key Varda would otherwise have derived from.
-    assert "UNIQUE (d_id, vs)" not in sql
+    assert 'UNIQUE ("d_id", "vs")' not in sql
 
 
 def test_unique_keys_are_inherited(tmp_path: pathlib.Path) -> None:
@@ -2191,7 +2340,7 @@ def test_unique_keys_are_inherited(tmp_path: pathlib.Path) -> None:
     table = model.table("DimThing")
     assert table is not None
     assert [u.name for u in table.unique_keys] == ["by_source_ref"]
-    assert "UNIQUE (source_ref)" in generate_sql(model)
+    assert 'UNIQUE ("source_ref")' in generate_sql(model)
 
 
 def test_v128_unique_key_names_nothing(tmp_path: pathlib.Path) -> None:
@@ -2290,5 +2439,5 @@ def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
         },
     )
     sql = generate_sql(model)
-    assert "UNIQUE (d_id, vs)" in sql
-    assert "UNIQUE (d_id, vs, vn)" not in sql
+    assert 'UNIQUE ("d_id", "vs")' in sql
+    assert 'UNIQUE ("d_id", "vs", "vn")' not in sql

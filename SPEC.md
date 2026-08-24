@@ -36,18 +36,18 @@ reason the core can stay small enough to be correct.
 | `ext.py` | ~180 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
 | `registry.py` | ~590 | Discovery, validation, lookup. Where colliding extensions are refused. |
 | `rules.py` | ~1130 | `RuleSet`, `Finding`, and the 39 core rules. |
-| `gen_sql.py` | ~180 | SQL DDL. |
+| `gen_sql.py` | ~270 | SQL DDL. |
 | `gen_docs.py` | ~120 | Markdown reference. |
 | `generators.py` | ~25 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~280 | Five commands. |
 
-**3,246 lines of source**: 1,905 of code, 632 of docstrings, 164 of
-comment, 545 blank. The prose share is deliberate and is house style —
+**3,333 lines of source**: 1,932 of code, 668 of docstrings, 175 of
+comment, 558 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 12 annotations, 5 enums — and 153 tests in
-2,294 lines.
+Plus `profile/varda.yaml` — 12 annotations, 5 enums — and 160 tests in
+2,443 lines.
 
 ### The four seams
 
