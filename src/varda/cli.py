@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from . import registry
 from .ext import Context, ExtensionError
 from .model import DimensionalModel
-from .rules import all_rules, check, unknown_codes
+from .rules import Finding, all_rules, check, unknown_codes
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -96,10 +96,50 @@ def _selected(only: Sequence[str] | None) -> list[Generator]:
     return [by_name[n] for n in only]
 
 
+def _blocking(
+    model: DimensionalModel, args: argparse.Namespace
+) -> list[Finding]:
+    """Collect the findings that should stop a run, given its flags.
+
+    The same rules `check` runs and the same exemptions, so the two commands
+    cannot disagree about whether a model is fit to generate from.
+    """
+    exempt = [*registry.exemptions(), *(args.exempt or [])]
+    stop = {"error", "warning"} if args.strict else {"error"}
+    return [f for f in check(model, exemptions=exempt) if f.severity in stop]
+
+
+def _report(findings: list[Finding], *, forced: bool) -> None:
+    """Print what is wrong, and what it means for this run."""
+    for finding in findings:
+        print(finding, file=sys.stderr)
+    counts = {
+        severity: sum(1 for f in findings if f.severity == severity)
+        for severity in ("error", "warning")
+    }
+    found = ", ".join(
+        f"{n} {s}" if n == 1 else f"{n} {s}s" for s, n in counts.items() if n
+    )
+    tail = (
+        "generating anyway because --force was given"
+        if forced
+        else "nothing was written. Pass --force to generate anyway"
+    )
+    print(f"\n{found}; {tail}", file=sys.stderr)
+
+
 def cmd_generate(args: argparse.Namespace) -> int:
     """Run generators and write their output.
 
-    Two phases on purpose. Every generator runs and every result is collected
+    The model is validated first, and errors stop the run. Generating from a
+    model that does not conform produces artifacts that look finished and are
+    not: a grain naming a column that does not exist emits a table with no
+    uniqueness at all, and two classes sharing a physical name emit one table
+    where the model says two. `--force` generates regardless, for somebody
+    mid-refactor who wants to see the output; `--strict` stops on warnings
+    too, matching `check`.
+
+    Then two phases. Every generator runs and every result is collected
     before a single file is written, so a generator that raises half way
     through leaves no partial output tree behind. A half-generated estate is
     worse than none: it looks complete, and the parts that are stale are the
@@ -114,6 +154,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
     if not chosen:
         print("no generators registered", file=sys.stderr)
         return EXIT_USAGE
+
+    blocking = _blocking(model, args)
+    if blocking:
+        _report(blocking, forced=args.force)
+        if not args.force:
+            return EXIT_FAIL
 
     ctx = Context(model=model, source=model.source, schema=args.schema)
     collected: dict[str, str] = {}
@@ -242,6 +288,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="NAME",
         help="run only this generator; repeatable",
+    )
+    p_gen.add_argument(
+        "--exempt",
+        action="append",
+        metavar="CODE",
+        help="skip a rule; repeatable",
+    )
+    p_gen.add_argument(
+        "--strict",
+        action="store_true",
+        help="stop on warnings as well as errors",
+    )
+    p_gen.add_argument(
+        "--force",
+        action="store_true",
+        help="generate even though the model does not conform",
     )
     p_gen.set_defaults(fn=cmd_generate)
 

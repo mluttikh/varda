@@ -39,15 +39,15 @@ reason the core can stay small enough to be correct.
 | `gen_sql.py` | ~290 | SQL DDL. |
 | `gen_docs.py` | ~120 | Markdown reference. |
 | `generators.py` | ~25 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~280 | Five commands. |
+| `cli.py` | ~340 | Five commands. |
 
-**3,361 lines of source**: 1,938 of code, 679 of docstrings, 182 of
-comment, 562 blank. The prose share is deliberate and is house style —
+**3,423 lines of source**: 1,981 of code, 691 of docstrings, 182 of
+comment, 569 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 12 annotations, 5 enums — and 164 tests in
-2,510 lines.
+Plus `profile/varda.yaml` — 12 annotations, 5 enums — and 168 tests in
+2,593 lines.
 
 ### The four seams
 
@@ -85,10 +85,13 @@ missing enum value is a request to file, not a reason to fork.
 `Extension`. If the core ever needs a privilege the mechanism does not offer,
 that is a defect in the mechanism. *`registry.varda_extension`*
 
-**I4 — Generation fails closed.** Every generator runs and every result is
+**I4 — Generation fails closed.** Errors refuse the run before a generator
+is reached, because artifacts built from a model that does not conform look
+finished and are not. Past that, every generator runs and every result is
 collected before a single byte is written. A half-generated output tree is
 worse than none: it looks complete, and the stale parts are the ones nobody
-thinks to check. *`cli.cmd_generate`, `test_generate_fails_closed`*
+thinks to check. *`cli.cmd_generate`, `test_generate_fails_closed`,
+`test_generate_refuses_a_nonconforming_model`*
 
 **I5 — Generated output is deterministic.** No timestamps, no hostnames, no
 environment, no dict-ordering dependence. Output that changes when the model

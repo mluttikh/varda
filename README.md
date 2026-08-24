@@ -137,7 +137,7 @@ load rather than warning.
 | | |
 | --- | --- |
 | `varda check MODEL` | validate; `--strict` fails on warnings too |
-| `varda generate MODEL --out DIR` | write artifacts; fails closed |
+| `varda generate MODEL --out DIR` | validate, then write artifacts; `--force` to build from a model that does not conform |
 | `varda rules` | list every rule, `-v` for reasoning |
 | `varda ext` | describe active extensions and their vocabulary |
 | `varda importmap` | print the LinkML import map |

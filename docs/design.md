@@ -20,8 +20,9 @@ would turn every generator's exhaustive dispatch into a silent fallback.
 `Extension`. If the core needed a privilege the mechanism does not offer,
 that is a defect in the mechanism.
 
-**Generation fails closed.** Every generator runs and every result is
-collected before a byte is written.
+**Generation fails closed.** A model that does not conform is refused
+before any generator runs, and once they run, every result is collected
+before a byte is written.
 
 **Generated output is deterministic.** No timestamps, no hostnames, no
 environment, no dict-ordering dependence. Tables are sorted by name so that
