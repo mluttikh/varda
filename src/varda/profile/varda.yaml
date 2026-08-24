@@ -13,6 +13,12 @@
 # GitHub Pages. Registered at github.com/perma-id/w3id.org.
 id: https://w3id.org/varda
 name: varda
+
+# The vocabulary's version, not the package's, and they are deliberately
+# allowed to differ. An extension pins itself against the annotations it was
+# written for, so bumping this when only Varda's own code changed would force
+# every extension to re-pin against a vocabulary that never moved. It changes
+# when an annotation, an enum or a permissible value does.
 version: 0.1.0
 title: The Varda profile — dimensional modeling vocabulary for LinkML
 description: >-

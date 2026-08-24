@@ -1,6 +1,6 @@
 # Varda — implementation specification
 
-**Version 0.1.0 · status: reference implementation complete, ready to hand
+**Version 0.2.0 · status: reference implementation complete, ready to hand
 over. The vocabulary it implements is experimental and will change; 1.0 is
 where that stops.**
 

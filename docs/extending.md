@@ -209,7 +209,7 @@ startup warnings.
 
 ```console
 $ varda ext
-varda 0.1.0  [varda:]
+varda 0.2.0  [varda:]
     origin      built in
     rule tag    V
     rules       29
