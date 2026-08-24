@@ -10,7 +10,7 @@
 
 > **Experimental.** Varda is published so it can be tried, not because the
 > design has settled. The vocabulary will change, sometimes in ways that break
-> a model written against an earlier version. Pin `varda~=0.1.0`.
+> a model written against an earlier version. Pin `varda~=0.2.0`.
 
 Varda is a *profile* of LinkML: a small vocabulary that lets you say a class
 is a fact table, that a column is a semi-additive measure, that a dimension
@@ -52,7 +52,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 43 rules (varda 0.1.0): 0 errors, 0 warnings
+8 tables checked against 43 rules (varda 0.2.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -147,13 +147,13 @@ failed, `2` the invocation was wrong.
 
 ## Status
 
-**0.1.0 — experimental.** Published so it can be tried, not because the design
+**0.2.0 — experimental.** Published so it can be tried, not because the design
 has settled. Expect the vocabulary to change, sometimes in ways that break a
 model written against an earlier version. No warehouse of real size has been
 modeled in it yet, and no third party has written an extension. Pin it:
 
 ```
-varda~=0.1.0
+varda~=0.2.0
 ```
 
 The cost of a break is bounded. A Varda model is annotated YAML, so a break is

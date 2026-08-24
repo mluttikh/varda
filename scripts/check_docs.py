@@ -21,7 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from varda import registry
+from varda import __version__, registry
 
 ROOT = Path(__file__).resolve().parents[1]
 FENCE = "`" * 3
@@ -194,6 +194,21 @@ def main() -> int:
                     )
 
     failures += _range_faults(pages, codes)
+
+    # Console transcripts quote the version the tool prints in its summary
+    # line, and every one of them went stale at 0.1.0 without a word.
+    #
+    # Only the space-separated form, which is literal output. The pin advice
+    # is written `varda~=0.2.0` and is deliberately left alone: it stays
+    # correct across every 0.2.x, so tying it to the exact version would
+    # demand an edit that changes nothing.
+    failures += [
+        f"{page.relative_to(ROOT)}: a transcript says varda {quoted}, "
+        f"this is {__version__}"
+        for page in pages
+        for quoted in re.findall(r"varda (\d+\.\d+\.\d+)", page.read_text())
+        if quoted != __version__
+    ]
 
     # SPEC.md quotes counts derived from the tree. They are the most
     # drift-prone sentences in the repository — every one of them has gone
