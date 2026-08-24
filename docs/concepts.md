@@ -249,10 +249,11 @@ the grain sentence.
 
 Three things go wrong often enough to be worth naming.
 
-A level answers two questions. What a member is *called*, and which member
-it *is*. Usually one column does both. When it does not — `city_name` holds
-"Springfield" for cities in three states — nothing extra is needed, because
-the hierarchy has already said what tells them apart:
+**Two members can share a name.** A level answers two questions: what a
+member is *called*, and which member it *is*. Usually one column does both.
+When it does not — `city_name` holds "Springfield" for cities in three
+states — nothing extra is needed, because the hierarchy has already said
+what tells them apart:
 
 ```yaml
 levels: [country_name, state_name, city_name]
