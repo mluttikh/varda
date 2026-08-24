@@ -112,8 +112,8 @@ def _range_faults(pages: list[Path], codes: list[str]) -> list[str]:
     """Check every rule-code range quoted in the family tables.
 
     A range is correct only while its ends are the lowest and highest codes
-    actually registered in that family. `V101`-`V130` stayed in three files
-    after V131 landed, because nothing read it: the count gate sees totals,
+    actually registered in that family. `V101`-`V305` stayed in three files
+    after V801 landed, because nothing read it: the count gate sees totals,
     never ends.
     """
     out: list[str] = []

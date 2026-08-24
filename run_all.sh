@@ -28,8 +28,10 @@ step "generate the docs reference pages"
 step "the docs agree with the tool"
 "$PY/python" scripts/check_docs.py
 
-step "varda check examples/retail.yaml --strict"
-"$PY/varda" check examples/retail.yaml --strict
+step "varda check the examples --strict"
+for model in examples/*.yaml; do
+  "$PY/varda" check "$model" --strict
+done
 
 step "varda generate (into a temp tree, then discarded)"
 OUT=$(mktemp -d)

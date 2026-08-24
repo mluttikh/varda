@@ -65,13 +65,19 @@ That is the whole reason for choosing annotations over a new format.
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 
-**Forty-three rules**, in three families:
+**Forty-three rules**, in nine bands. A code names its concern:
 
 | | |
 | --- | --- |
-| `V001`–`V003` | The annotations themselves — typos, bad enum values, unknown prefixes |
-| `V101`–`V134` | Structure — a fact without a grain, a foreign key pointing at a fact, a dimension with no natural key |
-| `V201`–`V206` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
+| `V001`–`V004` | The annotations themselves — typos, bad enum values, unknown prefixes, unknown fields |
+| `V101`–`V104` | Roles — what a table is, what a column is, and where each role is legal |
+| `V201`–`V204` | Grain — a fact with no grain, a grain naming a column that does not exist |
+| `V301`–`V305` | Identity — a dimension with no natural key, a business key that repeats |
+| `V401`–`V405` | References — a foreign key pointing at a fact, one naming no target |
+| `V501`–`V506` | Time — a version period on a dimension that keeps no versions |
+| `V601`–`V607` | Hierarchies — a level that is not a column, a path of one level |
+| `V701`–`V706` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
+| `V801`–`V802` | Physical naming — two classes emitting one table, two columns emitting one name |
 
 **Two generators**, `sql` and `docs`. Both deterministic: no timestamps, no
 environment, same model in and same bytes out, so output can be committed and
@@ -82,7 +88,7 @@ data classification, ownership — belongs in an
 [extension](extending.md) under your own prefix, and the smallest useful one
 needs no Python at all.
 
-## Why additivity gets its own rule family
+## Why additivity gets its own rule band
 
 A structural mistake usually breaks a query, and someone notices.
 
@@ -104,6 +110,10 @@ The cost of a break is bounded. A Varda model is annotated YAML, so it is a
 find-and-replace over your schema rather than a migration of anything you have
 loaded, and the model stays an ordinary LinkML schema either way.
 
-Two things are settled. Rule codes are permanent: none is renumbered, and a
-retired one is deleted rather than reused. And Varda will not grow syntax or
-fork the metamodel — the annotation-only design is the premise, not a stage.
+One thing is settled: Varda will not grow syntax or fork the metamodel. The
+annotation-only design is the premise, not a stage.
+
+Rule codes are not settled yet. All forty-three were renumbered in 0.3 so that
+a code names its concern, and more renumbering before 1.0 is possible if a
+band stops describing what is in it. A code is never reused for a different
+rule, and at 1.0 the numbers freeze.

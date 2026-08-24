@@ -1,0 +1,222 @@
+id: https://example.org/snowflake
+name: snowflake
+title: A snowflaked geography, and a product identified two ways
+description: >-
+  The companion to `retail.yaml`, which is a flat star and exercises the core.
+  This one carries the forms a flat star has no use for: dimensions that
+  reference other dimensions, hierarchy levels that reach through a foreign
+  key to reach something readable, a level whose name is not what tells its
+  members apart, and a dimension two sources identify differently.
+
+  The geography is snowflaked and the fact still joins every level directly.
+  That is deliberate, and it is the arrangement the reference form of a level
+  exists for: the dimensions normalize so a region is stored once, while the
+  fact keeps a star's join path to each of them.
+
+prefixes:
+  linkml: https://w3id.org/linkml/
+  varda: https://w3id.org/varda/
+  snowflake: https://example.org/snowflake/
+default_prefix: snowflake
+default_range: string
+imports:
+  - linkml:types
+
+classes:
+
+  DimCountry:
+    description: The coarsest geography level, in its own table.
+    annotations:
+      varda:role: DIMENSION
+      varda:scd: TYPE_1
+    attributes:
+      country_key:
+        range: integer
+        annotations:
+          varda:role: SURROGATE_KEY
+      country_code:
+        description: ISO 3166-1 alpha-2.
+        required: true
+        annotations:
+          varda:role: NATURAL_KEY
+      country_name:
+        annotations:
+          varda:role: ATTRIBUTE
+
+  DimRegion:
+    description: >-
+      A region within a country. Snowflaked: the country is a reference
+      rather than a repeated column, so renaming a country is one update.
+    annotations:
+      varda:role: DIMENSION
+      varda:scd: TYPE_1
+    attributes:
+      region_key:
+        range: integer
+        annotations:
+          varda:role: SURROGATE_KEY
+      region_code:
+        required: true
+        annotations:
+          varda:role: NATURAL_KEY
+      region_name:
+        annotations:
+          varda:role: ATTRIBUTE
+      country_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimCountry
+
+  DimCity:
+    description: >-
+      A city, and the leaf of the geography snowflake. Its only readable
+      geography column is its own name — everything coarser is a key.
+    annotations:
+      varda:role: DIMENSION
+      varda:scd: TYPE_1
+      # Each level reaches through a foreign key to the column a reader
+      # can actually drill. Writing `country_key` here would be legal YAML
+      # and a path of integers; V605 refuses it and names the fix.
+      varda:hierarchies:
+        - name: geography
+          description: Where a city is, coarsest first.
+          levels:
+            - country_key.country_name
+            - region_key.region_name
+            - city_name
+    attributes:
+      city_key:
+        range: integer
+        annotations:
+          varda:role: SURROGATE_KEY
+      city_code:
+        required: true
+        annotations:
+          varda:role: NATURAL_KEY
+      city_name:
+        description: >-
+          Not unique on its own — several countries have a Springfield. The
+          hierarchy already says what tells them apart, so nothing extra is
+          declared here.
+        annotations:
+          varda:role: ATTRIBUTE
+      region_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimRegion
+      country_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimCountry
+
+  DimProduct:
+    description: >-
+      Loaded from two sources that identify a product differently: one supplies
+      a barcode, the other a supplier's own part number. Neither is present on
+      every row, so the uniqueness is two constraints rather than one.
+    annotations:
+      varda:role: DIMENSION
+      varda:scd: TYPE_2
+      varda:hierarchies:
+        - name: merchandise
+          description: How the buying team rolls products up.
+          levels:
+            - brand
+            # Two products can share a display name, so the level is named by
+            # one column and identified by another.
+            - {column: product_name, key: gtin}
+    attributes:
+      product_key:
+        range: integer
+        annotations:
+          varda:role: SURROGATE_KEY
+      gtin:
+        description: Global Trade Item Number. Absent for unbarcoded lines.
+        annotations:
+          varda:role: NATURAL_KEY
+      supplier_code:
+        description: Absent for lines sourced through a barcode feed.
+        annotations:
+          varda:role: NATURAL_KEY
+      supplier_part:
+        annotations:
+          varda:role: NATURAL_KEY
+      brand:
+        annotations:
+          varda:role: ATTRIBUTE
+      product_name:
+        annotations:
+          varda:role: ATTRIBUTE
+      valid_from:
+        range: datetime
+        required: true
+        annotations:
+          varda:role: VERSION_START
+      is_current:
+        range: boolean
+        required: true
+        annotations:
+          varda:role: IS_CURRENT
+    # LinkML's own, read rather than restated. Two keys are two constraints:
+    # merged into one they would be weaker than either, and inert besides,
+    # because SQL treats a NULL on one side as distinct.
+    unique_keys:
+      by_barcode:
+        description: Rows from the sources that supply a barcode.
+        unique_key_slots: [gtin, valid_from]
+      by_supplier_part:
+        description: Rows from the sources that identify a part by supplier.
+        unique_key_slots: [supplier_code, supplier_part, valid_from]
+
+  FctSale:
+    description: >-
+      Joins every geography level directly, not only the city. The dimensions
+      snowflake; the fact stays a star.
+    annotations:
+      varda:role: FACT
+      varda:fact_type: TRANSACTION
+      varda:grain: [order_line, product_key]
+      varda:grain_statement: >-
+        one row per product per line of a customer order
+    attributes:
+      order_line:
+        annotations:
+          varda:role: DEGENERATE_DIMENSION
+      country_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimCountry
+      region_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimRegion
+      city_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimCity
+      product_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimProduct
+      net_amount:
+        range: decimal
+        required: true
+        unit:
+          symbol: EUR
+        annotations:
+          varda:role: MEASURE
+          varda:additivity: ADDITIVE

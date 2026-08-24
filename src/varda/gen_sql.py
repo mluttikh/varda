@@ -142,7 +142,7 @@ def _ordered(model: DimensionalModel) -> list[Table]:
 
     Dimensions and bridges are ordered together rather than as two blocks.
     A bridge references dimensions, but a dimension may reference a bridge
-    too — V110 permits both — and two fixed blocks cannot express that.
+    too — V404 permits both — and two fixed blocks cannot express that.
     Facts come last and need no ordering among themselves, because nothing
     may reference a fact.
     """
@@ -184,12 +184,12 @@ def _unique_constraints(table: Table) -> list[str]:
     # a table states its uniqueness in one place or the other, never both.
     for unique in table.unique_keys:
         if not unique.columns:
-            continue  # V128 reports a key that names nothing
+            continue  # V303 reports a key that names nothing
         cols = ", ".join(quoted(c.physical) for c in unique.columns)
         out.append(f"    UNIQUE ({cols})")
 
     # The uniqueness a dimension implies by declaring a natural key, when it
-    # has not stated one itself. V106 requires that key and calls it what a
+    # has not stated one itself. V302 requires that key and calls it what a
     # loader matches on; leaving it unenforced makes the claim exactly as
     # true as the comment above says an unchecked claim stays.
     if table.is_dimension and not table.unique_keys:
@@ -211,7 +211,7 @@ def _derived_key(table: Table) -> tuple[Column, ...]:
     constraint being wrong in the direction that looks like broken data.
     """
     if not table.natural_keys:
-        return ()  # V106 reports it
+        return ()  # V302 reports it
     if table.scd in {"TYPE_0", "TYPE_1"}:
         # Neither keeps a second row for one business entity, so the natural
         # key is the whole of it.
@@ -233,8 +233,8 @@ def _derived_key(table: Table) -> tuple[Column, ...]:
         # `is_current` is not a discriminator at all: it is true of exactly
         # one version, so a constraint carrying it is vacuous.
         marks = table.version_starts or table.version_numbers
-        return (*table.natural_keys, marks[0]) if marks else ()  # V119
-    return ()  # no varda:scd — V113 reports it, and guessing costs rows
+        return (*table.natural_keys, marks[0]) if marks else ()  # V506
+    return ()  # no varda:scd — V502 reports it, and guessing costs rows
 
 
 def _table(table: Table, schema: str) -> str:
@@ -252,10 +252,10 @@ def _table(table: Table, schema: str) -> str:
     for fk in table.foreign_keys:
         target = fk.table.model.table(fk.references or "")
         if target is None:
-            continue  # V109 already reported it; do not also crash here
+            continue  # V403 already reported it; do not also crash here
         key = target.surrogate_keys
         if not key:
-            continue  # V105's business
+            continue  # V301's business
         body.append(
             # REFERENCES on its own line, always rather than only when the
             # one-liner overflows. Quoting pushed the longer keys past the
