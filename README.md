@@ -52,7 +52,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 45 rules (varda 0.2.0): 0 errors, 0 warnings
+8 tables checked against 46 rules (varda 0.2.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -76,7 +76,7 @@ on columns — `role`, `references`, `additivity`, `semi_additive_over`,
 vocabulary, and it is deliberately the whole core vocabulary. Units are
 LinkML's own `unit`, which Varda reads rather than restates.
 
-**Forty-five rules** that catch the mistakes worth catching. A code names
+**Forty-six rules** that catch the mistakes worth catching. A code names
 its concern, so the band tells you where to look:
 
 | | |
@@ -89,7 +89,7 @@ its concern, so the band tells you where to look:
 | `V501`–`V506` | time — a version period on a dimension that keeps no versions |
 | `V601`–`V607` | hierarchies — a level that is not a column, a path of one level |
 | `V701`–`V707` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross, a decimal one that never says what it keeps |
-| `V801`–`V803` | physical naming and types — two classes emitting one table, a width on a column that has none |
+| `V801`–`V804` | physical naming and types — two classes emitting one table, a width on a column that has none, a range naming nothing |
 
 The `V7xx` family exists because additivity is where the expensive errors
 live. A structural mistake usually breaks a query. An additivity mistake
@@ -99,6 +99,10 @@ will act on it.
 **Two generators**, `sql` and `docs`, producing runnable DDL and a Markdown
 reference. Both are deterministic: no timestamps, no environment, same model
 in and same bytes out, so the output can be committed and diffed.
+
+**Four dialects** — `varda generate mart.yaml --dialect sqlserver`. Named
+rather than assumed: there is no neutral SQL, and a `TIMESTAMP` emitted for
+`valid_from` is a row-version counter on SQL Server rather than a time.
 
 ## Extending it
 

@@ -14,16 +14,26 @@ every regeneration into a diff nobody reads.
 from __future__ import annotations
 
 import textwrap
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from .ext import Context
     from .model import Column, DimensionalModel, Table
 
-#: LinkML range to SQL type. Deliberately a closed table with no fallback:
-#: an unmapped range raises rather than quietly becoming TEXT, because a
-#: column silently typed as text is a bug that surfaces years later as a
-#: comparison that does not do what it looks like.
+#: LinkML range to SQL type, as PostgreSQL spells it. Deliberately a closed
+#: table with no fallback: an unmapped range raises rather than quietly
+#: becoming TEXT, because a column silently typed as text is a bug that
+#: surfaces years later as a comparison that does not do what it looks like.
+#:
+#: PostgreSQL rather than an imagined neutral SQL, because there is no such
+#: thing and pretending otherwise is how `TIMESTAMP` came to be emitted for a
+#: type-2 dimension's `valid_from`: in T-SQL that names a row-version counter
+#: with no date in it, so every SCD rule in this package was certifying a
+#: column that would hold something else entirely. A dialect that is named can
+#: be checked; one that is assumed cannot.
 TYPES = {
     "string": "VARCHAR",
     "integer": "INTEGER",
@@ -34,24 +44,118 @@ TYPES = {
     "date": "DATE",
     "datetime": "TIMESTAMP",
     "time": "TIME",
+    "uuid": "UUID",
     "uri": "VARCHAR",
     "uriorcurie": "VARCHAR",
     "ncname": "VARCHAR",
 }
+
+#: How a dialect asks for a schema. PostgreSQL's form is the common one and
+#: DuckDB and Snowflake both take it.
+CREATE_SCHEMA = "CREATE SCHEMA IF NOT EXISTS {quoted};"
+
+
+@dataclass(frozen=True)
+class Dialect:
+    """One database's spelling of the DDL Varda emits.
+
+    A narrow record on purpose. This is not an abstraction over SQL — that is
+    a transpiler, and a transpiler is a much larger thing to own than a
+    generator. It carries the two ways the emitted file actually differs
+    between the engines named here: what the types are called, and how a
+    schema is asked for.
+
+    Engines are added by being verified, not by being plausible. `bigquery`
+    and `oracle` are absent for that reason and not by oversight: BigQuery has
+    no `UNIQUE` constraint and needs `NOT ENFORCED` on the keys it does have,
+    and Oracle has no `CREATE SCHEMA` and no UUID type. Both need more than a
+    type table, and half a dialect emits a file that looks right and does not
+    run.
+    """
+
+    name: str
+    #: Ranges this dialect spells differently, overlaying :data:`TYPES`.
+    types: Mapping[str, str] = field(default_factory=dict)
+    #: The statement that creates the schema, given `{quoted}` and `{name}`.
+    create_schema: str = CREATE_SCHEMA
+    #: Whether an unsized string is safe to emit. False where a bare
+    #: `VARCHAR` means something other than "as long as it needs to be".
+    sizes_strings: bool = False
+
+    def type_of(self, rng: str) -> str | None:
+        """Give this dialect's name for a range, or ``None`` if it has none."""
+        return self.types.get(rng, TYPES.get(rng))
+
+
+DIALECTS: dict[str, Dialect] = {
+    # The base table is PostgreSQL's, so this overlays nothing. Named anyway,
+    # because "the default" and "PostgreSQL" being the same string is the
+    # claim being made and a reader should be able to see it.
+    "postgres": Dialect("postgres"),
+    # Accepts every spelling in the base table, `DOUBLE PRECISION` and `UUID`
+    # included, and is the engine the test suite executes against.
+    "duckdb": Dialect("duckdb"),
+    # Also accepts the base table. `UUID` is a real type here as of its
+    # general availability, so a key that arrives as one stays 16 bytes
+    # rather than becoming a 36-character string.
+    "snowflake": Dialect("snowflake"),
+    "sqlserver": Dialect(
+        "sqlserver",
+        types={
+            # `TIMESTAMP` in T-SQL is a synonym for `rowversion`: an
+            # incrementing counter, not a time. Emitting it for `valid_from`
+            # produces a type-2 dimension whose version period holds no
+            # dates, and nothing anywhere reports it.
+            "datetime": "DATETIME2",
+            # There is no boolean type; `BIT` is what everyone uses.
+            "boolean": "BIT",
+            "float": "FLOAT",
+            "double": "FLOAT",
+            "uuid": "UNIQUEIDENTIFIER",
+        },
+        # `CREATE SCHEMA` must be the first statement in its batch, so it
+        # cannot be guarded by an `IF` directly and goes through `EXEC`.
+        create_schema=(
+            "IF SCHEMA_ID('{name}') IS NULL EXEC('CREATE SCHEMA {quoted}');"
+        ),
+        sizes_strings=True,
+    ),
+}
+
+#: The dialect assumed when none is named. Today's output, now under its own
+#: name rather than under a claim of neutrality.
+DEFAULT_DIALECT = "postgres"
 
 
 class GenerationError(Exception):
     """A model cannot be generated from, and the run must stop."""
 
 
-def sql_type(column: Column) -> str:
+def dialect(name: str) -> Dialect:
+    """Look one dialect up by name, or raise listing the ones there are."""
+    found = DIALECTS.get(name)
+    if found is None:
+        known = ", ".join(sorted(DIALECTS))
+        msg = f"unknown dialect {name!r}. Known dialects: {known}"
+        raise GenerationError(msg)
+    return found
+
+
+def sql_type(column: Column, sql: Dialect) -> str:
     """Map a column's range to a SQL type, or raise naming the column."""
     rng = column.range
-    mapped = TYPES.get(rng.lower())
+    mapped = sql.type_of(rng.lower())
     if mapped is None:
         known = ", ".join(sorted(TYPES))
         msg = (
             f"{column}: range {rng!r} has no SQL mapping. Known ranges: {known}"
+        )
+        raise GenerationError(msg)
+    if sql.sizes_strings and mapped == "VARCHAR" and column.max_length is None:
+        msg = (
+            f"{column}: a string column needs varda:max_length under "
+            f"--dialect {sql.name}, where a VARCHAR with no length is a "
+            f"VARCHAR(1) and silently truncates every value to one character"
         )
         raise GenerationError(msg)
     return mapped + _facets(column)
@@ -186,8 +290,8 @@ def _ordered(model: DimensionalModel) -> list[Table]:
     ]
 
 
-def _column_line(column: Column) -> str:
-    parts = [f"    {quoted(column.physical)}", sql_type(column)]
+def _column_line(column: Column, sql: Dialect) -> str:
+    parts = [f"    {quoted(column.physical)}", sql_type(column, sql)]
     if column.role == "SURROGATE_KEY":
         parts.append("PRIMARY KEY")
     elif column.required:
@@ -271,7 +375,7 @@ def _derived_key(table: Table) -> tuple[Column, ...]:
     return ()  # no varda:scd — V502 reports it, and guessing costs rows
 
 
-def _table(table: Table, schema: str) -> str:
+def _table(table: Table, schema: str, sql: Dialect) -> str:
     """Render one CREATE TABLE, with its grain as a comment."""
     lines: list[str] = []
     if table.description:
@@ -282,7 +386,7 @@ def _table(table: Table, schema: str) -> str:
         lines += _comment(table.scd, "Slowly-changing: ")
     lines.append(f"CREATE TABLE {quoted(schema)}.{quoted(table.physical)} (")
 
-    body = [_column_line(c) for c in table.columns]
+    body = [_column_line(c, sql) for c in table.columns]
     for fk in table.foreign_keys:
         target = fk.table.model.table(fk.references or "")
         if target is None:
@@ -307,20 +411,26 @@ def _table(table: Table, schema: str) -> str:
     return "\n".join(lines)
 
 
-def generate(model: DimensionalModel, schema: str = "mart") -> str:
+def generate(
+    model: DimensionalModel,
+    schema: str = "mart",
+    dialect_name: str = DEFAULT_DIALECT,
+) -> str:
     """Render the whole model as one runnable DDL script."""
+    sql = dialect(dialect_name)
     header = [
         "-- Generated by varda. Do not edit.",
         f"-- Source: {model.source.name}",
+        f"-- Dialect: {sql.name}",
         "",
-        f"CREATE SCHEMA IF NOT EXISTS {quoted(schema)};",
+        sql.create_schema.format(quoted=quoted(schema), name=schema),
         "",
         "",
     ]
-    blocks = [_table(t, schema) for t in _ordered(model)]
+    blocks = [_table(t, schema, sql) for t in _ordered(model)]
     return "\n".join(header) + "\n\n".join(blocks) + "\n"
 
 
 def run(ctx: Context) -> dict[str, str]:
     """Run this generator and return its artifacts."""
-    return {"sql/mart.sql": generate(ctx.model, ctx.schema)}
+    return {"sql/mart.sql": generate(ctx.model, ctx.schema, ctx.dialect)}

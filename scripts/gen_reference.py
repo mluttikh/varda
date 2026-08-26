@@ -249,6 +249,24 @@ def _extension_vocabulary(ext: Any, *, titled: bool) -> list[str]:
         for name in structured:
             out += _structure_section(view, name)
 
+    if view.schema.types:
+        out += [
+            "## Types",
+            "",
+            (
+                "Ranges this profile declares that LinkML's own type set "
+                "does not carry. A model reaches them by importing the "
+                "profile."
+            ),
+            "",
+            "| Type | Based on | Meaning |",
+            "| --- | --- | --- |",
+        ]
+        for name, spec in view.schema.types.items():
+            described = _clean(spec.description)
+            out.append(f"| `{name}` | `{spec.typeof}` | {described} |")
+        out.append("")
+
     if view.schema.enums:
         out += [
             "## Enumerations",

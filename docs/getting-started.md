@@ -97,7 +97,7 @@ columns at which rows are unique, `varda:grain_statement` as the sentence.
 
 ```console
 $ varda check mart.yaml
-2 tables checked against 45 rules (varda 0.2.0): 0 errors, 0 warnings
+2 tables checked against 46 rules (varda 0.2.0): 0 errors, 0 warnings
 ```
 
 Introduce a mistake — misspell `varda:grain` as `varda:grian`, say — and:
@@ -109,7 +109,7 @@ ERROR V001  FctOrder
 ERROR V201  FctOrder
         no varda:grain; name the columns at which rows are unique
 
-2 tables checked against 45 rules (varda 0.2.0): 2 errors, 0 warnings
+2 tables checked against 46 rules (varda 0.2.0): 2 errors, 0 warnings
 ```
 
 `--strict` also fails on warnings, and on an exemption that names a rule
@@ -141,6 +141,16 @@ both meaning exactly what they mean to `check`.
 Output is deterministic. Nothing is timestamped and nothing depends on the
 environment, so the same model produces the same bytes and generated files
 can be committed and diffed like any other source.
+
+`--dialect` says which database the DDL is for — `postgres` by default, or
+`duckdb`, `snowflake`, `sqlserver`. Worth setting rather than leaving: SQL
+Server has no `BOOLEAN` and reads `TIMESTAMP` as a row-version counter with
+no date in it, so `valid_from` on a type-2 dimension generated as PostgreSQL
+would hold a number there.
+
+```console
+$ varda generate mart.yaml --out out/ --dialect sqlserver
+```
 
 ## Add a drill path
 

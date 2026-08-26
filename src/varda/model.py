@@ -581,7 +581,18 @@ class DimensionalModel:
         ``imports: - varda`` without knowing where the installed profile
         lives on this machine. The registry builds it; see
         :func:`varda.registry.importmap`.
+
+        Omitted, the active extensions' own map is used, which is what the
+        CLI passes. Defaulting to no map instead would mean the one thing
+        every model importing the profile does — and a model needs the
+        import to write ``range: uuid`` — fails with a `FileNotFoundError`
+        naming a path nobody wrote, for every caller that did not know to
+        ask for something they had no reason to know about.
         """
+        if importmap is None:
+            from . import registry  # noqa: PLC0415 — cycle: registry reads
+
+            importmap = registry.importmap()
         source = pathlib.Path(path)
         view = SchemaView(str(source), importmap=importmap)
         return cls(view=view, source=source)

@@ -39,9 +39,11 @@ classes:
         required: true
         annotations:
           varda:role: NATURAL_KEY
+          varda:max_length: 2
       country_name:
         annotations:
           varda:role: ATTRIBUTE
+          varda:max_length: 60
 
   DimRegion:
     description: >-
@@ -59,9 +61,11 @@ classes:
         required: true
         annotations:
           varda:role: NATURAL_KEY
+          varda:max_length: 10
       region_name:
         annotations:
           varda:role: ATTRIBUTE
+          varda:max_length: 60
       country_key:
         range: integer
         required: true
@@ -95,6 +99,7 @@ classes:
         required: true
         annotations:
           varda:role: NATURAL_KEY
+          varda:max_length: 10
       city_name:
         description: >-
           Not unique on its own — several countries have a Springfield. The
@@ -102,6 +107,7 @@ classes:
           declared here.
         annotations:
           varda:role: ATTRIBUTE
+          varda:max_length: 80
       region_key:
         range: integer
         required: true
@@ -140,19 +146,24 @@ classes:
         description: Global Trade Item Number. Absent for unbarcoded lines.
         annotations:
           varda:role: NATURAL_KEY
+          varda:max_length: 14
       supplier_code:
         description: Absent for lines sourced through a barcode feed.
         annotations:
           varda:role: NATURAL_KEY
+          varda:max_length: 20
       supplier_part:
         annotations:
           varda:role: NATURAL_KEY
+          varda:max_length: 40
       brand:
         annotations:
           varda:role: ATTRIBUTE
+          varda:max_length: 60
       product_name:
         annotations:
           varda:role: ATTRIBUTE
+          varda:max_length: 120
       valid_from:
         range: datetime
         required: true
@@ -188,6 +199,7 @@ classes:
       order_line:
         annotations:
           varda:role: DEGENERATE_DIMENSION
+          varda:max_length: 20
       country_key:
         range: integer
         required: true

@@ -64,6 +64,13 @@ dev = [
     # foreign key target both read fine and both fail in a database.
     # DuckDB is one wheel with no server, so the check costs a second.
     "duckdb>=1.0",
+    # Cross-checks the dialect tables. DuckDB is the only engine the suite
+    # can execute, so the other three would otherwise be lookup tables
+    # nobody has ever run — which is how `TIMESTAMP` came to be emitted for
+    # SQL Server, where it names a row-version counter. sqlglot maintains
+    # the same mapping for a living, so the tables are compared against it
+    # rather than against nothing. Pure Python, no engines.
+    "sqlglot>=25",
 ]
 docs = [
     "mkdocs-material>=9.5",
