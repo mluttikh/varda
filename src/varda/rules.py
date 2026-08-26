@@ -38,7 +38,12 @@ from typing import TYPE_CHECKING, Any
 from . import registry
 from .anns import anns, get
 from .ext import SEVERITIES, Severity
-from .model import FACET_MINIMUM, FACETS, VERSIONING_ROLES
+from .model import (
+    FACET_MINIMUM,
+    FACETS,
+    ONE_IDENTITY,
+    VERSIONING_ROLES,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -602,10 +607,12 @@ def v304(model: DimensionalModel) -> Iterator[Finding]:
 def v305(model: DimensionalModel) -> Iterator[Finding]:
     """Flag a natural key no declared unique key covers.
 
-    Only where a table declares its own ``unique_keys``. Without them Varda
-    derives the constraint from the natural key itself and the question does
-    not arise; with them the derived one is not emitted, so a natural key
-    named in none of them is a business identity nothing enforces.
+    Only where a table declares its own ``unique_keys``, because a declared
+    key replaces the derived one: a natural key named in none of them is a
+    business identity nothing enforces. Where nothing is declared, one
+    natural key derives its own constraint and several are V306's, which is
+    an error rather than this warning — there the answer is not missing, it
+    is unknowable from the roles.
     """
     for table in model.dimensions:
         if not table.unique_keys:
@@ -621,6 +628,81 @@ def v305(model: DimensionalModel) -> Iterator[Finding]:
                 "a natural key in none of this table's unique keys; the "
                 "identity a loader matches on is not enforced",
             )
+
+
+@RULES.rule(
+    "V306", "error", "A dimension with several natural keys declares them"
+)
+def v306(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag several natural keys with no ``unique_keys`` to disambiguate them.
+
+    Two columns marked NATURAL_KEY mean one of two things, and a role cannot
+    say which. Either they are one compound identity — a store known by its
+    chain code and its store number — or they are two alternative ones, a
+    product carrying a barcode from one source and a supplier's part number
+    from the other. The two want opposite constraints: `UNIQUE (a, b)` for
+    the first, `UNIQUE (a)` and `UNIQUE (b)` for the second.
+
+    Varda used to pick the first, silently, for both. On a table that meant
+    the second that constraint is weaker than either key alone — two rows may
+    share a barcode as long as their part numbers differ — and a NULL on
+    either side leaves the row unconstrained altogether, which is the normal
+    state of a table loaded from two sources that each fill one column. The
+    model passed `--strict` with nothing to say.
+
+    An error rather than a warning because both silent outcomes are wrong:
+    the merged constraint enforces something nobody meant, and deriving
+    nothing leaves a dimension whose identity the database does not hold.
+    The model has to say which, and `unique_keys` is where LinkML already
+    says it.
+    """
+    for table in model.dimensions:
+        if table.unique_keys:
+            continue  # said, and V304 and V305 check what was said
+        keys = table.natural_keys
+        if len(keys) <= ONE_IDENTITY:
+            continue
+        named = ", ".join(c.name for c in keys)
+        yield Finding(
+            "V306",
+            "error",
+            str(table),
+            f"{len(keys)} natural keys ({named}) and no unique_keys; one "
+            f"compound identity and several alternative ones need different "
+            f"constraints, and a role cannot tell them apart",
+        )
+
+
+@RULES.rule("V307", "warning", "A lone natural key is required")
+def v307(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a dimension whose only business identity may be absent.
+
+    SQL counts NULLs as distinct, so `UNIQUE (gtin)` over a nullable column
+    admits any number of rows that have no gtin at all — the identity is
+    enforced for every row except the ones that do not have it, which are the
+    rows a duplicate load produces.
+
+    Only where there is one natural key, and that scoping is the rule. Where
+    a dimension has several, being absent is usually the point: a product
+    read from a barcode feed has no supplier part number and one read from a
+    supplier catalog has no barcode, and each row fills the column its source
+    knows. Warning there would fire on every well-formed table of that shape
+    and be switched off, taking this with it.
+    """
+    for table in model.dimensions:
+        keys = table.natural_keys
+        if len(keys) != ONE_IDENTITY:
+            continue
+        if keys[0].required:
+            continue
+        yield Finding(
+            "V307",
+            "warning",
+            str(keys[0]),
+            "the only natural key here, and not required; SQL counts NULLs "
+            "as distinct, so the uniqueness over it does not hold for a row "
+            "that has none",
+        )
 
 
 # -------------------------------------------------------------------------

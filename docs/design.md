@@ -151,6 +151,30 @@ So a declared `unique_keys` replaces the derived constraint rather than joining
 it. A table says it one way or the other, and one fact keeps one place to be
 written.
 
+And where several natural keys are present and nothing is declared, nothing is
+derived. The concatenated constraint above was emitted in exactly that case
+for a long time, on the reasoning that a merged key is better than no key; it
+is not. Two natural keys mean either one compound identity — a store known by
+its chain code and its store number — or two alternative ones, and the two
+want opposite constraints: `UNIQUE (a, b)` for the first, `UNIQUE (a)` and
+`UNIQUE (b)` for the second. A role says which columns are business
+identifiers and cannot say how many identities they make, so `V306` asks the
+model, as an error. Both silent answers are wrong: the merged form enforces
+something nobody meant, and deriving nothing leaves an identity the database
+does not hold.
+
+One thing Varda does not read, and it is worth knowing which way it falls.
+LinkML's `unique_keys` carries `consider_nulls_inequal`, and the defaults are
+opposite on the two sides: LinkML counts two nulls as **equal** — the rows are
+duplicates — while SQL counts them as distinct and admits both. The emitted
+`UNIQUE` is always SQL's reading, so a key over a nullable column is enforced
+more loosely than the schema states. That is usually the reading a warehouse
+wants, and it is the only portable one: `UNIQUE NULLS NOT DISTINCT` is
+PostgreSQL 15 and later, and DuckDB will not parse it. `V307` asks the
+question where it has one answer — a dimension whose only identity is
+nullable is a dimension whose uniqueness does not hold for the rows a repeated
+load produces.
+
 One asymmetry is worth knowing. Columns inherit — `class_induced_slots` pulls
 a parent's slots down — and `unique_keys` do not: LinkML drops them from the
 induced class. Varda walks `class_ancestors` by hand, because a table that
@@ -353,7 +377,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of forty-six rules disagrees with the code within two
+A hand-written table of forty-eight rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

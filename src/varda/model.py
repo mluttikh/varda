@@ -70,6 +70,13 @@ FACETS: dict[str, frozenset[str]] = {
     "scale": frozenset({"decimal"}),
 }
 
+#: Above this many natural keys, what a dimension is unique on stops being
+#: derivable from the roles alone: several may be one compound identity or
+#: several alternative ones, and the two want opposite constraints. Named
+#: rather than written as a literal because the generator and V306 have to
+#: agree about it, and two copies of a threshold drift.
+ONE_IDENTITY = 1
+
 #: The smallest value each facet may take. Scale alone may be zero, because
 #: `NUMERIC(18, 0)` is a whole number stored as a decimal — a declaration
 #: somebody means, and the default a database picks when no scale is given.

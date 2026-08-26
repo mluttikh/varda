@@ -167,9 +167,12 @@ A dimension that declares no `varda:scd` gets no derived constraint, because
 the answer depends on which type it is and guessing wrong costs rows —
 [`V502`](reference/rules.md#v502) reports the missing declaration.
 
-That derivation assumes one natural key. A dimension loaded from several
-sources often has more than one, because each source identifies the thing its
-own way:
+That derivation needs one natural key, and stops at more than one. A dimension
+loaded from several sources often has more than one, because each source
+identifies the thing its own way — and two of them are ambiguous in a way a
+role cannot resolve. Either they are one compound identity, a store known by
+its chain code and its store number together, or they are two alternatives,
+and the two want opposite constraints. So the model says which:
 
 ```yaml
 DimProduct:
@@ -192,6 +195,14 @@ caught by whichever key its own source populated.
 
 Declaring them replaces the derived constraint rather than adding to it, so a
 table states its uniqueness in one place or the other.
+[`V306`](reference/rules.md#v306) requires it wherever there is more than one
+natural key, as an error: the merged constraint was derived silently for a
+long time and enforced neither identity, and deriving nothing instead would
+leave a dimension whose identity the database does not hold.
+[`V307`](reference/rules.md#v307) warns when a dimension's *only* natural key
+is nullable, because SQL counts nulls as distinct and the uniqueness then
+does not hold for exactly the rows a repeated load produces — where there are
+several keys, being absent is the point and it says nothing.
 [`V303`](reference/rules.md#v303) checks the columns exist, because LinkML
 accepts a key over a misspelled slot without complaint.
 [`V304`](reference/rules.md#v304) checks a business key on a type-2 dimension
