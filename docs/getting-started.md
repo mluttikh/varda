@@ -36,6 +36,7 @@ classes:
         annotations:
           varda:role: SURROGATE_KEY
       customer_id:
+        required: true
         annotations:
           varda:role: NATURAL_KEY
       country:
@@ -97,7 +98,7 @@ columns at which rows are unique, `varda:grain_statement` as the sentence.
 
 ```console
 $ varda check mart.yaml
-2 tables checked against 46 rules (varda 0.2.0): 0 errors, 0 warnings
+2 tables checked against 48 rules (varda 0.2.0): 0 errors, 0 warnings
 ```
 
 Introduce a mistake — misspell `varda:grain` as `varda:grian`, say — and:
@@ -109,7 +110,7 @@ ERROR V001  FctOrder
 ERROR V201  FctOrder
         no varda:grain; name the columns at which rows are unique
 
-2 tables checked against 46 rules (varda 0.2.0): 2 errors, 0 warnings
+2 tables checked against 48 rules (varda 0.2.0): 2 errors, 0 warnings
 ```
 
 `--strict` also fails on warnings, and on an exemption that names a rule

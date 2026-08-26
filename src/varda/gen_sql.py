@@ -17,6 +17,8 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from .model import ONE_IDENTITY
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -343,13 +345,25 @@ def _derived_key(table: Table) -> tuple[Column, ...]:
     """Derive what a dimension is unique on from its roles alone.
 
     Empty whenever the answer cannot be reached without guessing, and the
-    two ways that happens are both already reported. Silence is the safe
+    three ways that happens are all reported elsewhere. Silence is the safe
     direction here: emitting a natural key alone on a table that turns out
     to version would reject the second version of every row, which is the
     constraint being wrong in the direction that looks like broken data.
+
+    Two natural keys are the third way, and the one that reads as though it
+    needed no guess. They mean either one compound identity — a store known
+    by its chain and its number — or two alternative ones, a product carrying
+    a barcode from one source and a supplier's part number from another. A
+    role cannot tell those apart, and the two want opposite constraints: one
+    over both columns, or one over each. Emitting the merged form for a table
+    that meant the second is worse than emitting nothing, because it is
+    weaker than either key alone and a NULL on one side leaves the row
+    unconstrained entirely. V306 asks the model to say which.
     """
     if not table.natural_keys:
         return ()  # V302 reports it
+    if len(table.natural_keys) > ONE_IDENTITY:
+        return ()  # V306 reports it
     if table.scd in {"TYPE_0", "TYPE_1"}:
         # Neither keeps a second row for one business entity, so the natural
         # key is the whole of it.

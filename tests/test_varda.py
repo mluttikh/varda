@@ -86,7 +86,12 @@ def dimension(**extra: Any) -> dict[str, Any]:
                 "range": "integer",
                 "annotations": {"varda:role": "SURROGATE_KEY"},
             },
-            "d_id": {"annotations": {"varda:role": "NATURAL_KEY"}},
+            # Required, because a dimension's only identity being absent is
+            # what V307 is about and every test would otherwise carry it.
+            "d_id": {
+                "required": True,
+                "annotations": {"varda:role": "NATURAL_KEY"},
+            },
         },
     }
     base.update(extra)
@@ -2595,6 +2600,153 @@ def test_v134_is_silent_on_a_well_formed_hierarchy(
     ]
     model = build(tmp_path, {"DimThing": table})
     assert "V004" not in codes(model)
+
+
+# --- two identities ---------------------------------------------------------
+
+
+def _two_identities(**extra: Any) -> dict[str, Any]:
+    """Build a dimension a product is identified two different ways in."""
+    table = dimension()
+    table["attributes"] = {
+        "d_key": table["attributes"]["d_key"],
+        "gtin": {"annotations": {"varda:role": "NATURAL_KEY"}},
+        "supplier_part": {"annotations": {"varda:role": "NATURAL_KEY"}},
+    }
+    table.update(extra)
+    return table
+
+
+def test_v306_several_natural_keys_and_nothing_said(
+    tmp_path: pathlib.Path,
+) -> None:
+    model = build(tmp_path, {"DimThing": _two_identities()})
+    found = [f for f in rules.check(model) if f.rule == "V306"]
+    assert len(found) == 1
+    assert "gtin, supplier_part" in found[0].message
+
+
+def test_a_merged_constraint_is_no_longer_derived(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The constraint this replaces, and why nothing takes its place.
+
+    `UNIQUE (gtin, supplier_part)` was emitted for years and enforced
+    neither identity: two rows may share a barcode as long as their part
+    numbers differ, and a NULL on either side — the normal state of a table
+    whose two sources each fill one column — leaves the row unconstrained
+    outright. Emitting nothing is worse than a correct constraint and better
+    than that one, and V306 is what stops it being the end of the story.
+    """
+    model = build(tmp_path, {"DimThing": _two_identities()})
+    sql = generate_sql(model)
+    assert "UNIQUE" not in sql
+    assert "V306" in codes(model)
+
+
+def test_the_merged_constraint_enforced_neither_identity() -> None:
+    """Pinned against a real engine, because the claim is about behavior.
+
+    Built by hand rather than generated — the generator no longer emits this
+    — so that the reason V306 is an error stays visible after the shape that
+    produced it is gone.
+    """
+    conn = duckdb.connect()
+    conn.execute(
+        "CREATE TABLE t (gtin VARCHAR, part VARCHAR, UNIQUE (gtin, part))"
+    )
+    conn.execute("INSERT INTO t VALUES ('0012345678905', 'A')")
+    conn.execute("INSERT INTO t VALUES ('0012345678905', 'B')")
+    conn.execute("INSERT INTO t VALUES ('0012345678905', NULL)")
+    conn.execute("INSERT INTO t VALUES ('0012345678905', NULL)")
+    shared = conn.execute(
+        "SELECT count(*) FROM t WHERE gtin = '0012345678905'"
+    ).fetchone()
+    assert shared == (4,)
+
+
+def test_declared_keys_settle_it(tmp_path: pathlib.Path) -> None:
+    """Two alternative identities become two independent constraints."""
+    table = _two_identities(
+        unique_keys={
+            "by_barcode": {"unique_key_slots": ["gtin"]},
+            "by_supplier": {"unique_key_slots": ["supplier_part"]},
+        }
+    )
+    model = build(tmp_path, {"DimThing": table})
+    sql = generate_sql(model)
+    assert 'UNIQUE ("gtin")' in sql
+    assert 'UNIQUE ("supplier_part")' in sql
+    assert "V306" not in codes(model)
+
+
+def test_one_compound_identity_is_declared_the_same_way(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The other reading, said out loud rather than guessed at.
+
+    A store known by its chain and its number wants exactly the merged
+    constraint V306 refuses to derive. Nothing stops it — the model just has
+    to be the one that says so.
+    """
+    table = _two_identities(
+        unique_keys={
+            "business": {"unique_key_slots": ["gtin", "supplier_part"]}
+        }
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert 'UNIQUE ("gtin", "supplier_part")' in generate_sql(model)
+    assert "V306" not in codes(model)
+
+
+def test_one_natural_key_still_derives(tmp_path: pathlib.Path) -> None:
+    """The unambiguous case is unchanged: one identity, one constraint."""
+    model = build(tmp_path, {"DimThing": dimension()})
+    assert 'UNIQUE ("d_id")' in generate_sql(model)
+    assert "V306" not in codes(model)
+
+
+def test_v307_a_lone_identity_that_may_be_absent(
+    tmp_path: pathlib.Path,
+) -> None:
+    table = dimension()
+    del table["attributes"]["d_id"]["required"]
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V307"]
+    assert len(found) == 1
+    assert found[0].severity == "warning"
+
+
+def test_v307_leaves_alternative_identities_alone(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Absence is the point where a dimension has several identities.
+
+    A product read from a barcode feed has no supplier part number and one
+    read from a supplier catalog has no barcode. Warning on those would fire
+    on every well-formed table of the shape and be switched off.
+    """
+    table = _two_identities(
+        unique_keys={
+            "by_barcode": {"unique_key_slots": ["gtin"]},
+            "by_supplier": {"unique_key_slots": ["supplier_part"]},
+        }
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert "V307" not in codes(model)
+
+
+def test_a_nullable_lone_key_does_not_hold(tmp_path: pathlib.Path) -> None:
+    """Why V307 exists: the constraint is there and does not bite."""
+    table = dimension()
+    del table["attributes"]["d_id"]["required"]
+    model = build(tmp_path, {"DimThing": table})
+    conn = duckdb.connect()
+    conn.execute(generate_sql(model))
+    for key in (1, 2, 3):
+        conn.execute("INSERT INTO mart.dim_thing VALUES (NULL, ?)", [key])
+    kept = conn.execute("SELECT count(*) FROM mart.dim_thing").fetchone()
+    assert kept == (3,)
 
 
 # --- unique keys ------------------------------------------------------------
