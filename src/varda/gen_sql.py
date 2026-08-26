@@ -54,7 +54,41 @@ def sql_type(column: Column) -> str:
             f"{column}: range {rng!r} has no SQL mapping. Known ranges: {known}"
         )
         raise GenerationError(msg)
-    return mapped
+    return mapped + _facets(column)
+
+
+def _facets(column: Column) -> str:
+    """Render the type parameters a column declares, or nothing.
+
+    Nothing is the honest output for a column that declares none, but it is
+    not a safe one everywhere, and that is the whole reason the facets exist.
+    A bare `VARCHAR` is unbounded in PostgreSQL and DuckDB and means
+    `VARCHAR(1)` in SQL Server, so every string column in a generated star
+    truncates to one character on one major engine. A bare `NUMERIC` is
+    exact and unconstrained in PostgreSQL and `DECIMAL(18, 3)` in DuckDB,
+    where a unit price of 0.123456 is stored as 0.123 and nothing says so.
+
+    Varda emits the bare type anyway when nothing is declared, rather than
+    inventing a default width. A default is the same silent fallback
+    :data:`TYPES` refuses when it raises on an unmapped range: it would put a
+    number nobody chose into the DDL, and be wrong in the direction that
+    looks like working output. `V707` asks the question where it costs most.
+
+    A scale that cannot be emitted is dropped rather than guessed at, and
+    there are two of those: one with no precision beside it, since there is
+    no `NUMERIC(, 2)` and the missing half would have to be invented, and one
+    larger than its precision, which no database accepts. V803 reports both
+    as errors; this is what `--force` writes in the meantime.
+    """
+    if column.max_length is not None:
+        return f"({column.max_length})"
+    precision = column.precision
+    if precision is None:
+        return ""
+    scale = column.scale
+    if scale is None or scale > precision:
+        return f"({precision})"
+    return f"({precision}, {scale})"
 
 
 def quoted(name: str) -> str:

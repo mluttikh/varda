@@ -89,12 +89,17 @@ classes:
         required: true
         annotations:
           varda:role: NATURAL_KEY
+          # The width the source system guarantees. Emitted as
+          # VARCHAR(20); left off, this is VARCHAR(1) on SQL Server.
+          varda:max_length: 20
       customer_name:
         annotations:
           varda:role: ATTRIBUTE
+          varda:max_length: 120
       country:
         annotations:
           varda:role: ATTRIBUTE
+          varda:max_length: 2
       valid_from:
         description: Start of this version's period, inclusive.
         range: datetime
@@ -222,6 +227,10 @@ classes:
         annotations:
           varda:role: MEASURE
           varda:additivity: NON_ADDITIVE
+          # Six places, because a factor is a share of one: two would round
+          # a customer split eight ways into eight shares that sum to 0.99.
+          varda:precision: 9
+          varda:scale: 6
 
   FctSale:
     description: A line on a sales receipt.
@@ -280,6 +289,10 @@ classes:
         annotations:
           varda:role: MEASURE
           varda:additivity: ADDITIVE
+          # Money, so two places exactly. Left undeclared this is
+          # unconstrained on one engine and three places on another.
+          varda:precision: 18
+          varda:scale: 2
       unit_price:
         description: >-
           Price of one unit. Non-additive: summing prices across lines
@@ -290,6 +303,10 @@ classes:
         annotations:
           varda:role: MEASURE
           varda:additivity: NON_ADDITIVE
+          # Four places rather than two: a unit price is what the line total
+          # is computed from, and rounding the input rounds every line.
+          varda:precision: 18
+          varda:scale: 4
 
   FctInventory:
     description: Stock position, measured at the close of each day.

@@ -57,6 +57,28 @@ VERSIONING_ROLES = frozenset(
     {"VERSION_START", "VERSION_END", "IS_CURRENT", "VERSION_NUMBER"}
 )
 
+#: The physical type facets a column may declare, and the ranges each one
+#: means anything on. A facet parameterizes the emitted SQL type — the 80 in
+#: `VARCHAR(80)` — so it is legal exactly where the type it parameterizes is.
+#:
+#: Keyed by facet rather than by range so that V803 can name the ranges a
+#: misplaced facet would have been legal on, which is the half of the message
+#: that says what to do about it.
+FACETS: dict[str, frozenset[str]] = {
+    "max_length": frozenset({"string", "uri", "uriorcurie", "ncname"}),
+    "precision": frozenset({"decimal"}),
+    "scale": frozenset({"decimal"}),
+}
+
+#: The smallest value each facet may take. Scale alone may be zero, because
+#: `NUMERIC(18, 0)` is a whole number stored as a decimal — a declaration
+#: somebody means, and the default a database picks when no scale is given.
+FACET_MINIMUM: dict[str, int] = {
+    "max_length": 1,
+    "precision": 1,
+    "scale": 0,
+}
+
 
 def _level_spec(entry: Any) -> tuple[str, str]:
     """Read one level entry as its spec and its declared key names.
@@ -277,6 +299,43 @@ class Column:
     @property
     def range(self) -> str:
         return str(self.slot.range or "string")
+
+    def facet(self, name: str) -> int | None:
+        """Read one physical type facet, or ``None`` if it does not apply.
+
+        ``None`` covers three cases deliberately: the facet is absent, it
+        sits on a range it cannot parameterize, and it is not a whole number
+        at or above this facet's floor. All three are V803's to report, and
+        returning a number here for any of them would put a length on a date
+        or a width of nothing into the emitted DDL — generation runs against
+        a nonconforming model under ``--force``, so the guard holds on this
+        side too.
+        """
+        if self.range.lower() not in FACETS[name]:
+            return None
+        raw = get(self.slot, name)
+        if raw is None:
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            return None
+        return value if value >= FACET_MINIMUM[name] else None
+
+    @property
+    def max_length(self) -> int | None:
+        """The widest value this column holds, in characters."""
+        return self.facet("max_length")
+
+    @property
+    def precision(self) -> int | None:
+        """How many significant digits this column keeps."""
+        return self.facet("precision")
+
+    @property
+    def scale(self) -> int | None:
+        """How many of this column's digits fall after the decimal point."""
+        return self.facet("scale")
 
     @property
     def required(self) -> bool:

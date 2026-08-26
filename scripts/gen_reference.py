@@ -111,10 +111,11 @@ FAMILIES = (
     ),
     (
         "V8",
-        "Physical naming",
+        "Physical naming and types",
         (
             "What the generators emit. A physical name identifies one table "
-            "or one column, or it identifies nothing."
+            "or one column, or it identifies nothing; a type facet "
+            "parameterizes the emitted type, or it parameterizes nothing."
         ),
     ),
 )

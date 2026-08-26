@@ -71,7 +71,7 @@ thing to maintain than a parser.
 
 ## Why the vocabulary is this small
 
-Twelve annotations is not a first cut on the way to forty. It is the
+Fifteen annotations is not a first cut on the way to forty. It is the
 deliberate size.
 
 Every annotation in the core is one a newcomer has to read before they can
@@ -195,6 +195,59 @@ themselves. `V705` still asks every measure to declare a unit — two measures
 in different currencies add up cleanly and wrongly — it just asks the
 question of LinkML's slot.
 
+## Why type facets are Varda's and not LinkML's
+
+A unit is LinkML's because LinkML has one. A width is Varda's because LinkML
+has none: there is no `maximum_length` on a slot or on a type, and no
+`precision` or `scale` anywhere in the metamodel. The only native way to
+bound a string is `pattern: '^.{0,80}$'`, which is a validation constraint no
+generator reads back out as a width. So the choice is not between reading a
+native and restating it. It is between carrying the fact and dropping it.
+
+Dropping it is not neutral, which is the part worth stating. A column with no
+declared width emits a bare `VARCHAR`, and a bare `VARCHAR` is unbounded in
+PostgreSQL and means `VARCHAR(1)` in SQL Server — every string column in a
+generated star truncating to one character on one major engine. A bare
+`NUMERIC` is exact and unconstrained in PostgreSQL and `DECIMAL(18, 3)` in
+DuckDB, where a unit price of 0.123456 is stored as 0.123 and nothing is
+raised. Varda emits dialect-neutral DDL and cannot know which engine the
+output will meet, so a fact the model never stated becomes a number the
+database picks.
+
+```yaml
+customer_id:
+  range: string
+  annotations:
+    varda:role: NATURAL_KEY
+    varda:max_length: 20
+
+net_amount:
+  range: decimal
+  unit:
+    symbol: EUR
+  annotations:
+    varda:role: MEASURE
+    varda:additivity: ADDITIVE
+    varda:precision: 18
+    varda:scale: 2
+```
+
+They are facets rather than one `physical_type: VARCHAR(80)` because a facet
+is a claim about the column and an opaque type string is a claim about one
+database. `V803` can check that a width sits on a range that has one, that a
+scale has a precision beside it, and that the scale fits — none of which is
+reachable inside a string the generator has to pass through untouched. The
+same three numbers emit `VARCHAR2` on Oracle the day that dialect exists,
+where a stored `VARCHAR(80)` would already have chosen.
+
+Nothing gets a default. A width nobody chose is the same silent fallback the
+range table refuses when it raises rather than mapping an unknown range to
+`TEXT`: it would be wrong in the direction that looks like working output.
+`V707` asks the question where it costs most — of a decimal measure, which
+is a number somebody acts on — and asks nothing of strings, because a warning
+that fires a dozen times on a small star is a warning that gets switched off,
+and it would take the measures with it.
+
 ## Why the grain sentence is not checked against the columns
 
 A fact declares its grain twice — as columns and as a sentence — and nothing
@@ -249,7 +302,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of forty-three rules disagrees with the code within two
+A hand-written table of forty-five rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

@@ -52,7 +52,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 43 rules (varda 0.2.0): 0 errors, 0 warnings
+8 tables checked against 45 rules (varda 0.2.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -69,14 +69,14 @@ Python 3.11+. The only runtime dependency is `linkml-runtime`.
 
 ## What it gives you
 
-**Twelve annotations.** Seven on tables — `role`, `grain`,
-`grain_statement`, `hierarchies`, `fact_type`, `scd`, `physical_name`. Five on
-columns — `role`, `references`, `additivity`, `semi_additive_over`,
-`physical_name`. That is the whole core
+**Fifteen annotations.** Seven on tables — `role`, `grain`,
+`grain_statement`, `hierarchies`, `fact_type`, `scd`, `physical_name`. Eight
+on columns — `role`, `references`, `additivity`, `semi_additive_over`,
+`physical_name`, `max_length`, `precision`, `scale`. That is the whole core
 vocabulary, and it is deliberately the whole core vocabulary. Units are
 LinkML's own `unit`, which Varda reads rather than restates.
 
-**Forty-three rules** that catch the mistakes worth catching. A code names
+**Forty-five rules** that catch the mistakes worth catching. A code names
 its concern, so the band tells you where to look:
 
 | | |
@@ -88,8 +88,8 @@ its concern, so the band tells you where to look:
 | `V401`–`V405` | references — a foreign key pointing at a fact, one naming no target |
 | `V501`–`V506` | time — a version period on a dimension that keeps no versions |
 | `V601`–`V607` | hierarchies — a level that is not a column, a path of one level |
-| `V701`–`V706` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross |
-| `V801`–`V802` | physical naming — two classes emitting one table, two columns emitting one name |
+| `V701`–`V707` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross, a decimal one that never says what it keeps |
+| `V801`–`V803` | physical naming and types — two classes emitting one table, a width on a column that has none |
 
 The `V7xx` family exists because additivity is where the expensive errors
 live. A structural mistake usually breaks a query. An additivity mistake

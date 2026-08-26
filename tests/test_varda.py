@@ -8,6 +8,7 @@ somebody has shipped a model against them.
 
 from __future__ import annotations
 
+import decimal
 import importlib.metadata
 import pathlib
 import textwrap
@@ -2834,6 +2835,193 @@ def test_a_column_collision_would_not_execute(
     sql = generate_sql(build(tmp_path, {"DimThing": table}))
     with pytest.raises(duckdb.Error):
         duckdb.connect().execute(sql)
+
+
+# --- type facets ------------------------------------------------------------
+
+
+def _sized(**facets: Any) -> dict[str, Any]:
+    """Build a dimension carrying one extra column with the given facets."""
+    table = dimension()
+    rng = facets.pop("range", "string")
+    table["attributes"]["sized"] = {
+        "range": rng,
+        "annotations": {
+            "varda:role": "ATTRIBUTE",
+            **{f"varda:{k}": v for k, v in facets.items()},
+        },
+    }
+    return table
+
+
+def _decimal_measure(**facets: Any) -> dict[str, Any]:
+    """Build a fact whose one measure carries the given facets."""
+    fct = _fact(
+        **{
+            "varda:grain": ["d_key", "ticket"],
+            "varda:grain_statement": "one row per thing per ticket",
+        }
+    )
+    fct["attributes"]["amount"]["annotations"].update(
+        {f"varda:{k}": v for k, v in facets.items()}
+    )
+    return fct
+
+
+def test_a_length_reaches_the_ddl(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _sized(max_length=80)})
+    assert '"sized" VARCHAR(80)' in generate_sql(model)
+    assert codes(model) == set()
+
+
+def test_precision_and_scale_reach_the_ddl(tmp_path: pathlib.Path) -> None:
+    model = build(
+        tmp_path,
+        {
+            "FctX": _decimal_measure(precision=18, scale=2),
+            "DimThing": dimension(),
+        },
+    )
+    assert '"amount" NUMERIC(18, 2)' in generate_sql(model)
+    assert not {"V707", "V803"} & codes(model)
+
+
+def test_an_undeclared_column_is_unchanged(tmp_path: pathlib.Path) -> None:
+    """A model that declares no facet emits what it emitted before.
+
+    The facets are additive or they are a silent migration: every model
+    written against an earlier version would otherwise generate different
+    DDL on upgrade.
+    """
+    model = build(tmp_path, {"DimThing": _sized()})
+    assert '"sized" VARCHAR,' in generate_sql(model)
+
+
+def test_scale_survives_a_round_trip(tmp_path: pathlib.Path) -> None:
+    """A declared scale keeps digits that a bare NUMERIC drops.
+
+    DuckDB reads a bare `NUMERIC` as `DECIMAL(18, 3)`, so an undeclared unit
+    price of 0.123456 is stored as 0.123 and nothing reports it. That is the
+    failure the facets exist for, so it is pinned against a real engine
+    rather than asserted against the string of the DDL.
+    """
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    declared = build(
+        tmp_path / "a",
+        {
+            "FctX": _decimal_measure(precision=18, scale=6),
+            "DimThing": dimension(),
+        },
+    )
+    bare = build(
+        tmp_path / "b", {"FctX": _decimal_measure(), "DimThing": dimension()}
+    )
+
+    kept = []
+    for model in (declared, bare):
+        conn = duckdb.connect()
+        conn.execute(generate_sql(model))
+        conn.execute("INSERT INTO mart.dim_thing VALUES ('x', 1)")
+        conn.execute("INSERT INTO mart.fct_x VALUES (0.123456, 1, 't')")
+        kept.append(conn.execute("SELECT amount FROM mart.fct_x").fetchone())
+
+    assert kept[0] == (decimal.Decimal("0.123456"),)
+    assert kept[1] == (decimal.Decimal("0.123"),)
+
+
+def test_v803_a_facet_on_a_range_it_cannot_parameterize(
+    tmp_path: pathlib.Path,
+) -> None:
+    model = build(tmp_path, {"DimThing": _sized(range="date", max_length=10)})
+    found = [f for f in rules.check(model) if f.rule == "V803"]
+    assert len(found) == 1
+    assert "parameterizes nothing" in found[0].message
+    assert "string" in found[0].message
+
+
+def test_v803_a_width_that_is_not_a_number(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _sized(max_length="eighty")})
+    assert "V803" in codes(model)
+
+
+@pytest.mark.parametrize("width", [0, -1])
+def test_v803_a_width_of_nothing(tmp_path: pathlib.Path, width: int) -> None:
+    """Zero is the interesting one: `VARCHAR(0)` parses and holds nothing."""
+    model = build(tmp_path, {"DimThing": _sized(max_length=width)})
+    assert "V803" in codes(model)
+
+
+def test_v803_a_scale_with_no_precision(tmp_path: pathlib.Path) -> None:
+    """There is no `NUMERIC(, 2)`, so the half that is there is dropped."""
+    model = build(
+        tmp_path,
+        {"FctX": _decimal_measure(scale=2), "DimThing": dimension()},
+    )
+    found = [f for f in rules.check(model) if f.rule == "V803"]
+    assert len(found) == 1
+    assert "no varda:precision" in found[0].message
+    assert '"amount" NUMERIC,' in generate_sql(model)
+
+
+def test_v803_a_scale_larger_than_its_precision(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No database accepts it, so `--force` must not emit it either."""
+    model = build(
+        tmp_path,
+        {
+            "FctX": _decimal_measure(precision=4, scale=9),
+            "DimThing": dimension(),
+        },
+    )
+    assert "V803" in codes(model)
+    sql = generate_sql(model)
+    assert '"amount" NUMERIC(4)' in sql
+    duckdb.connect().execute(sql)
+
+
+def test_a_scale_of_zero_is_a_declaration(tmp_path: pathlib.Path) -> None:
+    """`NUMERIC(18, 0)` is a whole number stored as a decimal, not a mistake.
+
+    Zero is the one facet value that is legal at its floor, which is why the
+    minimum is per facet rather than one shared "positive".
+    """
+    model = build(
+        tmp_path,
+        {
+            "FctX": _decimal_measure(precision=18, scale=0),
+            "DimThing": dimension(),
+        },
+    )
+    assert "V803" not in codes(model)
+    assert '"amount" NUMERIC(18, 0)' in generate_sql(model)
+
+
+def test_v707_a_decimal_measure_saying_nothing(tmp_path: pathlib.Path) -> None:
+    model = build(
+        tmp_path, {"FctX": _decimal_measure(), "DimThing": dimension()}
+    )
+    found = [f for f in rules.check(model) if f.rule == "V707"]
+    assert len(found) == 1
+    assert found[0].severity == "warning"
+
+
+def test_v707_leaves_strings_alone(tmp_path: pathlib.Path) -> None:
+    """Warning on every undeclared string would fire a dozen times a model.
+
+    A rule that noisy gets exempted, and takes the decimal case with it.
+    """
+    model = build(tmp_path, {"DimThing": _sized()})
+    assert "V707" not in codes(model)
+
+
+def test_v707_leaves_a_float_measure_alone(tmp_path: pathlib.Path) -> None:
+    """A float has no exact precision to declare; that is what a float is."""
+    fct = _decimal_measure()
+    fct["attributes"]["amount"]["range"] = "float"
+    model = build(tmp_path, {"FctX": fct, "DimThing": dimension()})
+    assert "V707" not in codes(model)
 
 
 def test_v126_hierarchy_on_a_fact(tmp_path: pathlib.Path) -> None:

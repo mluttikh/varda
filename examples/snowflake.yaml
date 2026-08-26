@@ -220,3 +220,5 @@ classes:
         annotations:
           varda:role: MEASURE
           varda:additivity: ADDITIVE
+          varda:precision: 18
+          varda:scale: 2

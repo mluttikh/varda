@@ -20,7 +20,7 @@ stability of any code inside it.
     V5xx  time
     V6xx  hierarchies
     V7xx  measures
-    V8xx  physical naming
+    V8xx  physical naming and types
 
 A code names its concern, so `varda rules` comes out grouped and a new rule
 has an obvious home. That is the whole reason the bands exist: `V1xx` had
@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 from . import registry
 from .anns import anns, get
 from .ext import SEVERITIES, Severity
-from .model import VERSIONING_ROLES
+from .model import FACET_MINIMUM, FACETS, VERSIONING_ROLES
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -1242,11 +1242,44 @@ def v706(model: DimensionalModel) -> Iterator[Finding]:
         )
 
 
+@RULES.rule("V707", "warning", "Decimal measures declare precision and scale")
+def v707(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a decimal measure that does not say what it keeps.
+
+    A warning, and scoped to measures on purpose. Every string column in a
+    model could be asked for a width on the same reasoning, and asking would
+    fire a dozen times on a small star and be switched off. This fires rarely
+    and covers the case that costs money: a measure is the number somebody
+    acts on, and a decimal one silently rounded is wrong in the way that
+    still looks like an answer.
+    """
+    for table in model.tables:
+        for column in table.measures:
+            if column.range.lower() not in FACETS["precision"]:
+                continue
+            missing = [
+                f"varda:{name}"
+                for name in ("precision", "scale")
+                if get(column.slot, name) is None
+            ]
+            if not missing:
+                continue
+            yield Finding(
+                "V707",
+                "warning",
+                str(column),
+                f"no {' or '.join(missing)}; a bare NUMERIC is unconstrained "
+                f"on PostgreSQL and DECIMAL(18, 3) on DuckDB, so what this "
+                f"measure keeps depends on where it lands",
+            )
+
+
 # -------------------------------------------------------------------------
-# V8xx — physical naming
+# V8xx — physical naming and types
 #
 # What the generators emit. A physical name identifies one table or one
-# column, or it identifies nothing.
+# column, or it identifies nothing; a type facet parameterizes the type
+# emitted beside it, or it parameterizes nothing.
 # -------------------------------------------------------------------------
 
 
@@ -1338,6 +1371,78 @@ def v802(model: DimensionalModel) -> Iterator[Finding]:
                 f"{what} claimed by columns {who}; "
                 f"one name cannot be two columns",
             )
+
+
+@RULES.rule("V803", "error", "Type facets are well formed")
+def v803(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a type facet that cannot be emitted as written.
+
+    A facet parameterizes the SQL type — the 80 in `VARCHAR(80)`, the 18 and
+    the 2 in `NUMERIC(18, 2)` — so it belongs in the physical band with the
+    names, and it fails in the same silent way they do. `varda:max_length`
+    on a date parameterizes nothing and is dropped; a scale with no precision
+    has no DDL to become. Both leave a model that reads as though it stated
+    a width and generates output that never had one.
+    """
+    for table in model.tables:
+        for column in table.columns:
+            yield from _facet_faults(column)
+
+
+def _facet_faults(column: Column) -> Iterator[Finding]:
+    """Report every way one column's facets fail to describe a type."""
+    declared = {
+        name: value
+        for name in FACETS
+        if (value := get(column.slot, name)) is not None
+    }
+    for name, value in declared.items():
+        yield from _one_facet(column, name, value)
+
+    if "scale" in declared and "precision" not in declared:
+        yield Finding(
+            "V803",
+            "error",
+            str(column),
+            "varda:scale with no varda:precision; there is no NUMERIC(, 2) "
+            "to emit, and the missing half would have to be invented",
+        )
+        return
+
+    precision, scale = column.precision, column.scale
+    if precision is not None and scale is not None and scale > precision:
+        yield Finding(
+            "V803",
+            "error",
+            str(column),
+            f"varda:scale {scale} is larger than varda:precision "
+            f"{precision}; a column cannot keep more digits after the "
+            f"decimal point than it keeps in total",
+        )
+
+
+def _one_facet(column: Column, name: str, value: str) -> Iterator[Finding]:
+    """Check one facet against the range it parameterizes and its own bound."""
+    ranges = FACETS[name]
+    if column.range.lower() not in ranges:
+        legal = ", ".join(sorted(ranges))
+        yield Finding(
+            "V803",
+            "error",
+            str(column),
+            f"varda:{name} on a {column.range} column, where it "
+            f"parameterizes nothing; legal on: {legal}",
+        )
+        return
+    if column.facet(name) is None:
+        least = FACET_MINIMUM[name]
+        yield Finding(
+            "V803",
+            "error",
+            str(column),
+            f"varda:{name} is {value!r}; expected a whole number "
+            f"of {least} or more",
+        )
 
 
 # ---------------------------------------------------------------------------

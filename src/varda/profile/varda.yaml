@@ -415,6 +415,47 @@ classes:
           The column name to emit, when it differs from the slot name.
         range: string
 
+      max_length:
+        description: >-
+          The widest value this column holds, in characters. Emitted as the
+          length of the SQL type: `VARCHAR(80)`.
+
+          String columns only — `string`, `uri`, `uriorcurie`, `ncname`.
+          A length on a date parameterizes nothing.
+
+          Optional, and there is no default. A column declaring none emits a
+          bare `VARCHAR`, which is unbounded in PostgreSQL and DuckDB and
+          means `VARCHAR(1)` in SQL Server. Varda states the width the model
+          gave it and invents nothing, because a default width is a number
+          nobody chose appearing in a schema everybody trusts.
+        range: integer
+
+      precision:
+        description: >-
+          How many significant digits this column keeps, counting both sides
+          of the decimal point. Emitted as the first parameter of the SQL
+          type: the 18 in `NUMERIC(18, 2)`.
+
+          Decimal columns only. A float has no exact precision to declare —
+          that is what makes it a float.
+
+          Optional. A bare `NUMERIC` is exact and unconstrained in
+          PostgreSQL and `DECIMAL(18, 3)` in DuckDB, where a unit price of
+          0.123456 is stored as 0.123 and no error is raised. `V707` asks
+          every decimal measure to say what it keeps.
+        range: integer
+
+      scale:
+        description: >-
+          How many of this column's digits fall after the decimal point.
+          Emitted as the second parameter of the SQL type: the 2 in
+          `NUMERIC(18, 2)`.
+
+          Decimal columns only, and needs a `varda:precision` beside it —
+          there is no `NUMERIC(, 2)` to emit. May be zero, which is a whole
+          number stored as a decimal and not a mistake.
+        range: integer
+
   Hierarchy:
     description: >-
       One named drill path over a dimension's columns.
