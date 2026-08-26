@@ -39,6 +39,17 @@ def _columns(table: Table) -> list[str]:
             notes.append(phrase)
         if column.unit:
             notes.append(f"unit: `{column.unit}`")
+        # The width, for the person writing the query rather than the one
+        # reading the DDL. Spelled out rather than shown as `VARCHAR(80)`,
+        # because this page describes the model and the SQL type is one
+        # generator's rendering of it.
+        if column.max_length is not None:
+            notes.append(f"at most {column.max_length} characters")
+        if column.precision is not None:
+            kept = f"{column.precision} digits"
+            if column.scale is not None:
+                kept += f", {column.scale} after the point"
+            notes.append(kept)
         if column.description:
             notes.append(column.description)
         rows.append(
