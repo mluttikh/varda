@@ -16,9 +16,11 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 import pytest
+import sqlglot
 import yaml
+from sqlglot import expressions as sqlglot_exp
 
-from varda import __version__, cli, registry, rules
+from varda import __version__, cli, gen_sql, registry, rules
 from varda.ext import Extension, ExtensionError, Generator
 from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
@@ -2759,8 +2761,8 @@ def test_v131_catches_names_that_differ_only_in_case(
     """Quoting does not settle case, and engines disagree about it.
 
     PostgreSQL treats `"Foo"` and `"foo"` as two tables; DuckDB refuses the
-    second as a duplicate. Varda emits dialect-neutral DDL and cannot know
-    which it will meet, so the pair is refused rather than left to whichever
+    second as a duplicate. A model is checked once and generated for any
+    dialect, so the pair is refused there rather than left to whichever
     database sees it first. The message says that is what happened, because
     two names that look different are the confusing case to be told about.
     """
@@ -2835,6 +2837,248 @@ def test_a_column_collision_would_not_execute(
     sql = generate_sql(build(tmp_path, {"DimThing": table}))
     with pytest.raises(duckdb.Error):
         duckdb.connect().execute(sql)
+
+
+# --- dialects ---------------------------------------------------------------
+
+#: sqlglot's name for each dialect Varda ships.
+SQLGLOT_NAMES = {
+    "postgres": "postgres",
+    "duckdb": "duckdb",
+    "snowflake": "snowflake",
+    "sqlserver": "tsql",
+}
+
+#: Spellings of one type that sqlglot prefers and Varda does not. Every pair
+#: here is the same type under two names that the engine accepts either of —
+#: DuckDB takes `VARCHAR` and `TEXT`, PostgreSQL takes `INTEGER` and `INT` —
+#: so normalizing through this compares what the column will be rather than
+#: how two tools chose to spell it.
+TYPE_ALIASES = {
+    "INT": "INTEGER",
+    "DECIMAL": "NUMERIC",
+    "TEXT": "VARCHAR",
+    "DOUBLE": "DOUBLE PRECISION",
+}
+
+
+def _sqlglot_type(base: str, write: str) -> str:
+    """Ask sqlglot what PostgreSQL's `base` is called in `write`."""
+    tree = sqlglot.parse_one(f'CREATE TABLE t ("c" {base})', read="postgres")
+    column = tree.find(sqlglot_exp.ColumnDef)
+    assert column is not None
+    kind = column.kind
+    assert kind is not None
+    return str(kind.sql(dialect=write)).upper()
+
+
+@pytest.mark.parametrize("name", sorted(gen_sql.DIALECTS))
+def test_the_dialect_table_agrees_with_sqlglot(name: str) -> None:
+    """Every type Varda emits is the one sqlglot emits for that engine.
+
+    DuckDB is the only engine this suite can execute, so the other tables
+    would be lookups nobody has ever run — which is exactly how `TIMESTAMP`
+    came to be emitted for SQL Server, where it names a row-version counter
+    with no date in it. sqlglot maintains the same mapping as its whole
+    purpose, so the tables are checked against something rather than against
+    nothing.
+
+    Disagreement here does not automatically mean Varda is wrong. It means
+    one of the two moved, and that a person has to look.
+    """
+    dialect = gen_sql.DIALECTS[name]
+    for rng, base in gen_sql.TYPES.items():
+        ours = dialect.type_of(rng)
+        assert ours is not None
+        theirs = _sqlglot_type(base, SQLGLOT_NAMES[name])
+        assert TYPE_ALIASES.get(ours, ours) == TYPE_ALIASES.get(
+            theirs, theirs
+        ), f"{name}: {rng} is {ours} here and {theirs} in sqlglot"
+
+
+def test_the_default_dialect_is_postgres() -> None:
+    """The base table is PostgreSQL's, and says so.
+
+    Naming it is the substance of this change rather than a label on it: the
+    output was called dialect-neutral while emitting `BOOLEAN`, which SQL
+    Server does not have, and `TIMESTAMP`, which SQL Server has and means
+    something else by.
+    """
+    assert gen_sql.DEFAULT_DIALECT == "postgres"
+    assert gen_sql.DIALECTS["postgres"].types == {}
+
+
+def test_an_unknown_dialect_names_the_known_ones() -> None:
+    with pytest.raises(gen_sql.GenerationError) as caught:
+        gen_sql.dialect("orcale")
+    assert "sqlserver" in str(caught.value)
+
+
+def test_sqlserver_fixes_the_versioning_columns(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The bug that motivates the whole dialect.
+
+    `TIMESTAMP` is a synonym for `rowversion` in T-SQL — an incrementing
+    counter with no date in it. Emitted for `valid_from`, it produces a
+    type-2 dimension whose version period cannot hold a version period,
+    on a table every V5xx rule has just certified.
+    """
+    table = versioned(vs=_col("VERSION_START"))
+    table["attributes"]["d_id"]["annotations"]["varda:max_length"] = 20
+    model = build(tmp_path, {"DimThing": table})
+    assert '"vs" TIMESTAMP' in generate_sql(model)
+    tsql = generate_sql(model, dialect_name="sqlserver")
+    assert '"vs" DATETIME2' in tsql
+    assert "TIMESTAMP" not in tsql
+
+
+def test_sqlserver_creates_its_schema_its_own_way(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`CREATE SCHEMA` must lead its batch, so it cannot be guarded by IF."""
+    table = dimension()
+    table["attributes"]["d_id"]["annotations"]["varda:max_length"] = 20
+    model = build(tmp_path, {"DimThing": table})
+    tsql = generate_sql(model, dialect_name="sqlserver")
+    assert "IF SCHEMA_ID('mart') IS NULL EXEC(" in tsql
+    assert "CREATE SCHEMA IF NOT EXISTS" not in tsql
+
+
+def test_sqlserver_refuses_a_string_with_no_width(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A bare `VARCHAR` is a `VARCHAR(1)` there, and truncates in silence.
+
+    Refused rather than widened to `VARCHAR(MAX)`, which cannot be a key
+    column: a natural key emitted that way takes the whole file down at the
+    UNIQUE constraint, having looked fine.
+    """
+    model = build(tmp_path, {"DimThing": dimension()})
+    generate_sql(model)  # fine on postgres
+    with pytest.raises(gen_sql.GenerationError) as caught:
+        generate_sql(model, dialect_name="sqlserver")
+    assert "varda:max_length" in str(caught.value)
+
+
+def test_a_width_satisfies_sqlserver(tmp_path: pathlib.Path) -> None:
+    table = dimension()
+    table["attributes"]["d_id"]["annotations"]["varda:max_length"] = 20
+    model = build(tmp_path, {"DimThing": table})
+    assert '"d_id" VARCHAR(20)' in generate_sql(model, dialect_name="sqlserver")
+
+
+def test_the_header_names_the_dialect(tmp_path: pathlib.Path) -> None:
+    """A file written for one engine has to say which one.
+
+    Every other line of the output is the same across three of the four
+    dialects, so without this a `sqlserver` file and a `postgres` file are
+    indistinguishable until one of them fails to run.
+    """
+    model = build(tmp_path, {"DimThing": dimension()})
+    assert "-- Dialect: postgres" in generate_sql(model)
+    assert "-- Dialect: duckdb" in generate_sql(model, dialect_name="duckdb")
+
+
+# --- uuid -------------------------------------------------------------------
+
+
+def _uuid_key(tmp_path: pathlib.Path) -> DimensionalModel:
+    """Build a dimension whose natural key is a UUID, importing the profile."""
+    table = dimension()
+    table["attributes"]["d_id"] = {
+        "range": "uuid",
+        "annotations": {"varda:role": "NATURAL_KEY"},
+    }
+    return build(tmp_path, {"DimThing": table}, imports=["varda"])
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("postgres", "UUID"),
+        ("duckdb", "UUID"),
+        ("snowflake", "UUID"),
+        ("sqlserver", "UNIQUEIDENTIFIER"),
+    ],
+)
+def test_uuid_emits_the_engines_own_type(
+    tmp_path: pathlib.Path, name: str, expected: str
+) -> None:
+    model = _uuid_key(tmp_path)
+    assert f'"d_id" {expected}' in generate_sql(model, dialect_name=name)
+
+
+def test_a_uuid_column_executes(tmp_path: pathlib.Path) -> None:
+    """DuckDB has the type, so the round trip is checkable rather than read."""
+    model = _uuid_key(tmp_path)
+    conn = duckdb.connect()
+    conn.execute(generate_sql(model, dialect_name="duckdb"))
+    value = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+    conn.execute("INSERT INTO mart.dim_thing VALUES (?, 1)", [value])
+    kept = conn.execute(
+        "SELECT typeof(d_id), CAST(d_id AS VARCHAR) FROM mart.dim_thing"
+    ).fetchone()
+    assert kept == ("UUID", value)
+
+
+def test_uuid_is_the_profiles_and_not_the_generators(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A range naming nothing is not a LinkML schema any more.
+
+    Mapping `uuid` by name inside the generator would have worked and would
+    have made every model using it unreadable to every other LinkML tool.
+    Declaring it in the profile keeps the premise: a Varda model is an
+    ordinary LinkML schema.
+    """
+    model = _uuid_key(tmp_path)
+    found = model.view.get_type("uuid")
+    assert found is not None
+    assert found.typeof == "string"
+    assert "V804" not in codes(model)
+
+
+def test_uuid_without_the_import_is_reported(tmp_path: pathlib.Path) -> None:
+    """And reported by `check`, not by a crash three commands later."""
+    table = dimension()
+    table["attributes"]["d_id"] = {
+        "range": "uuid",
+        "annotations": {"varda:role": "NATURAL_KEY"},
+    }
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V804"]
+    assert len(found) == 1
+    assert "imports: - varda" in found[0].message
+
+
+# --- V804 -------------------------------------------------------------------
+
+
+def test_v804_a_range_naming_nothing(tmp_path: pathlib.Path) -> None:
+    """The failure this closes: clean check, then a GenerationError."""
+    table = dimension()
+    table["attributes"]["d_id"]["range"] = "intger"
+    model = build(tmp_path, {"DimThing": table})
+    assert "V804" in codes(model)
+    with pytest.raises(GenerationError):
+        generate_sql(model)
+
+
+def test_v804_a_range_naming_a_class(tmp_path: pathlib.Path) -> None:
+    table = dimension()
+    table["attributes"]["d_id"]["range"] = "DimOther"
+    model = build(tmp_path, {"DimThing": table, "DimOther": dimension()})
+    found = [f for f in rules.check(model) if f.rule == "V804"]
+    assert len(found) == 1
+    assert "names a class" in found[0].message
+
+
+def test_v804_leaves_the_examples_alone() -> None:
+    """Every range a shipped model uses resolves."""
+    for path in (RETAIL, SNOWFLAKE):
+        model = DimensionalModel.load(path, importmap=registry.importmap())
+        assert "V804" not in codes(model)
 
 
 # --- type facets ------------------------------------------------------------

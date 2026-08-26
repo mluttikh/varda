@@ -38,6 +38,20 @@ OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
 "$PY/varda" generate examples/retail.yaml --out "$OUT"
 
+step "every dialect generates from every example"
+# The tables are checked against sqlglot in the suite; this checks that a
+# whole shipped model reaches the end of the generator under each of them,
+# which is where a schema statement or a refused column shows up.
+DIA=$(mktemp -d)
+trap 'rm -rf "$OUT" "$DIA"' EXIT
+for dialect in postgres duckdb snowflake sqlserver; do
+  for model in examples/*.yaml; do
+    "$PY/varda" generate "$model" --out "$DIA/$dialect" \
+      --dialect "$dialect" >/dev/null
+  done
+done
+echo "4 dialects x 2 examples ok"
+
 step "generation is deterministic"
 OUT2=$(mktemp -d)
 trap 'rm -rf "$OUT" "$OUT2"' EXIT

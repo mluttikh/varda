@@ -1288,9 +1288,9 @@ def _claim(names: list[str]) -> str:
 
     Quoting an identifier does not settle case everywhere. PostgreSQL treats
     `"Foo"` and `"foo"` as two tables; DuckDB refuses the second as a
-    duplicate. Varda emits dialect-neutral DDL and cannot know which engine
-    the output will meet, so a pair that only some databases distinguish is
-    refused rather than left to the one it happens to run on first.
+    duplicate. A model is checked once and may be generated for any of the
+    dialects, so a pair that only some databases distinguish is refused here
+    rather than left to whichever one the output meets first.
     """
     unique = sorted(set(names))
     if len(unique) == 1:
@@ -1443,6 +1443,59 @@ def _one_facet(column: Column, name: str, value: str) -> Iterator[Finding]:
             f"varda:{name} is {value!r}; expected a whole number "
             f"of {least} or more",
         )
+
+
+@RULES.rule("V804", "error", "Every range names a type the schema knows")
+def v804(model: DimensionalModel) -> Iterator[Finding]:
+    """Flag a range that is not a type this schema can resolve.
+
+    LinkML does not object to a range naming nothing, and neither did
+    anything here: `range: intger` and `range: uuid` both passed `varda
+    check` with no findings and then stopped `varda generate` with a
+    GenerationError. A model that validates and cannot be generated from is
+    the worst of the two answers, because the first one is the one people
+    trust.
+
+    Checked against the schema's own types rather than against the SQL
+    generator's table, and the difference is deliberate. `curie` is a real
+    LinkML type that Varda has no column type for; that is one generator's
+    limit, reported by that generator, and an extension emitting something
+    other than DDL may well handle it. A range naming nothing is wrong for
+    everybody.
+    """
+    view = model.view
+    types = set(view.all_types())
+    classes = set(view.all_classes())
+    enums = set(view.all_enums())
+    for table in model.tables:
+        for column in table.columns:
+            rng = column.range
+            if rng in types:
+                continue
+            yield Finding(
+                "V804",
+                "error",
+                str(column),
+                f"range {rng!r} {_range_is(rng, classes, enums)}",
+            )
+
+
+def _range_is(rng: str, classes: set[str], enums: set[str]) -> str:
+    """Say what a range turned out to be, and what to do about it."""
+    if rng in classes:
+        return (
+            "names a class, not a type; a column pointing at another table "
+            "is a FOREIGN_KEY whose target is varda:references"
+        )
+    if rng in enums:
+        return (
+            "names an enum; Varda maps types to columns and has no column "
+            "type for a permissible-value set"
+        )
+    return (
+        "names no type in this schema. `uuid` is Varda's and needs "
+        "`imports: - varda`; anything else is a typo or a type to declare"
+    )
 
 
 # ---------------------------------------------------------------------------

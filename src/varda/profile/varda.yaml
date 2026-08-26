@@ -60,6 +60,37 @@ imports:
   - linkml:types
 
 # ---------------------------------------------------------------------------
+# Types — what LinkML's own set does not carry.
+#
+# One entry, and it earns its place the same way an annotation has to: LinkML
+# has no `uuid` among its nineteen built-in types, so a model with a UUID key
+# has no legal way to say so. Declared here rather than mapped by name inside
+# the generator, because a range that names nothing is not a LinkML schema any
+# more — and a model staying an ordinary LinkML schema is the premise of the
+# whole profile. A model reaches this with `imports: - varda`.
+# ---------------------------------------------------------------------------
+
+types:
+
+  uuid:
+    typeof: string
+    uri: xsd:string
+    description: >-
+      A 128-bit identifier, written in the canonical 8-4-4-4-12 hexadecimal
+      form. Emitted as the database's own UUID type where there is one —
+      `UUID` on PostgreSQL, DuckDB and Snowflake, `UNIQUEIDENTIFIER` on SQL
+      Server — and as characters where there is not.
+
+      Almost always a natural key rather than a surrogate one. A surrogate
+      key exists to be narrow, and a UUID is four times the width of an
+      integer in every fact row that joins to it; a UUID arriving from a
+      source system is a business identifier and belongs where the other
+      business identifiers are. Varda does not enforce that, because where a
+      warehouse gets its keys is a decision with more behind it than a rule
+      here could see.
+    pattern: '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
+
+# ---------------------------------------------------------------------------
 # Enumerations — the closed vocabularies.
 #
 # These are closed on purpose, and the constraint is load-bearing: an

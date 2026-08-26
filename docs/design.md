@@ -210,9 +210,8 @@ PostgreSQL and means `VARCHAR(1)` in SQL Server — every string column in a
 generated star truncating to one character on one major engine. A bare
 `NUMERIC` is exact and unconstrained in PostgreSQL and `DECIMAL(18, 3)` in
 DuckDB, where a unit price of 0.123456 is stored as 0.123 and nothing is
-raised. Varda emits dialect-neutral DDL and cannot know which engine the
-output will meet, so a fact the model never stated becomes a number the
-database picks.
+raised. A dialect settles the spelling of a type and not its width, so a
+fact the model never stated is still a number the database picks.
 
 ```yaml
 customer_id:
@@ -237,8 +236,8 @@ is a claim about the column and an opaque type string is a claim about one
 database. `V803` can check that a width sits on a range that has one, that a
 scale has a precision beside it, and that the scale fits — none of which is
 reachable inside a string the generator has to pass through untouched. The
-same three numbers emit `VARCHAR2` on Oracle the day that dialect exists,
-where a stored `VARCHAR(80)` would already have chosen.
+same three numbers are re-spelled per dialect — see below — where a stored
+`VARCHAR(80)` would already have chosen one engine for every reader.
 
 Nothing gets a default. A width nobody chose is the same silent fallback the
 range table refuses when it raises rather than mapping an unknown range to
@@ -247,6 +246,58 @@ range table refuses when it raises rather than mapping an unknown range to
 is a number somebody acts on — and asks nothing of strings, because a warning
 that fires a dozen times on a small star is a warning that gets switched off,
 and it would take the measures with it.
+
+## Why there is a dialect, and why its default is named
+
+There is no neutral SQL to emit, and saying there was is how the wrong thing
+got emitted for years. The type table was PostgreSQL's the whole time. Run
+against SQL Server it produced `BOOLEAN`, which does not exist there, and
+`TIMESTAMP`, which does exist and names a row-version counter with no date in
+it — so `valid_from` and `valid_to`, the two columns every `V5xx` rule is
+about, would have held an incrementing number on a dimension those rules had
+just certified. Nothing would have reported it.
+
+So the default dialect is `postgres`, not `neutral`. The output has not
+changed; the claim about it has. A dialect that is named can be checked, and
+one that is assumed cannot.
+
+```
+varda generate mart.yaml --dialect sqlserver
+```
+
+| | `postgres` · `duckdb` · `snowflake` | `sqlserver` |
+| --- | --- | --- |
+| `datetime` | `TIMESTAMP` | `DATETIME2` |
+| `boolean` | `BOOLEAN` | `BIT` |
+| `double` | `DOUBLE PRECISION` | `FLOAT` |
+| `uuid` | `UUID` | `UNIQUEIDENTIFIER` |
+
+A `Dialect` carries what actually differs and nothing else: the types with
+another name, and how a schema is asked for. It is not an abstraction over
+SQL. That is a transpiler, and a transpiler is a far larger thing to own than
+a generator — the moment this grows a second opinion about `SELECT`, the
+right answer is to stop and hand the output to one.
+
+Engines are added by being verified, not by being plausible. `bigquery` and
+`oracle` are absent for that reason: BigQuery has no `UNIQUE` constraint and
+wants `NOT ENFORCED` on the keys it does have, and Oracle has no `CREATE
+SCHEMA`, no UUID type, and spells half the base table differently. Neither is
+a row in a type table, and half a dialect emits a file that looks right and
+does not run.
+
+DuckDB is the only engine the test suite can execute, which would leave three
+tables nobody has ever run — the same condition that produced the `TIMESTAMP`
+bug. So the tables are checked against sqlglot, which maintains the same
+mapping as its entire purpose, for every type in every dialect. Where the two
+disagree, one of them has moved and a person has to look.
+
+One dialect refuses rather than emits. Under `sqlserver` a string column with
+no `varda:max_length` stops generation, because a `VARCHAR` with no length is
+a `VARCHAR(1)` there and silently truncates every value to one character.
+Widening it to `VARCHAR(MAX)` instead would have been the accommodating
+choice and the wrong one: `MAX` columns cannot be key columns, so a natural
+key emitted that way takes the whole file down at its `UNIQUE` constraint,
+having read perfectly well.
 
 ## Why the grain sentence is not checked against the columns
 
@@ -302,7 +353,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of forty-five rules disagrees with the code within two
+A hand-written table of forty-six rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

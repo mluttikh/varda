@@ -73,6 +73,11 @@ class Context:
     model: DimensionalModel
     source: pathlib.Path
     schema: str = "mart"
+    #: Which database the output is for. A name rather than a table, so that
+    #: this module stays free of SQL: the SQL generator owns the dialects and
+    #: looks this up, and a generator emitting something other than DDL is
+    #: free to ignore it.
+    dialect: str = "postgres"
 
 
 @dataclass(frozen=True, eq=False)

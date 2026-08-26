@@ -44,7 +44,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 45 rules (varda 0.2.0): 0 errors, 0 warnings
+8 tables checked against 46 rules (varda 0.2.0): 0 errors, 0 warnings
 ```
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -65,7 +65,7 @@ That is the whole reason for choosing annotations over a new format.
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 
-**Forty-five rules**, in nine bands. A code names its concern:
+**Forty-six rules**, in nine bands. A code names its concern:
 
 | | |
 | --- | --- |
@@ -77,11 +77,17 @@ core vocabulary, and it is deliberately the entire core vocabulary — see the
 | `V501`–`V506` | Time — a version period on a dimension that keeps no versions |
 | `V601`–`V607` | Hierarchies — a level that is not a column, a path of one level |
 | `V701`–`V707` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross, a decimal one that never says what it keeps |
-| `V801`–`V803` | Physical naming and types — two classes emitting one table, a width on a column that has none |
+| `V801`–`V804` | Physical naming and types — two classes emitting one table, a width on a column that has none, a range naming nothing |
 
 **Two generators**, `sql` and `docs`. Both deterministic: no timestamps, no
 environment, same model in and same bytes out, so output can be committed and
 diffed.
+
+**Four dialects** for the DDL — `postgres` (the default), `duckdb`,
+`snowflake`, `sqlserver`. Named rather than assumed, because there is no
+neutral SQL: `TIMESTAMP` is a row-version counter in T-SQL, and a type-2
+dimension generated without knowing that has a version period holding no
+dates.
 
 Anything specific to how *your* organization works — cost centers, retention,
 data classification, ownership — belongs in an

@@ -13,7 +13,7 @@ import pathlib
 import sys
 from typing import TYPE_CHECKING
 
-from . import registry
+from . import gen_sql, registry
 from .ext import Context, ExtensionError
 from .model import DimensionalModel
 from .rules import Finding, all_rules, check, unknown_codes
@@ -26,6 +26,11 @@ if TYPE_CHECKING:
 EXIT_OK = 0
 EXIT_FAIL = 1
 EXIT_USAGE = 2
+
+
+def _dialects() -> str:
+    """Name the dialects the core ships, for the flag's help text."""
+    return ", ".join(sorted(gen_sql.DIALECTS))
 
 
 def _load(path: str) -> DimensionalModel:
@@ -161,7 +166,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
         if not args.force:
             return EXIT_FAIL
 
-    ctx = Context(model=model, source=model.source, schema=args.schema)
+    ctx = Context(
+        model=model,
+        source=model.source,
+        schema=args.schema,
+        dialect=args.dialect,
+    )
     collected: dict[str, str] = {}
     for gen in chosen:
         try:
@@ -283,6 +293,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen.add_argument("model")
     p_gen.add_argument("--out", default="out", help="output directory")
     p_gen.add_argument("--schema", default="mart", help="SQL schema name")
+    # Not `choices`. The dialect reaches a generator as a plain string, and
+    # an extension shipping its own SQL generator may know names the core
+    # does not — argparse refusing them here would make the core's table the
+    # limit of everyone's. `gen_sql.dialect` raises, naming what it knows.
+    p_gen.add_argument(
+        "--dialect",
+        default=gen_sql.DEFAULT_DIALECT,
+        metavar="NAME",
+        help=f"which database the DDL is for ({_dialects()})",
+    )
     p_gen.add_argument(
         "--only",
         action="append",
