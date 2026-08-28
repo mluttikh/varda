@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 
 from varda import __version__, registry
+from varda.model import PROFILE
 
 ROOT = Path(__file__).resolve().parents[1]
 FENCE = "`" * 3
@@ -153,8 +154,18 @@ def main() -> int:
         )
 
     # Every page quoting a summary line must quote the current rule count.
+    #
+    # The profile is read alongside the Markdown, and it is the page this
+    # gate most needed and least covered: it argues for its own smallness in
+    # prose — "the deliberately small core: fifteen annotations" — while
+    # being the file that declares them. It said twelve for three releases
+    # while SPEC, which is checked, said fifteen.
     count, codes = _rules()
-    pages = [*sorted((ROOT / "docs").rglob("*.md")), ROOT / "README.md"]
+    pages = [
+        *sorted((ROOT / "docs").rglob("*.md")),
+        ROOT / "README.md",
+        PROFILE,
+    ]
     failures += [
         f"{page.relative_to(ROOT)}: quotes {quoted} rules, there are {count}"
         for page in pages

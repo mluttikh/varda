@@ -175,7 +175,7 @@ have loaded, and the model stays an ordinary LinkML schema either way —
 One thing is settled: Varda will not grow syntax or fork the metamodel. The
 annotation-only design is the premise, not a stage.
 
-Rule codes are not settled yet. They were all renumbered in 0.3 so that a
+Rule codes are not settled yet. They were all renumbered during 0.1 so that a
 code names its concern — `V6xx` is hierarchies, `V7xx` is measures — and more
 renumbering before 1.0 is possible if a band stops describing what is in it.
 A code is never reused for a different rule, and at 1.0 the numbers freeze.

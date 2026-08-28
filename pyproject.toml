@@ -202,7 +202,7 @@ convention = "pep257"
     "INP001",
 ]
 
-# Three deviations, each specific to this codebase rather than to taste.
+# Four deviations, each specific to this codebase rather than to taste.
 #
 # T201 in the CLI: a command-line tool's output *is* `print`. Routing it
 # through a logger to satisfy the rule would make the thing worse at its job.
@@ -216,7 +216,7 @@ convention = "pep257"
 # D103 in the rules: every rule registers a human-readable title in its
 # decorator, and `varda rules` prints it. A docstring is reserved for rules
 # whose *reasoning* is not obvious, and `varda rules -v` prints those.
-# Requiring one on all twenty-one would duplicate the title twenty-one times.
+# Requiring one on every rule would duplicate every title twice over.
 "src/varda/rules.py" = ["D103"]
 #
 # scripts/ is build tooling, not an importable package — INP001 wants an
