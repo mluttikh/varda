@@ -5,7 +5,7 @@
 !!! warning "Experimental"
     Varda is published so it can be tried, not because the design has
     settled. The vocabulary will change, sometimes in ways that break a
-    model written against an earlier version. Pin `varda~=0.2.0` — see
+    model written against an earlier version. Pin `varda~=0.3.0` — see
     [Status](#status).
 
 Varda is a *profile* of LinkML: a small vocabulary that lets you say a class
@@ -44,7 +44,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 48 rules (varda 0.2.0): 0 errors, 0 warnings
+8 tables checked against 48 rules (varda 0.3.0): 0 errors, 0 warnings
 ```
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -106,7 +106,7 @@ and why a semi-additive measure must name the dimension it cannot cross.
 
 ## Status
 
-**0.2.0 — experimental.** The code is tested and the generators are
+**0.3.0 — experimental.** The code is tested and the generators are
 deterministic; what is unsettled is the vocabulary itself. Expect it to change,
 sometimes in ways that break a model written against an earlier version. No
 warehouse of real size has been modeled in Varda yet, and no third party has

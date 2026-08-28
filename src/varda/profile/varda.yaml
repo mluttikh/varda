@@ -19,7 +19,7 @@ name: varda
 # written for, so bumping this when only Varda's own code changed would force
 # every extension to re-pin against a vocabulary that never moved. It changes
 # when an annotation, an enum or a permissible value does.
-version: 0.1.0
+version: 0.2.0
 title: The Varda profile — dimensional modeling vocabulary for LinkML
 description: >-
   Varda is a *profile* of LinkML, not a replacement for it. LinkML already
