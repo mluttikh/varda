@@ -20,6 +20,7 @@ looks exactly like an extension whose rules all pass.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import pathlib
 import sys
 import tomllib
@@ -123,12 +124,23 @@ def _from_entry_points() -> list[Extension]:
                 f"not an Extension"
             )
             raise ExtensionError(msg)
-        out.append(
-            Extension(**{**obj.__dict__, "origin": f"entry point {ep.name}"})
-            if not obj.origin
-            else obj
-        )
+        where = f"entry point {ep.name}"
+        out.append(obj if obj.origin else _stamped(obj, where))
     return out
+
+
+def _stamped(ext: Extension, origin: str) -> Extension:
+    """Copy an extension, recording where it was found.
+
+    Through ``dataclasses.replace`` rather than ``Extension(**ext.__dict__)``.
+    An extension is usually a module-level singleton, and `profile_view` and
+    `profile_version` are ``cached_property`` — which write their results
+    into the instance's ``__dict__``. So the moment anything had read the
+    parsed profile, re-creating the extension from that dict raised
+    ``TypeError: got an unexpected keyword argument 'profile_view'``, and
+    which invocation hit it depended on what had run first in the process.
+    """
+    return dataclasses.replace(ext, origin=origin)
 
 
 def find_config(start: pathlib.Path | None = None) -> pathlib.Path | None:
@@ -213,11 +225,7 @@ def _from_config() -> list[Extension]:
                 f"(got {type(obj).__name__})"
             )
             raise ExtensionError(msg)
-        out.append(
-            obj
-            if obj.origin
-            else Extension(**{**obj.__dict__, "origin": where})
-        )
+        out.append(obj if obj.origin else _stamped(obj, where))
 
     out.extend(_inline(e, path, where) for e in data.get("extension", []))
     return out

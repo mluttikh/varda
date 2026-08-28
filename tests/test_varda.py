@@ -8,6 +8,7 @@ somebody has shipped a model against them.
 
 from __future__ import annotations
 
+import dataclasses
 import decimal
 import importlib.metadata
 import pathlib
@@ -1882,6 +1883,172 @@ def test_toml_severity_for_a_retired_rule_is_reported(
     assert "severity override names no registered rule" in (
         capsys.readouterr().err
     )
+
+
+# --- the two routes a shipped extension actually takes ----------------------
+#
+# `registry` names three ways an extension becomes active and SPEC lists
+# distribution as the fourth seam, stating each is covered by a test. Two of
+# the three had never run: the entry point, which is what a *published*
+# extension uses and the only route whose failure cannot be found locally,
+# and `extensions = ["module"]`, which is the same import by another door.
+# Everything below reaches them the way a real installation would.
+
+
+@dataclasses.dataclass(frozen=True)
+class _FakeEntryPoint:
+    """One `varda.extensions` entry point, as `entry_points` yields them."""
+
+    name: str
+    value: Any
+    fails: BaseException | None = None
+
+    def load(self) -> Any:
+        if self.fails is not None:
+            raise self.fails
+        return self.value
+
+
+def _advertise(
+    monkeypatch: pytest.MonkeyPatch, *points: _FakeEntryPoint
+) -> None:
+    """Make the registry see these entry points and nothing else."""
+    monkeypatch.setattr(
+        registry, "entry_points", lambda group: points if group else ()
+    )
+    registry.reset_caches()
+
+
+def test_an_entry_point_extension_becomes_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route a published extension takes, exercised end to end."""
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    _advertise(monkeypatch, _FakeEntryPoint("acme", EXTENSION))
+    active = {e.prefix: e for e in registry.extensions()}
+    assert "acme" in active
+    assert "ACME101" in {code for code, *_ in rules.all_rules()}
+    assert "acme:cost_center" in registry.declared_annotations("table")
+
+
+def test_an_entry_point_records_where_it_came_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`varda ext` has to be able to say why something is loaded.
+
+    An extension nobody can account for is one nobody can remove.
+    """
+    # Not `_bare`, which stamps an origin of its own — and an extension that
+    # already names where it came from keeps it, which is the other half of
+    # the behavior being pinned here.
+    plain = Extension(name="fin", prefix="fin")
+    _advertise(monkeypatch, _FakeEntryPoint("finance", plain))
+    found = next(e for e in registry.extensions() if e.prefix == "fin")
+    assert found.origin == "entry point finance"
+
+
+def test_an_extension_loads_after_its_profile_has_been_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A singleton whose cached profile has been touched still loads.
+
+    An extension is a module-level singleton, and `profile_view` and
+    `profile_version` are `cached_property` — they write their results into
+    the instance's `__dict__`. Re-creating the extension from that dict to
+    stamp its origin therefore raised `TypeError: got an unexpected keyword
+    argument 'profile_view'` the moment anything had read the parsed
+    profile, and which invocation hit it depended on what had run first in
+    the process.
+    """
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    assert EXTENSION.profile_version == "1.2.0"  # populates the cache
+    _advertise(monkeypatch, _FakeEntryPoint("acme", EXTENSION))
+    assert "acme" in {e.prefix for e in registry.extensions()}
+
+
+def test_an_entry_point_that_is_not_an_extension_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _advertise(monkeypatch, _FakeEntryPoint("bogus", object()))
+    with pytest.raises(ExtensionError, match="not an Extension"):
+        registry.extensions()
+
+
+def test_an_entry_point_that_will_not_load_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An extension that silently fails to load looks like one that passes.
+
+    Every rule it would have run is a rule nobody notices did not run, which
+    is why this raises rather than skipping the entry point.
+    """
+    boom = _FakeEntryPoint("broken", None, fails=ImportError("no module"))
+    _advertise(monkeypatch, boom)
+    with pytest.raises(ExtensionError, match="could not be loaded"):
+        registry.extensions()
+
+
+def test_toml_extensions_import_a_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same import, reached through the config file instead."""
+    path = write_config(
+        tmp_path,
+        """
+        extensions = ["acme_ext"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    active = {e.prefix for e in registry.extensions()}
+    assert "acme" in active
+
+
+def test_toml_extensions_take_a_named_attribute(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`module:NAME` for a package exporting more than one."""
+    path = write_config(
+        tmp_path,
+        """
+        extensions = ["acme_ext:EXTENSION"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    assert "acme" in {e.prefix for e in registry.extensions()}
+
+
+def test_toml_extensions_reject_a_missing_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_config(
+        tmp_path,
+        """
+        extensions = ["no_such_extension_module"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    with pytest.raises(ExtensionError, match="cannot import"):
+        registry.extensions()
+
+
+def test_toml_extensions_reject_a_name_that_is_not_an_extension(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_config(
+        tmp_path,
+        """
+        extensions = ["acme_ext:RULES"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    with pytest.raises(ExtensionError, match="does not name an Extension"):
+        registry.extensions()
 
 
 def test_toml_missing_profile_is_refused(
