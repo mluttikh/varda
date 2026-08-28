@@ -2952,6 +2952,70 @@ def test_declared_keys_replace_the_derived_one(
     assert 'UNIQUE ("d_id", "vs")' not in sql
 
 
+def _fact_keyed_twice() -> dict[str, Any]:
+    """Build a fact whose grain and unique key name the same column."""
+    return {
+        "annotations": {
+            "varda:role": "FACT",
+            # Factless, so the fixture is legal without a measure that has
+            # nothing to do with what is being tested.
+            "varda:fact_type": "FACTLESS",
+            "varda:grain": "d_key",
+            "varda:grain_statement": "one row per thing measured once",
+        },
+        "unique_keys": {"by_thing": {"unique_key_slots": ["d_key"]}},
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            }
+        },
+    }
+
+
+def test_one_claim_is_one_constraint(tmp_path: pathlib.Path) -> None:
+    """A grain and a matching unique key are one claim written twice.
+
+    One is Varda's vocabulary and one is LinkML's, and writing both is a
+    reasonable thing to do. Every database accepts the doubled constraint by
+    building a second index for it — maintained on every write, for a claim
+    it already holds, with nothing anywhere saying so.
+    """
+    model = build(
+        tmp_path, {"DimThing": dimension(), "FctThing": _fact_keyed_twice()}
+    )
+    assert not codes(model)
+    sql = generate_sql(model)
+    assert sql.count('UNIQUE ("d_key")') == 1
+
+
+def test_one_claim_is_one_index(tmp_path: pathlib.Path) -> None:
+    """The form the reader of the database sees, rather than of the DDL."""
+    model = build(
+        tmp_path, {"DimThing": dimension(), "FctThing": _fact_keyed_twice()}
+    )
+    con = duckdb.connect()
+    con.execute(generate_sql(model, dialect_name="duckdb"))
+    found = con.execute(
+        "select count(*) from duckdb_constraints() "
+        "where table_name = 'fct_thing' and constraint_type = 'UNIQUE'"
+    ).fetchone()
+    assert found is not None
+    assert found[0] == 1
+
+
+def test_two_different_claims_are_still_two_constraints(
+    tmp_path: pathlib.Path,
+) -> None:
+    """De-duplication is on the columns, not on there being more than one."""
+    model = build(tmp_path, {"DimProduct": _two_keyed()})
+    sql = generate_sql(model)
+    assert sql.count("UNIQUE (") == 2
+
+
 def test_unique_keys_are_inherited(tmp_path: pathlib.Path) -> None:
     """LinkML drops a parent's unique keys; Varda walks the ancestors.
 
@@ -3203,6 +3267,31 @@ def test_the_dialect_table_agrees_with_sqlglot(name: str) -> None:
         assert TYPE_ALIASES.get(ours, ours) == TYPE_ALIASES.get(
             theirs, theirs
         ), f"{name}: {rng} is {ours} here and {theirs} in sqlglot"
+
+
+@pytest.mark.parametrize("name", sorted(gen_sql.DIALECTS))
+def test_a_schema_name_with_a_quote_in_it_still_parses(name: str) -> None:
+    """`quoted` settled identifiers and nothing settled string literals.
+
+    T-SQL cannot guard `CREATE SCHEMA` with an `IF`, so it tests
+    `SCHEMA_ID('...')` and runs the DDL through `EXEC('...')` — two string
+    literals holding a name that arrives from `--schema` unexamined. An
+    apostrophe in it emitted DDL no database would parse, and only under the
+    one dialect this suite cannot execute.
+    """
+    model = DimensionalModel.load(RETAIL)
+    ddl = generate_sql(model, schema="ma'rt", dialect_name=name)
+    statement = ddl.splitlines()[4]
+    assert "ma'rt" in ddl
+    sqlglot.parse(statement, read=SQLGLOT_NAMES[name])
+
+
+def test_the_schema_statement_escapes_both_of_its_layers() -> None:
+    """The T-SQL form quotes the name twice over, at two different depths."""
+    model = DimensionalModel.load(RETAIL)
+    ddl = generate_sql(model, schema="ma'rt", dialect_name="sqlserver")
+    assert "SCHEMA_ID('ma''rt')" in ddl
+    assert """EXEC('CREATE SCHEMA "ma''rt"')""" in ddl
 
 
 def test_the_default_dialect_is_postgres() -> None:
