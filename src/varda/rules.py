@@ -586,13 +586,13 @@ def v304(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.dimensions:
         if table.scd != "TYPE_2":
             continue
-        versions = (*table.version_starts, *table.version_numbers)
-        marks = {c.name for c in versions}
+        marks = {*table.version_starts, *table.version_numbers}
+        natural = set(table.natural_keys)
         for unique in table.unique_keys:
-            names = {c.name for c in unique.columns}
-            if not names & {c.name for c in table.natural_keys}:
+            columns = set(unique.columns)
+            if not columns & natural:
                 continue
-            if names & marks:
+            if columns & marks:
                 continue
             yield Finding(
                 "V304",
@@ -617,9 +617,9 @@ def v305(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.dimensions:
         if not table.unique_keys:
             continue
-        covered = {c.name for u in table.unique_keys for c in u.columns}
+        covered = {c for u in table.unique_keys for c in u.columns}
         for column in table.natural_keys:
-            if column.name in covered:
+            if column in covered:
                 continue
             yield Finding(
                 "V305",

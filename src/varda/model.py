@@ -100,7 +100,7 @@ def _level_spec(entry: Any) -> tuple[str, str]:
     return str(entry), ""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Level:
     """One step of a drill path, resolved against the model.
 
@@ -148,7 +148,7 @@ class Level:
         return self.spec
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Hierarchy:
     """One named drill path over a dimension's columns.
 
@@ -167,7 +167,7 @@ class Hierarchy:
         """The level specs, as written, in declared order."""
         return tuple(spec for spec, _ in self.declared)
 
-    @property
+    @cached_property
     def resolved(self) -> tuple[Level, ...]:
         """Resolve every level, in declared order.
 
@@ -228,7 +228,7 @@ class Hierarchy:
         return f"{self.table.name}.{self.name}"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class UniqueKey:
     """One named set of columns that is unique in a table.
 
@@ -251,9 +251,22 @@ class UniqueKey:
         return f"{self.table.name}.{self.name}"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Column:
-    """One slot of a table class, read through the profile."""
+    """One slot of a table class, read through the profile.
+
+    ``eq=False``, like every value object in this module, and for the reason
+    :class:`varda.ext.Extension` gives: identity is the right comparison for
+    something the model hands out exactly one of. The generated ``__eq__``
+    would compare a ``SlotDefinition`` and reach through ``table`` to the
+    whole ``SchemaView``, and the generated ``__hash__`` raised
+    ``TypeError: unhashable type: 'SlotDefinition'`` — so a column could not
+    go in a set, and the rules worked around it by comparing names.
+
+    Instances are stable, which is what makes identity mean anything here:
+    ``tables``, ``columns``, ``unique_keys``, ``hierarchies`` and
+    ``resolved`` are all cached, so asking twice gives the same object.
+    """
 
     name: str
     slot: SlotDefinition
@@ -398,7 +411,7 @@ class Column:
         return f"{self.table.name}.{self.name}"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Table:
     """One class of the domain model that carries Varda annotations."""
 
@@ -432,7 +445,7 @@ class Table:
         found = (self.column(n) for n in self.grain)
         return tuple(c for c in found if c is not None)
 
-    @property
+    @cached_property
     def hierarchies(self) -> tuple[Hierarchy, ...]:
         """The declared drill paths, in declared order.
 
@@ -601,7 +614,7 @@ class Table:
         return self.name
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class DimensionalModel:
     """A LinkML schema, read as a dimensional model.
 

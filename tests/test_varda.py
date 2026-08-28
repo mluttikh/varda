@@ -948,6 +948,41 @@ def test_varda_is_itself_an_extension() -> None:
     assert core.rules is not None
 
 
+def test_model_objects_can_go_in_a_set() -> None:
+    """A rule asking about columns should be able to use columns.
+
+    The generated `__hash__` on these dataclasses reached into a
+    `SlotDefinition` and raised `TypeError: unhashable type`, so every rule
+    that needed a set of columns built a set of names instead — answering an
+    identity question through strings, which is the indirection this layer
+    exists to remove.
+    """
+    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    table = model.dimensions[0]
+    assert len({*table.columns}) == len(table.columns)
+    assert len({*model.tables}) == len(model.tables)
+    hierarchy = next(h for t in model.tables for h in t.hierarchies)
+    assert len({*hierarchy.resolved}) == len(hierarchy.resolved)
+
+
+def test_model_objects_are_the_same_object_each_time() -> None:
+    """Identity is only worth having if instances are stable.
+
+    `hierarchies` and `resolved` were plain properties and rebuilt on every
+    access — 51 rebuilds across 8 tables in one `check()` — so two `Level`
+    objects for one level were never the same object and a set of them
+    would have held duplicates.
+    """
+    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    table = model.dimensions[0]
+    assert table.columns[0] is table.columns[0]
+    assert model.tables[0] is model.tables[0]
+    owner = next(t for t in model.tables if t.hierarchies)
+    assert owner.hierarchies[0] is owner.hierarchies[0]
+    hierarchy = owner.hierarchies[0]
+    assert hierarchy.resolved is hierarchy.resolved
+
+
 def test_declared_annotations_are_namespaced() -> None:
     assert "varda:role" in registry.declared_annotations("table")
     assert "varda:grain" in registry.declared_annotations("table")
@@ -3970,6 +4005,46 @@ def test_generated_docs_render_drill_paths(tmp_path: pathlib.Path) -> None:
     model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
     page = generate_docs(model)
     assert "**Drill path** (geography): `country` → `region` → `city`" in page
+
+
+def test_generated_docs_say_what_makes_a_level_unique(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A drill path is a list of names, and a name is not an identity.
+
+    `concepts.md` makes this argument and the generated page never showed
+    it: `city` holds "Springfield" for cities in three states. The model
+    computed the answer on `Level.identity` and nothing read it.
+    """
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
+    page = generate_docs(model)
+    assert (
+        "**Unique within the path:** one member is "
+        "`country`, `region`, `city` together" in page
+    )
+
+
+def test_the_identity_note_names_a_declared_key() -> None:
+    """The whole tuple, not the finest key plus what qualifies it.
+
+    A level may be named by one column and identified by another —
+    `product_name` keyed on `gtin` — and the identity then holds `gtin`,
+    which the path above it never mentions. Rendering the tuple states the
+    answer without putting a stray column in a sentence about the path.
+    """
+    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    page = generate_docs(model)
+    assert "one member is `brand`, `gtin` together" in page
+
+
+def test_no_identity_note_when_a_level_identifies_itself(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A one-level identity has nothing to qualify, so nothing is said."""
+    table = dimension()
+    table["attributes"]["only"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    model = build(tmp_path, {"DimThing": table})
+    assert "Unique within the path" not in generate_docs(model)
 
 
 def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
