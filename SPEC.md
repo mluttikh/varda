@@ -1,6 +1,6 @@
 # Varda — implementation specification
 
-**Version 0.2.0 · status: reference implementation complete, ready to hand
+**Version 0.3.0 · status: reference implementation complete, ready to hand
 over. The vocabulary it implements is experimental and will change; 1.0 is
 where that stops.**
 
@@ -108,7 +108,7 @@ says what a rule is about: `V6xx` is hierarchies, `V7xx` is measures. Within
 a released major version a code is permanent — it goes in commit messages and
 exemption lists, so renumbering is a breaking change to humans. Before 1.0
 that permanence is not yet in force, and the bands were introduced by
-renumbering all forty-three. What holds unconditionally is the second half:
+renumbering every code that existed. What holds unconditionally is the second half:
 retire a code by deleting it, and never reuse it for something else.
 
 **I8 — Severity conflicts are refused, not resolved.** Two extensions naming
@@ -152,32 +152,52 @@ add early.
 | **M1 data-quality expectations** | Claims about *rows*, not about the model. A different layer with a different audience; do not blur it into the rules. | ~250 lines |
 | **More generators** (SQLAlchemy, ERD, dbt, Pydantic) | Each is straightforward against the model layer. Add on demand, one per real consumer. | ~150 each |
 
-## 5. Roadmap
+## 5. What has shipped, and what is next
 
-**0.2 — say what the output is, shipped.**
-Type facets, so a column states its width and a generated star does not
-truncate to one character on SQL Server. Named dialects, because there is no
-neutral SQL and the type table was PostgreSQL's the whole time. A `uuid`
-type. `V306` and `V307`, so several natural keys are not silently merged into
-one constraint that enforces neither. Ranges resolved through `typeof`, so a
-type the schema declares generates instead of stopping the generator.
+Two lists, and the split is deliberate. This section used to number the work
+that had not happened yet — "0.2 will add `varda verify`" — and every release
+that went out for some other reason left it describing a version that had
+come and gone without doing what it promised. It was renumbered twice in two
+releases for exactly that reason. A version number is earned by a release,
+not assigned to a plan, so the plan does not carry one.
 
-**0.3 — make the output trustworthy.**
-Add `varda verify`: regenerate into a temp tree, compare against what is
-committed, exit non-zero on drift. Add `Artifact(path, compare)` so a
-generator can declare that its output compares as RDF graphs or as a sorted
-set of SQL statements rather than as bytes. This is the highest-value
-remaining item and it is small.
+### Shipped
 
-**0.4 — make extensions safe to depend on.**
-`requires_profile` pinning, plus the conformance kit: `varda ext --check
-NAME` runs a third-party extension against a fixture model twice, asserts
-identical findings and identical artifacts, and AST-scans for imports of
-anything outside `varda.ext`.
+**0.1 — the profile and its rules.** The annotation vocabulary, the
+conformance rules, the SQL and Markdown generators, the extension mechanism.
 
-**0.5 — generators on demand.**
-SQLAlchemy models and an ERD are the two most asked for. Both are
-mechanical against `model.py`.
+**0.2 — say what the output is.** Type facets, so a column states its width
+and a generated star does not truncate to one character on SQL Server. Named
+dialects, because there is no neutral SQL and the type table was
+PostgreSQL's the whole time. A `uuid` type. `V306` and `V307`, so several
+natural keys are not silently merged into one constraint that enforces
+neither.
+
+**0.3 — the checks reach where they were aimed.** A review found nineteen
+places where a discipline this codebase already holds stopped one step short.
+The config file validates what it is given the way an extension already did;
+the caches behind those checks cannot go stale; a declared artifact path is
+constrained by being declared; the emitted DDL escapes its schema name and
+states each key once; a range resolves through its `typeof`, so a type the
+schema declares generates instead of stopping the generator. Plus the two
+extension-discovery routes a third party actually uses, which had never been
+tested — and which broke the moment they were.
+
+### Next, in the order it is worth doing
+
+**Make the output trustworthy.** Add `varda verify`: regenerate into a temp
+tree, compare against what is committed, exit non-zero on drift. Add
+`Artifact(path, compare)` so a generator can declare that its output compares
+as RDF graphs or as a sorted set of SQL statements rather than as bytes. This
+is the highest-value remaining item and it is small.
+
+**Make extensions safe to depend on.** `requires_profile` pinning, plus the
+conformance kit: `varda ext --check NAME` runs a third-party extension against
+a fixture model twice, asserts identical findings and identical artifacts, and
+AST-scans for imports of anything outside `varda.ext`.
+
+**Generators on demand.** SQLAlchemy models and an ERD are the two most asked
+for. Both are mechanical against `model.py`.
 
 **1.0 — freeze the vocabulary.**
 The commitment at 1.0 is that annotations and rule codes do not change
@@ -219,7 +239,7 @@ request, in five parallel jobs:
 
 The `gate` job invoking `run_all.sh` rather than restating its steps is
 deliberate: CI and the local gate cannot drift apart, and anything added to
-one is added to both. When `varda verify` lands in 0.3 it goes in
+one is added to both. When `varda verify` lands it goes in
 `run_all.sh` and CI picks it up with no change to the workflow.
 
 The two extra `test` cells are for path handling, not for language
@@ -289,8 +309,9 @@ GitHub organization are both held by an unrelated bioinformatics project,
 which is why neither is the home.
 
 Releases go out through `.github/workflows/release.yml`, triggered by
-publishing a GitHub release. It re-runs the whole gate, checks the tag
-agrees with the version in `pyproject.toml`, builds, and uploads via **PyPI
+publishing a GitHub release. It re-runs the whole gate, checks the tag,
+the distribution metadata and `__version__` all agree, builds, and
+uploads via **PyPI
 Trusted Publishing** — no API token is stored in the repository. A token in
 repository secrets is a long-lived credential granting upload rights to
 anyone who can run a workflow; OIDC issues one scoped to this workflow and

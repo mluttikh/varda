@@ -113,7 +113,7 @@ jobs:
       # shipped example, a generate, and a second generate diffed against the
       # first to prove output is deterministic.
       #
-      # When `varda verify` lands in 0.3, it goes in run_all.sh and this job
+      # When `varda verify` lands, it goes in run_all.sh and this job
       # picks it up with no change here.
       - name: ./run_all.sh
         run: PY="$(dirname "$(command -v python)")" ./run_all.sh

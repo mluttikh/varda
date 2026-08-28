@@ -210,8 +210,8 @@ def main() -> int:
     # line, and every one of them went stale at 0.1.0 without a word.
     #
     # Only the space-separated form, which is literal output. The pin advice
-    # is written `varda~=0.2.0` and is deliberately left alone: it stays
-    # correct across every 0.2.x, so tying it to the exact version would
+    # is written `varda~=0.3.0` and is deliberately left alone: it stays
+    # correct across every 0.3.x, so tying it to the exact version would
     # demand an edit that changes nothing.
     failures += [
         f"{page.relative_to(ROOT)}: a transcript says varda {quoted}, "
