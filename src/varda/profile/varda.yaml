@@ -39,7 +39,7 @@ description: >-
   `gen-owl`, `gen-json-schema` and every other LinkML generator will consume
   happily, ignoring what they do not understand.
 
-  **Scope.** This is the deliberately small core: twelve annotations that
+  **Scope.** This is the deliberately small core: fifteen annotations that
   describe a standard star schema and nothing else. Anything specific to one
   organization — cost centers, retention, data classification, ownership —
   belongs in an extension under that organization's own prefix. See

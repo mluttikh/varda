@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .ext import Context
-    from .model import DimensionalModel, Level, Table
+    from .model import DimensionalModel, Hierarchy, Level, Table
+
+#: Below this, a level identifies itself and there is nothing to qualify.
+IDENTITY_IS_COMPOUND = 2
 
 ADDITIVITY = {
     "ADDITIVE": "sums across every dimension",
@@ -72,6 +75,37 @@ def _level(level: Level) -> str:
     return f"`{level.column.name}`"
 
 
+def _identity_note(hierarchy: Hierarchy) -> str | None:
+    """Say what the finest level needs beside it to name one member.
+
+    The concepts page argues that what names a level is not what identifies
+    it — `city_name` holds "Springfield" for cities in three states — and
+    the drill path, which is a list of names, cannot show that. Nothing else
+    read `Level.identity`, so the model computed the answer on every access
+    and told no one.
+
+    The identity is rendered whole rather than as the finest key plus what
+    qualifies it, which reads wrong wherever a level declares a key: the
+    merchandise path drills `brand → product_name` and is identified by
+    `brand, gtin`, so naming `gtin` as the thing needing qualification put a
+    column in the sentence that the path above it never mentions. The tuple
+    is the answer, and stating it needs no cases.
+
+    Only the finest level. Every coarser one's identity is a prefix of it,
+    so listing them all repeats the same path at increasing lengths.
+    """
+    if not hierarchy.resolved:
+        return None
+    identity = hierarchy.resolved[-1].identity
+    if len(identity) < IDENTITY_IS_COMPOUND:
+        return None  # the level identifies itself; nothing to qualify
+    named = ", ".join(f"`{c.name}`" for c in identity)
+    return (
+        f"one member is {named} together — a name at one level "
+        f"repeats under a different parent"
+    )
+
+
 def _table(table: Table) -> str:
     lines = [f"### {table.name}", ""]
     if table.description:
@@ -102,6 +136,9 @@ def _table(table: Table) -> str:
         if hierarchy.description:
             line = f"{line} — {hierarchy.description}"
         facts.append(line)
+        note = _identity_note(hierarchy)
+        if note:
+            facts.append(f"**Unique within the path:** {note}")
     lines += [*facts, "", *_columns(table), ""]
     return "\n".join(lines)
 

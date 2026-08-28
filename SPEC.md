@@ -32,22 +32,22 @@ reason the core can stay small enough to be correct.
 | Module | Lines | Responsibility |
 | --- | --- | --- |
 | `anns.py` | ~150 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
-| `model.py` | ~620 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
+| `model.py` | ~690 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
 | `ext.py` | ~180 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
-| `registry.py` | ~630 | Discovery, validation, lookup. Where colliding extensions are refused. |
+| `registry.py` | ~730 | Discovery, validation, lookup. Where colliding extensions are refused. |
 | `rules.py` | ~1640 | `RuleSet`, `Finding`, and the 48 core rules. |
-| `gen_sql.py` | ~440 | SQL DDL, and the dialects it is spelled in. |
-| `gen_docs.py` | ~130 | Markdown reference. |
+| `gen_sql.py` | ~510 | SQL DDL, and the dialects it is spelled in. |
+| `gen_docs.py` | ~170 | Markdown reference. |
 | `generators.py` | ~25 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~360 | Five commands. |
+| `cli.py` | ~410 | Five commands. |
 
-**4,239 lines of source**: 2,386 of code, 904 of docstrings, 272 of
-comment, 677 blank. The prose share is deliberate and is house style —
+**4,549 lines of source**: 2,469 of code, 1,056 of docstrings, 293 of
+comment, 731 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 15 annotations, 5 enums, 1 type — and 229
-tests in 3,469 lines.
+Plus `profile/varda.yaml` — 15 annotations, 5 enums, 1 type — and 270
+tests in 4,150 lines.
 
 ### The four seams
 
@@ -154,20 +154,28 @@ add early.
 
 ## 5. Roadmap
 
-**0.2 — make the output trustworthy.**
+**0.2 — say what the output is, shipped.**
+Type facets, so a column states its width and a generated star does not
+truncate to one character on SQL Server. Named dialects, because there is no
+neutral SQL and the type table was PostgreSQL's the whole time. A `uuid`
+type. `V306` and `V307`, so several natural keys are not silently merged into
+one constraint that enforces neither. Ranges resolved through `typeof`, so a
+type the schema declares generates instead of stopping the generator.
+
+**0.3 — make the output trustworthy.**
 Add `varda verify`: regenerate into a temp tree, compare against what is
 committed, exit non-zero on drift. Add `Artifact(path, compare)` so a
 generator can declare that its output compares as RDF graphs or as a sorted
 set of SQL statements rather than as bytes. This is the highest-value
 remaining item and it is small.
 
-**0.3 — make extensions safe to depend on.**
+**0.4 — make extensions safe to depend on.**
 `requires_profile` pinning, plus the conformance kit: `varda ext --check
 NAME` runs a third-party extension against a fixture model twice, asserts
 identical findings and identical artifacts, and AST-scans for imports of
 anything outside `varda.ext`.
 
-**0.4 — generators on demand.**
+**0.5 — generators on demand.**
 SQLAlchemy models and an ERD are the two most asked for. Both are
 mechanical against `model.py`.
 
@@ -211,7 +219,7 @@ request, in five parallel jobs:
 
 The `gate` job invoking `run_all.sh` rather than restating its steps is
 deliberate: CI and the local gate cannot drift apart, and anything added to
-one is added to both. When `varda verify` lands in 0.2 it goes in
+one is added to both. When `varda verify` lands in 0.3 it goes in
 `run_all.sh` and CI picks it up with no change to the workflow.
 
 The two extra `test` cells are for path handling, not for language

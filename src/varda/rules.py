@@ -586,13 +586,13 @@ def v304(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.dimensions:
         if table.scd != "TYPE_2":
             continue
-        versions = (*table.version_starts, *table.version_numbers)
-        marks = {c.name for c in versions}
+        marks = {*table.version_starts, *table.version_numbers}
+        natural = set(table.natural_keys)
         for unique in table.unique_keys:
-            names = {c.name for c in unique.columns}
-            if not names & {c.name for c in table.natural_keys}:
+            columns = set(unique.columns)
+            if not columns & natural:
                 continue
-            if names & marks:
+            if columns & marks:
                 continue
             yield Finding(
                 "V304",
@@ -617,9 +617,9 @@ def v305(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.dimensions:
         if not table.unique_keys:
             continue
-        covered = {c.name for u in table.unique_keys for c in u.columns}
+        covered = {c for u in table.unique_keys for c in u.columns}
         for column in table.natural_keys:
-            if column.name in covered:
+            if column in covered:
                 continue
             yield Finding(
                 "V305",
@@ -1337,7 +1337,7 @@ def v707(model: DimensionalModel) -> Iterator[Finding]:
     """
     for table in model.tables:
         for column in table.measures:
-            if column.range.lower() not in FACETS["precision"]:
+            if not column.parameterizes("precision"):
                 continue
             missing = [
                 f"varda:{name}"
@@ -1504,15 +1504,25 @@ def _facet_faults(column: Column) -> Iterator[Finding]:
 
 
 def _one_facet(column: Column, name: str, value: str) -> Iterator[Finding]:
-    """Check one facet against the range it parameterizes and its own bound."""
-    ranges = FACETS[name]
-    if column.range.lower() not in ranges:
-        legal = ", ".join(sorted(ranges))
+    """Check one facet against the range it parameterizes and its own bound.
+
+    Legality is the column's to answer, because it depends on the whole type
+    chain rather than on the name the slot happens to mention — see
+    :meth:`varda.model.Column.parameterizes`.
+    """
+    if not column.parameterizes(name):
+        legal = ", ".join(sorted(FACETS[name]))
+        resolved = " -> ".join(column.type_chain)
+        where = (
+            f"a {column.range} column"
+            if len(column.type_chain) == 1
+            else f"a {column.range} column ({resolved})"
+        )
         yield Finding(
             "V803",
             "error",
             str(column),
-            f"varda:{name} on a {column.range} column, where it "
+            f"varda:{name} on {where}, where it "
             f"parameterizes nothing; legal on: {legal}",
         )
         return

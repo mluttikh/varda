@@ -20,7 +20,9 @@ looks exactly like an extension whose rules all pass.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import pathlib
+import sys
 import tomllib
 from functools import cache
 from importlib import import_module
@@ -122,12 +124,23 @@ def _from_entry_points() -> list[Extension]:
                 f"not an Extension"
             )
             raise ExtensionError(msg)
-        out.append(
-            Extension(**{**obj.__dict__, "origin": f"entry point {ep.name}"})
-            if not obj.origin
-            else obj
-        )
+        where = f"entry point {ep.name}"
+        out.append(obj if obj.origin else _stamped(obj, where))
     return out
+
+
+def _stamped(ext: Extension, origin: str) -> Extension:
+    """Copy an extension, recording where it was found.
+
+    Through ``dataclasses.replace`` rather than ``Extension(**ext.__dict__)``.
+    An extension is usually a module-level singleton, and `profile_view` and
+    `profile_version` are ``cached_property`` — which write their results
+    into the instance's ``__dict__``. So the moment anything had read the
+    parsed profile, re-creating the extension from that dict raised
+    ``TypeError: got an unexpected keyword argument 'profile_view'``, and
+    which invocation hit it depended on what had run first in the process.
+    """
+    return dataclasses.replace(ext, origin=origin)
 
 
 def find_config(start: pathlib.Path | None = None) -> pathlib.Path | None:
@@ -150,13 +163,36 @@ def find_config(start: pathlib.Path | None = None) -> pathlib.Path | None:
     return None
 
 
+#: Every key ``varda.toml`` may carry, and the only ones anything reads.
+#: Listed so a misspelling is refused rather than ignored — see
+#: :func:`config`.
+CONFIG_KEYS = frozenset({"extensions", "extension", "severity", "exempt"})
+
+
+@cache
 def config() -> dict[str, Any]:
-    """Read ``varda.toml``, or an empty mapping when there is none."""
+    """Read ``varda.toml``, or an empty mapping when there is none.
+
+    A key this does not recognize is refused. That is V001's argument one
+    layer up: an annotation nobody declared is a constraint that silently
+    never applies, and `exempts = [...]` written for `exempt` is a rule
+    suppressed nowhere while reading exactly like a rule suppressed here.
+    The file is small enough that the whole vocabulary is four names, so
+    there is nothing to trade against saying so.
+    """
     path = find_config()
     if path is None or not path.is_file():
         return {}
     with path.open("rb") as handle:
         loaded: dict[str, Any] = tomllib.load(handle)
+    unknown = sorted(set(loaded) - CONFIG_KEYS)
+    if unknown:
+        msg = (
+            f"{CONFIG_NAME} ({path}): unknown key(s) "
+            f"{', '.join(repr(k) for k in unknown)}; "
+            f"expected one of {', '.join(sorted(CONFIG_KEYS))}"
+        )
+        raise ExtensionError(msg)
     return loaded
 
 
@@ -189,11 +225,7 @@ def _from_config() -> list[Extension]:
                 f"(got {type(obj).__name__})"
             )
             raise ExtensionError(msg)
-        out.append(
-            obj
-            if obj.origin
-            else Extension(**{**obj.__dict__, "origin": where})
-        )
+        out.append(obj if obj.origin else _stamped(obj, where))
 
     out.extend(_inline(e, path, where) for e in data.get("extension", []))
     return out
@@ -255,19 +287,40 @@ def using(*extra: Extension) -> Iterator[tuple[Extension, ...]]:
         reset_caches()
 
 
+#: The one cached lookup :func:`reset_caches` leaves alone. Varda itself is
+#: the same extension under every extension set, and rebuilding it discards
+#: the parsed profile behind `Extension.profile_view` — re-reading
+#: `varda.yaml` on both sides of every `using()` block, which is twice per
+#: test in the suite.
+_KEEP_CACHED = frozenset({"varda_extension"})
+
+
+def _cached() -> list[Any]:
+    """Collect every cached lookup this module owns, except the kept one.
+
+    Found rather than listed. The hand-written tuple this replaces had gone
+    stale twice over — `annotation_shape` and `structured_shape` were both
+    missing, so a shape looked up before an extension was active stayed
+    ``None`` afterwards and V004 silently stopped checking that extension's
+    structured annotations. A list of caches that stops short is a reset
+    that stops resetting, and the failure is in the direction of no
+    checking at all.
+
+    Restricted to functions defined here, so a cached callable imported from
+    somewhere else is not cleared on this module's behalf.
+    """
+    return [
+        obj
+        for name, obj in vars(sys.modules[__name__]).items()
+        if name not in _KEEP_CACHED
+        and hasattr(obj, "cache_clear")
+        and getattr(obj, "__module__", None) == __name__
+    ]
+
+
 def reset_caches() -> None:
     """Clear every cached lookup in this module."""
-    for fn in (
-        extensions,
-        declared_annotations,
-        annotation_enum,
-        prefixes,
-        permitted,
-        profile_filename,
-        severities,
-        generators,
-        _enums_of,
-    ):
+    for fn in _cached():
         fn.cache_clear()
 
 
@@ -347,8 +400,35 @@ def _check_rule_codes(found: list[Extension]) -> None:
             seen[code] = ext.name
 
 
+def _escapes(path: str) -> bool:
+    r"""Flag an artifact path that would not stay inside ``--out``.
+
+    Checked under both path flavors rather than this machine's. A generator
+    declaring ``C:\out\x`` is absolute on Windows and an ordinary relative
+    name on POSIX, and the same package is installed on both — so a path is
+    refused if either flavor would let it out, which keeps the answer the
+    same everywhere the extension runs.
+
+    ``..`` is refused rather than resolved. `sql/../mart.sql` stays inside
+    and is still a declaration nobody meant to write, and normalizing it
+    would accept `sql/../../mart.sql` for the length of one more segment.
+    """
+    flavors = (pathlib.PurePosixPath(path), pathlib.PureWindowsPath(path))
+    return not path or any(
+        p.is_absolute() or p.anchor or ".." in p.parts for p in flavors
+    )
+
+
 def _check_artifacts(found: list[Extension]) -> None:
-    """Refuse two generators claiming one name or one output path."""
+    """Refuse two generators claiming one name or one output path.
+
+    Also refuses a path that would be written outside ``--out``. Declaring
+    the paths up front is what makes them checkable, and until now the only
+    thing being checked was that two generators did not collide: `cli` joins
+    a declared path straight onto the output directory, so `../mart.sql`
+    wrote a file outside the tree and reported success. Caught here for the
+    same reason a collision is — at load, before anything runs.
+    """
     names: dict[str, str] = {}
     paths: dict[str, str] = {}
     for ext in found:
@@ -361,6 +441,13 @@ def _check_artifacts(found: list[Extension]) -> None:
                 raise ExtensionError(msg)
             names[gen.name] = ext.name
             for path in gen.artifacts:
+                if _escapes(path):
+                    msg = (
+                        f"{gen.name} declares artifact {path!r}, which does "
+                        f"not stay inside the output directory; an artifact "
+                        f"path is relative and contains no '..'"
+                    )
+                    raise ExtensionError(msg)
                 if path in paths:
                     msg = (
                         f"{path!r} is written by both {paths[path]} and "
@@ -596,11 +683,26 @@ def severities() -> dict[str, Severity]:
     The repository's word is final, and deliberately so. An extension's
     ``severity_defaults`` is an opinion shipped by a party who cannot see this
     codebase; the config file is written by people who can.
+
+    Checked on the way in, on the same terms as
+    :func:`_check_severity_defaults` checks the extension route. Having the
+    final word is not a reason to be trusted: an unrecognized severity used to
+    reach :meth:`varda.rules.Finding.__str__`, which indexes a closed
+    three-key table, so a one-character typo here ended the run in a
+    ``KeyError`` traceback instead of a sentence naming the file.
     """
     out: dict[str, Severity] = {}
     for ext in extensions():
         out.update(ext.severity_defaults)
-    out.update(_str_map(config().get("severity", {})))
+    wanted = _str_map(config().get("severity", {}))
+    for code, severity in sorted(wanted.items()):
+        if severity not in SEVERITIES:
+            msg = (
+                f"{CONFIG_NAME}: severity {severity!r} for {code} is not "
+                f"one of {', '.join(sorted(SEVERITIES))}"
+            )
+            raise ExtensionError(msg)
+    out.update(wanted)
     return out
 
 

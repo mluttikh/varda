@@ -52,8 +52,12 @@ TYPES = {
     "ncname": "VARCHAR",
 }
 
-#: How a dialect asks for a schema. PostgreSQL's form is the common one and
-#: DuckDB and Snowflake both take it.
+#: How a dialect asks for a schema, given the placeholders :func:`generate`
+#: fills: `{quoted}` is the schema name as an identifier, `{literal}` is it as
+#: a string, and `{exec_body}` is the whole `CREATE SCHEMA` wrapped as one.
+#: A template uses the ones it needs and ignores the rest.
+#:
+#: PostgreSQL's form is the common one and DuckDB and Snowflake both take it.
 CREATE_SCHEMA = "CREATE SCHEMA IF NOT EXISTS {quoted};"
 
 
@@ -117,9 +121,12 @@ DIALECTS: dict[str, Dialect] = {
         },
         # `CREATE SCHEMA` must be the first statement in its batch, so it
         # cannot be guarded by an `IF` directly and goes through `EXEC`.
-        create_schema=(
-            "IF SCHEMA_ID('{name}') IS NULL EXEC('CREATE SCHEMA {quoted}');"
-        ),
+        # Both halves are string literals, and the second holds a whole
+        # statement — so the name is escaped once for the test and the DDL
+        # is escaped again for the wrapper. That is why the placeholders are
+        # pre-rendered rather than being the bare name: one template cannot
+        # express two depths of quoting.
+        create_schema="IF SCHEMA_ID({literal}) IS NULL EXEC({exec_body});",
         sizes_strings=True,
     ),
 }
@@ -144,13 +151,30 @@ def dialect(name: str) -> Dialect:
 
 
 def sql_type(column: Column, sql: Dialect) -> str:
-    """Map a column's range to a SQL type, or raise naming the column."""
-    rng = column.range
-    mapped = sql.type_of(rng.lower())
+    """Map a column's range to a SQL type, or raise naming the column.
+
+    Resolved through the range's own type chain, nearest first, so a schema
+    declaring ``money: {typeof: decimal}`` gets `NUMERIC` rather than
+    stopping the generator. That used to be the worst of the two answers a
+    model can get: `varda check --strict` reported nothing and `varda
+    generate` refused, and the first one is the one people trust.
+
+    Nearest first is what keeps `uuid` a `UUID`. It is declared
+    ``typeof: string``, so a chain walked the other way would find `VARCHAR`
+    and hand back a 36-character column that sorts and compares as text.
+    Every entry in :data:`TYPES` is now reachable this way, which makes the
+    `uuid` row an instance of the rule rather than an exception to it.
+    """
+    mapped = next(
+        (t for rng in column.type_chain if (t := sql.type_of(rng)) is not None),
+        None,
+    )
     if mapped is None:
         known = ", ".join(sorted(TYPES))
+        tried = " -> ".join(column.type_chain)
         msg = (
-            f"{column}: range {rng!r} has no SQL mapping. Known ranges: {known}"
+            f"{column}: range {column.range!r} has no SQL mapping "
+            f"(tried {tried}). Known ranges: {known}"
         )
         raise GenerationError(msg)
     if sql.sizes_strings and mapped == "VARCHAR" and column.max_length is None:
@@ -216,6 +240,24 @@ def quoted(name: str) -> str:
     An embedded quote is doubled, following SQL:2016.
     """
     return '"' + name.replace('"', '""') + '"'
+
+
+def literal(text: str) -> str:
+    """Render one value so SQL reads it as a string and nothing else.
+
+    The companion to :func:`quoted`, and it exists for the same reason one
+    layer over. Quoting settles identifiers; nothing settled the string
+    literals, and one dialect needs them: T-SQL cannot guard `CREATE SCHEMA`
+    with an `IF` directly, so it tests `SCHEMA_ID('...')` and runs the DDL
+    through `EXEC('...')`. Both are strings holding a schema name that
+    arrives from `--schema` unexamined. A name with an apostrophe in it
+    emitted DDL no database would parse, and did so only under the one
+    dialect the test suite cannot execute.
+
+    An embedded quote is doubled, following SQL:2016 — the same rule as
+    identifiers, against the other quote character.
+    """
+    return "'" + text.replace("'", "''") + "'"
 
 
 def _comment(text: str, label: str = "") -> list[str]:
@@ -302,16 +344,23 @@ def _column_line(column: Column, sql: Dialect) -> str:
 
 
 def _unique_constraints(table: Table) -> list[str]:
-    """Render the uniqueness constraints that apply to one table."""
-    out: list[str] = []
+    """Render the uniqueness constraints that apply to one table.
+
+    Each distinct combination once. A grain and a declared `unique_keys`
+    entry may name the same columns — one is Varda's vocabulary and one is
+    LinkML's, and writing both is a reasonable thing to do — and every
+    database accepts the doubled constraint by building a second index for
+    it. Two indexes maintained on every write, for one claim, and nothing
+    anywhere says so.
+    """
+    claims: list[tuple[Column, ...]] = []
+
     # The grain, as a constraint the database enforces rather than a comment
     # it ignores. This is the whole return on declaring `varda:grain` as
     # columns: a uniqueness claim nobody checks is a uniqueness claim that
     # stops being true, quietly, on some load nobody is watching.
-    grain = table.grain_columns
-    if grain:
-        cols = ", ".join(quoted(c.physical) for c in grain)
-        out.append(f"    UNIQUE ({cols})")
+    if table.grain_columns:
+        claims.append(table.grain_columns)
 
     # LinkML's own `unique_keys`, when a model declares them, and nothing
     # derived. One combination per constraint rather than every key column
@@ -325,8 +374,7 @@ def _unique_constraints(table: Table) -> list[str]:
     for unique in table.unique_keys:
         if not unique.columns:
             continue  # V303 reports a key that names nothing
-        cols = ", ".join(quoted(c.physical) for c in unique.columns)
-        out.append(f"    UNIQUE ({cols})")
+        claims.append(unique.columns)
 
     # The uniqueness a dimension implies by declaring a natural key, when it
     # has not stated one itself. V302 requires that key and calls it what a
@@ -335,9 +383,19 @@ def _unique_constraints(table: Table) -> list[str]:
     if table.is_dimension and not table.unique_keys:
         derived = _derived_key(table)
         if derived:
-            cols = ", ".join(quoted(c.physical) for c in derived)
-            out.append(f"    UNIQUE ({cols})")
+            claims.append(derived)
 
+    # Ordered, not sorted: the grain leads because it is the table's own
+    # statement of what a row is, and a reader comparing the DDL against the
+    # model should meet them in the order the model declares them.
+    out: list[str] = []
+    seen: set[tuple[str, ...]] = set()
+    for columns in claims:
+        names = tuple(c.physical for c in columns)
+        if names in seen:
+            continue
+        seen.add(names)
+        out.append(f"    UNIQUE ({', '.join(quoted(n) for n in names)})")
     return out
 
 
@@ -432,12 +490,17 @@ def generate(
 ) -> str:
     """Render the whole model as one runnable DDL script."""
     sql = dialect(dialect_name)
+    name = quoted(schema)
     header = [
         "-- Generated by varda. Do not edit.",
         f"-- Source: {model.source.name}",
         f"-- Dialect: {sql.name}",
         "",
-        sql.create_schema.format(quoted=quoted(schema), name=schema),
+        sql.create_schema.format(
+            quoted=name,
+            literal=literal(schema),
+            exec_body=literal(f"CREATE SCHEMA {name}"),
+        ),
         "",
         "",
     ]

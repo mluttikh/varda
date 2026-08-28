@@ -4,10 +4,35 @@ Structured around what could actually go wrong rather than around the module
 layout: a section per property the design depends on. The largest section is
 extension validation, because those are the failures that are unfixable once
 somebody has shipped a model against them.
+
+That arrangement is worth keeping and stopped being visible. At four thousand
+lines the sections are the index, so they are listed here — a banner rule is
+one of these, and `# --- name ---` is a subsection of the banner above it,
+never a section in its own right.
+
+    Helpers
+    The model layer
+    Rules — one per rule, named for the failure it catches
+    The rule set itself
+    The registry and the extension mechanism
+    Extension validation — unfixable once somebody has shipped against it
+    Generation
+    The command line
+    varda.toml — the extension route that needs no Python at all
+    Distribution — the routes a shipped extension takes
+    The namespace — the one identifier that can never change
+    Versioning columns
+    Hierarchies — the named paths a dimension is drilled down
+    Bridges, and the annotations that carry structure
+    Identity — what makes two rows the same thing
+    Physical names — the collisions no rule used to see
+    Dialects — the spellings the one model comes out in
+    Types — what a column says it holds
 """
 
 from __future__ import annotations
 
+import dataclasses
 import decimal
 import importlib.metadata
 import pathlib
@@ -21,7 +46,7 @@ import yaml
 from sqlglot import expressions as sqlglot_exp
 
 from varda import __version__, cli, gen_sql, registry, rules
-from varda.ext import Extension, ExtensionError, Generator
+from varda.ext import Context, Extension, ExtensionError, Generator
 from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
@@ -916,6 +941,28 @@ def test_rule_set_rejects_an_unknown_severity() -> None:
         rs.rule("V901", "critical", "nope")
 
 
+def test_an_info_rule_never_stops_a_run(tmp_path: pathlib.Path) -> None:
+    """The third severity, which the core ships and does not use.
+
+    All 48 Varda rules are `error` or `warning`. `info` is there for
+    extensions, which have reason to report a house convention worth naming
+    in a build log without failing it — so `extending.md` says it never
+    stops a run, and this is what makes that true.
+    """
+    rs = RuleSet(tag="LL")
+    rs.rule("LL001", "info", "Noted")(
+        lambda m: iter(
+            [rules.Finding("LL001", "info", str(t), "noted") for t in m.tables]
+        )
+    )
+    model = build(tmp_path, {"DimThing": dimension()})
+    with registry.using(_bare("l", "lll", rule_tag="LL", rules=rs)):
+        found = rules.check(model)
+        assert "LL001" in {f.rule for f in found}
+        path = tmp_path / "t.yaml"
+        assert cli.main(["check", str(path), "--strict"]) == 0
+
+
 def test_unknown_codes_finds_stale_exemptions() -> None:
     assert rules.unknown_codes(["V001", "V999"]) == ["V999"]
 
@@ -945,6 +992,41 @@ def test_varda_is_itself_an_extension() -> None:
     assert isinstance(core, Extension)
     assert core.prefix == "varda"
     assert core.rules is not None
+
+
+def test_model_objects_can_go_in_a_set() -> None:
+    """A rule asking about columns should be able to use columns.
+
+    The generated `__hash__` on these dataclasses reached into a
+    `SlotDefinition` and raised `TypeError: unhashable type`, so every rule
+    that needed a set of columns built a set of names instead — answering an
+    identity question through strings, which is the indirection this layer
+    exists to remove.
+    """
+    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    table = model.dimensions[0]
+    assert len({*table.columns}) == len(table.columns)
+    assert len({*model.tables}) == len(model.tables)
+    hierarchy = next(h for t in model.tables for h in t.hierarchies)
+    assert len({*hierarchy.resolved}) == len(hierarchy.resolved)
+
+
+def test_model_objects_are_the_same_object_each_time() -> None:
+    """Identity is only worth having if instances are stable.
+
+    `hierarchies` and `resolved` were plain properties and rebuilt on every
+    access — 51 rebuilds across 8 tables in one `check()` — so two `Level`
+    objects for one level were never the same object and a set of them
+    would have held duplicates.
+    """
+    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    table = model.dimensions[0]
+    assert table.columns[0] is table.columns[0]
+    assert model.tables[0] is model.tables[0]
+    owner = next(t for t in model.tables if t.hierarchies)
+    assert owner.hierarchies[0] is owner.hierarchies[0]
+    hierarchy = owner.hierarchies[0]
+    assert hierarchy.resolved is hierarchy.resolved
 
 
 def test_declared_annotations_are_namespaced() -> None:
@@ -1107,6 +1189,82 @@ def test_colliding_generator_name_is_refused() -> None:
     gen = Generator(name="sql", artifacts=("other/x.txt",), run=run)
     with pytest.raises(ExtensionError, match="generator 'sql'"):
         activate(_bare("a", "one", generators=(gen,)))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../escaped.sql",
+        "sql/../../escaped.sql",
+        "/tmp/escaped.sql",  # noqa: S108 — the point is that it is refused
+        "C:\\out\\escaped.sql",
+        "",
+    ],
+)
+def test_an_artifact_path_that_leaves_the_output_tree_is_refused(
+    path: str,
+) -> None:
+    """Declaring a path is what makes it checkable, so check it.
+
+    `cli.generate` joins a declared path straight onto `--out`, and until
+    this was refused the join was the only thing constraining it: a
+    generator declaring `../escaped.sql` wrote a file outside the tree and
+    the run reported success. The Windows form is refused on POSIX too,
+    because the same extension is installed on both and the answer should
+    not depend on which machine loaded it.
+    """
+
+    def run(_ctx: Any) -> dict[str, str]:
+        return {path: ""}
+
+    gen = Generator(name="esc", artifacts=(path,), run=run)
+    with pytest.raises(ExtensionError, match="stay inside"):
+        activate(_bare("a", "one", generators=(gen,)))
+
+
+def test_nothing_is_written_outside_the_output_directory(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The end-to-end form of the rule above, through the CLI."""
+
+    def run(_ctx: Any) -> dict[str, str]:
+        return {"../escaped.sql": "-- no\n"}
+
+    gen = Generator(name="esc", artifacts=("../escaped.sql",), run=run)
+    out = tmp_path / "out"
+    with pytest.raises(ExtensionError):
+        activate(_bare("a", "one", generators=(gen,)))
+    assert not (tmp_path / "escaped.sql").exists()
+    assert not out.exists()
+
+
+def test_every_cached_lookup_is_reset() -> None:
+    """A reset that stops short is a cache that silently goes stale.
+
+    `annotation_shape` and `structured_shape` were both missing from the
+    hand-written list this replaces, so a shape looked up before an
+    extension was active stayed `None` afterwards and V004 quietly stopped
+    checking that extension's structured annotations. The list is now built
+    rather than listed; this asserts the build finds everything.
+    """
+    owned = {
+        name
+        for name, obj in vars(registry).items()
+        if hasattr(obj, "cache_clear")
+        and getattr(obj, "__module__", None) == registry.__name__
+    }
+    reset = {fn.__name__ for fn in registry._cached()}
+    assert owned - reset == registry._KEEP_CACHED
+
+
+def test_a_structured_shape_is_seen_after_an_extension_is_activated() -> None:
+    """The failure the reset above exists to prevent, from the outside."""
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    assert registry.structured_shape("acme", "AcmeTableAnnotations") is None
+    with registry.using(EXTENSION):
+        shape = registry.structured_shape("acme", "AcmeTableAnnotations")
+    assert shape == {"cost_center": "string", "retention_days": "integer"}
 
 
 def test_profile_prefix_must_match(tmp_path: pathlib.Path) -> None:
@@ -1558,6 +1716,21 @@ def test_check_strict_fails_on_a_stale_exemption() -> None:
     assert cli.main(["check", str(RETAIL), "--exempt", "V999", "--strict"]) == 1
 
 
+def test_generate_reports_a_stale_exemption_too(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The command that writes files was the one saying nothing.
+
+    A suppression that has outlived its rule is a maintenance finding
+    wherever it is read, and `_blocking` promises the two commands cannot
+    disagree about whether a model is fit to generate from.
+    """
+    args = ["generate", str(RETAIL), "--out", str(tmp_path), "--exempt", "V999"]
+    assert cli.main(args) == 0
+    assert "names no registered rule: V999" in capsys.readouterr().err
+    assert cli.main([*args, "--strict"]) == 1
+
+
 def test_unknown_generator_is_a_usage_error() -> None:
     assert cli.main(["generate", str(RETAIL), "--only", "nope"]) == 2
 
@@ -1725,6 +1898,240 @@ def test_toml_exemptions_are_read(
     monkeypatch.setenv("VARDA_CONFIG", str(path))
     registry.reset_caches()
     assert registry.exemptions() == ["V502", "V705"]
+
+
+def test_toml_unknown_key_is_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`exempts` for `exempt` suppresses nothing and reads like it does.
+
+    V001's argument one layer up. A misspelled annotation is a constraint
+    that silently never applies; a misspelled config key is a rule
+    suppressed nowhere, and the file is small enough that saying so costs
+    nothing.
+    """
+    path = write_config(
+        tmp_path,
+        """
+        exempts = ["V502"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    with pytest.raises(ExtensionError, match="unknown key"):
+        registry.exemptions()
+
+
+def test_toml_unknown_severity_is_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo here used to end the run in a KeyError traceback.
+
+    The config file has the final word over an extension's severity
+    defaults, and having the final word is not a reason to go unchecked:
+    the value reached `Finding.__str__`, which indexes a closed three-key
+    table.
+    """
+    path = write_config(
+        tmp_path,
+        """
+        [severity]
+        V101 = "eror"
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    with pytest.raises(ExtensionError, match="not one of"):
+        registry.severities()
+
+
+def test_toml_severity_for_a_retired_rule_is_reported(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An override nobody applies is the same silence as a stale exemption."""
+    path = write_config(
+        tmp_path,
+        """
+        [severity]
+        V999 = "error"
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    assert cli.main(["check", str(RETAIL)]) == 0
+    assert "severity override names no registered rule" in (
+        capsys.readouterr().err
+    )
+
+
+# ---------------------------------------------------------------------------
+# Distribution — the routes a shipped extension takes
+# ---------------------------------------------------------------------------
+#
+# `registry` names three ways an extension becomes active and SPEC lists
+# distribution as the fourth seam, stating each is covered by a test. Two of
+# the three had never run: the entry point, which is what a *published*
+# extension uses and the only route whose failure cannot be found locally,
+# and `extensions = ["module"]`, which is the same import by another door.
+# Everything below reaches them the way a real installation would.
+
+
+@dataclasses.dataclass(frozen=True)
+class _FakeEntryPoint:
+    """One `varda.extensions` entry point, as `entry_points` yields them."""
+
+    name: str
+    value: Any
+    fails: BaseException | None = None
+
+    def load(self) -> Any:
+        if self.fails is not None:
+            raise self.fails
+        return self.value
+
+
+def _advertise(
+    monkeypatch: pytest.MonkeyPatch, *points: _FakeEntryPoint
+) -> None:
+    """Make the registry see these entry points and nothing else."""
+    monkeypatch.setattr(
+        registry, "entry_points", lambda group: points if group else ()
+    )
+    registry.reset_caches()
+
+
+def test_an_entry_point_extension_becomes_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The route a published extension takes, exercised end to end."""
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    _advertise(monkeypatch, _FakeEntryPoint("acme", EXTENSION))
+    active = {e.prefix: e for e in registry.extensions()}
+    assert "acme" in active
+    assert "ACME101" in {code for code, *_ in rules.all_rules()}
+    assert "acme:cost_center" in registry.declared_annotations("table")
+
+
+def test_an_entry_point_records_where_it_came_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`varda ext` has to be able to say why something is loaded.
+
+    An extension nobody can account for is one nobody can remove.
+    """
+    # Not `_bare`, which stamps an origin of its own — and an extension that
+    # already names where it came from keeps it, which is the other half of
+    # the behavior being pinned here.
+    plain = Extension(name="fin", prefix="fin")
+    _advertise(monkeypatch, _FakeEntryPoint("finance", plain))
+    found = next(e for e in registry.extensions() if e.prefix == "fin")
+    assert found.origin == "entry point finance"
+
+
+def test_an_extension_loads_after_its_profile_has_been_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A singleton whose cached profile has been touched still loads.
+
+    An extension is a module-level singleton, and `profile_view` and
+    `profile_version` are `cached_property` — they write their results into
+    the instance's `__dict__`. Re-creating the extension from that dict to
+    stamp its origin therefore raised `TypeError: got an unexpected keyword
+    argument 'profile_view'` the moment anything had read the parsed
+    profile, and which invocation hit it depended on what had run first in
+    the process.
+    """
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    assert EXTENSION.profile_version == "1.2.0"  # populates the cache
+    _advertise(monkeypatch, _FakeEntryPoint("acme", EXTENSION))
+    assert "acme" in {e.prefix for e in registry.extensions()}
+
+
+def test_an_entry_point_that_is_not_an_extension_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _advertise(monkeypatch, _FakeEntryPoint("bogus", object()))
+    with pytest.raises(ExtensionError, match="not an Extension"):
+        registry.extensions()
+
+
+def test_an_entry_point_that_will_not_load_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An extension that silently fails to load looks like one that passes.
+
+    Every rule it would have run is a rule nobody notices did not run, which
+    is why this raises rather than skipping the entry point.
+    """
+    boom = _FakeEntryPoint("broken", None, fails=ImportError("no module"))
+    _advertise(monkeypatch, boom)
+    with pytest.raises(ExtensionError, match="could not be loaded"):
+        registry.extensions()
+
+
+def test_toml_extensions_import_a_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same import, reached through the config file instead."""
+    path = write_config(
+        tmp_path,
+        """
+        extensions = ["acme_ext"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    active = {e.prefix for e in registry.extensions()}
+    assert "acme" in active
+
+
+def test_toml_extensions_take_a_named_attribute(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`module:NAME` for a package exporting more than one."""
+    path = write_config(
+        tmp_path,
+        """
+        extensions = ["acme_ext:EXTENSION"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    assert "acme" in {e.prefix for e in registry.extensions()}
+
+
+def test_toml_extensions_reject_a_missing_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_config(
+        tmp_path,
+        """
+        extensions = ["no_such_extension_module"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    with pytest.raises(ExtensionError, match="cannot import"):
+        registry.extensions()
+
+
+def test_toml_extensions_reject_a_name_that_is_not_an_extension(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_config(
+        tmp_path,
+        """
+        extensions = ["acme_ext:RULES"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    with pytest.raises(ExtensionError, match="does not name an Extension"):
+        registry.extensions()
 
 
 def test_toml_missing_profile_is_refused(
@@ -2099,7 +2506,9 @@ def test_v120_fact_type_on_a_dimension(tmp_path: pathlib.Path) -> None:
     assert "V104" in codes(model)
 
 
-# --- hierarchies -----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Hierarchies — the named paths a dimension is drilled down
+# ---------------------------------------------------------------------------
 
 
 def _geo(*levels: str, name: str = "geography") -> dict[str, Any]:
@@ -2509,7 +2918,9 @@ def test_a_missing_reference_key_names_the_far_table(
     assert "not a column of DimCountry" in found[0].message
 
 
-# --- bridges and structured annotations -------------------------------------
+# ---------------------------------------------------------------------------
+# Bridges, and the annotations that carry structure
+# ---------------------------------------------------------------------------
 
 
 def test_v133_a_bridge_that_references_nothing(
@@ -2602,7 +3013,12 @@ def test_v134_is_silent_on_a_well_formed_hierarchy(
     assert "V004" not in codes(model)
 
 
-# --- two identities ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Identity — what makes two rows the same thing
+# ---------------------------------------------------------------------------
+
+
+# --- several natural keys ----------------------------------------------------
 
 
 def _two_identities(**extra: Any) -> dict[str, Any]:
@@ -2749,7 +3165,7 @@ def test_a_nullable_lone_key_does_not_hold(tmp_path: pathlib.Path) -> None:
     assert kept == (3,)
 
 
-# --- unique keys ------------------------------------------------------------
+# --- declared unique keys ----------------------------------------------------
 
 
 def _two_keyed(**extra: Any) -> dict[str, Any]:
@@ -2793,6 +3209,70 @@ def test_declared_keys_replace_the_derived_one(
     sql = generate_sql(model)
     # `d_id` is the natural key Varda would otherwise have derived from.
     assert 'UNIQUE ("d_id", "vs")' not in sql
+
+
+def _fact_keyed_twice() -> dict[str, Any]:
+    """Build a fact whose grain and unique key name the same column."""
+    return {
+        "annotations": {
+            "varda:role": "FACT",
+            # Factless, so the fixture is legal without a measure that has
+            # nothing to do with what is being tested.
+            "varda:fact_type": "FACTLESS",
+            "varda:grain": "d_key",
+            "varda:grain_statement": "one row per thing measured once",
+        },
+        "unique_keys": {"by_thing": {"unique_key_slots": ["d_key"]}},
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            }
+        },
+    }
+
+
+def test_one_claim_is_one_constraint(tmp_path: pathlib.Path) -> None:
+    """A grain and a matching unique key are one claim written twice.
+
+    One is Varda's vocabulary and one is LinkML's, and writing both is a
+    reasonable thing to do. Every database accepts the doubled constraint by
+    building a second index for it — maintained on every write, for a claim
+    it already holds, with nothing anywhere saying so.
+    """
+    model = build(
+        tmp_path, {"DimThing": dimension(), "FctThing": _fact_keyed_twice()}
+    )
+    assert not codes(model)
+    sql = generate_sql(model)
+    assert sql.count('UNIQUE ("d_key")') == 1
+
+
+def test_one_claim_is_one_index(tmp_path: pathlib.Path) -> None:
+    """The form the reader of the database sees, rather than of the DDL."""
+    model = build(
+        tmp_path, {"DimThing": dimension(), "FctThing": _fact_keyed_twice()}
+    )
+    con = duckdb.connect()
+    con.execute(generate_sql(model, dialect_name="duckdb"))
+    found = con.execute(
+        "select count(*) from duckdb_constraints() "
+        "where table_name = 'fct_thing' and constraint_type = 'UNIQUE'"
+    ).fetchone()
+    assert found is not None
+    assert found[0] == 1
+
+
+def test_two_different_claims_are_still_two_constraints(
+    tmp_path: pathlib.Path,
+) -> None:
+    """De-duplication is on the columns, not on there being more than one."""
+    model = build(tmp_path, {"DimProduct": _two_keyed()})
+    sql = generate_sql(model)
+    assert sql.count("UNIQUE (") == 2
 
 
 def test_unique_keys_are_inherited(tmp_path: pathlib.Path) -> None:
@@ -2991,7 +3471,9 @@ def test_a_column_collision_would_not_execute(
         duckdb.connect().execute(sql)
 
 
-# --- dialects ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Dialects — the spellings the one model comes out in
+# ---------------------------------------------------------------------------
 
 #: sqlglot's name for each dialect Varda ships.
 SQLGLOT_NAMES = {
@@ -3048,6 +3530,31 @@ def test_the_dialect_table_agrees_with_sqlglot(name: str) -> None:
         ), f"{name}: {rng} is {ours} here and {theirs} in sqlglot"
 
 
+@pytest.mark.parametrize("name", sorted(gen_sql.DIALECTS))
+def test_a_schema_name_with_a_quote_in_it_still_parses(name: str) -> None:
+    """`quoted` settled identifiers and nothing settled string literals.
+
+    T-SQL cannot guard `CREATE SCHEMA` with an `IF`, so it tests
+    `SCHEMA_ID('...')` and runs the DDL through `EXEC('...')` — two string
+    literals holding a name that arrives from `--schema` unexamined. An
+    apostrophe in it emitted DDL no database would parse, and only under the
+    one dialect this suite cannot execute.
+    """
+    model = DimensionalModel.load(RETAIL)
+    ddl = generate_sql(model, schema="ma'rt", dialect_name=name)
+    statement = ddl.splitlines()[4]
+    assert "ma'rt" in ddl
+    sqlglot.parse(statement, read=SQLGLOT_NAMES[name])
+
+
+def test_the_schema_statement_escapes_both_of_its_layers() -> None:
+    """The T-SQL form quotes the name twice over, at two different depths."""
+    model = DimensionalModel.load(RETAIL)
+    ddl = generate_sql(model, schema="ma'rt", dialect_name="sqlserver")
+    assert "SCHEMA_ID('ma''rt')" in ddl
+    assert """EXEC('CREATE SCHEMA "ma''rt"')""" in ddl
+
+
 def test_the_default_dialect_is_postgres() -> None:
     """The base table is PostgreSQL's, and says so.
 
@@ -3058,6 +3565,25 @@ def test_the_default_dialect_is_postgres() -> None:
     """
     assert gen_sql.DEFAULT_DIALECT == "postgres"
     assert gen_sql.DIALECTS["postgres"].types == {}
+
+
+def test_the_context_default_matches_the_generator_default() -> None:
+    """Two copies of one string, and the reason for them is good.
+
+    `Context.dialect` is a name rather than a table so that `ext.py` — the
+    only module a third party imports — stays free of SQL. That is worth
+    keeping, and it leaves the default written down twice. `ONE_IDENTITY`
+    exists on the argument that two copies of a threshold drift, and the
+    version is single-sourced on the same one; this is the copy that was
+    left ungated.
+    """
+    assert (
+        Context(
+            model=DimensionalModel.load(RETAIL, importmap=registry.importmap()),
+            source=RETAIL,
+        ).dialect
+        == gen_sql.DEFAULT_DIALECT
+    )
 
 
 def test_an_unknown_dialect_names_the_known_ones() -> None:
@@ -3132,7 +3658,12 @@ def test_the_header_names_the_dialect(tmp_path: pathlib.Path) -> None:
     assert "-- Dialect: duckdb" in generate_sql(model, dialect_name="duckdb")
 
 
-# --- uuid -------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Types — what a column says it holds
+# ---------------------------------------------------------------------------
+
+
+# --- uuid --------------------------------------------------------------------
 
 
 def _uuid_key(tmp_path: pathlib.Path) -> DimensionalModel:
@@ -3204,7 +3735,7 @@ def test_uuid_without_the_import_is_reported(tmp_path: pathlib.Path) -> None:
     assert "imports: - varda" in found[0].message
 
 
-# --- V804 -------------------------------------------------------------------
+# --- V804 — a range that names nothing ---------------------------------------
 
 
 def test_v804_a_range_naming_nothing(tmp_path: pathlib.Path) -> None:
@@ -3233,7 +3764,117 @@ def test_v804_leaves_the_examples_alone() -> None:
         assert "V804" not in codes(model)
 
 
-# --- type facets ------------------------------------------------------------
+# --- types the schema declares for itself ------------------------------------
+
+
+def _declared_type(tmp_path: pathlib.Path, **facets: Any) -> DimensionalModel:
+    """Build a model whose measure is ranged on a type the schema declares."""
+    fact = {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:fact_type": "TRANSACTION",
+            "varda:grain": "d_key",
+            "varda:grain_statement": "one row per thing measured once",
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            },
+            "amount": {
+                "range": "money",
+                "unit": {"symbol": "EUR"},
+                "annotations": {
+                    "varda:role": "MEASURE",
+                    "varda:additivity": "ADDITIVE",
+                    **{f"varda:{k}": v for k, v in facets.items()},
+                },
+            },
+        },
+    }
+    schema = {
+        "id": "https://example.org/t",
+        "name": "t",
+        "prefixes": {
+            "linkml": "https://w3id.org/linkml/",
+            "varda": "https://w3id.org/varda/",
+        },
+        "default_prefix": "t",
+        "default_range": "string",
+        "imports": ["linkml:types"],
+        "types": {"money": {"typeof": "decimal"}},
+        "classes": {"DimThing": dimension(), "FctThing": fact},
+    }
+    path = tmp_path / "t.yaml"
+    path.write_text(yaml.safe_dump(schema), encoding="utf-8")
+    return DimensionalModel.load(path, importmap=registry.importmap())
+
+
+def test_a_declared_type_generates(tmp_path: pathlib.Path) -> None:
+    """Clean check and then a GenerationError is the worst pair of answers.
+
+    V804 closed the case where a range names nothing. A range naming a type
+    the schema declares reached the same place by a different road: LinkML
+    resolves it, `varda check --strict` reported nothing, and the generator
+    refused. The first answer is the one people trust.
+    """
+    model = _declared_type(tmp_path, precision=12, scale=2)
+    assert not codes(model)
+    assert '"amount" NUMERIC(12, 2)' in generate_sql(model)
+
+
+def test_a_declared_type_carries_facets(tmp_path: pathlib.Path) -> None:
+    """Legality is asked of the chain, so `money` takes a precision."""
+    model = _declared_type(tmp_path, precision=12, scale=2)
+    column = model.facts[0].column("amount")
+    assert column is not None
+    assert column.type_chain == ("money", "decimal")
+    assert (column.precision, column.scale) == (12, 2)
+
+
+def test_a_declared_type_is_warned_about_like_any_decimal(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The other half of the same failure.
+
+    Asking only the range dropped the facet *and* kept V707 quiet, so a
+    measure on a declared decimal type went unwidened and unwarned at once.
+    """
+    assert "V707" in codes(_declared_type(tmp_path))
+
+
+def test_the_type_chain_is_walked_nearest_first(
+    tmp_path: pathlib.Path,
+) -> None:
+    """What keeps `uuid` a UUID rather than a 36-character string.
+
+    It is declared `typeof: string`, so a chain resolved the other way
+    around would find VARCHAR and hand back a column that sorts and compares
+    as text.
+    """
+    model = _uuid_key(tmp_path)
+    column = model.dimensions[0].column("d_id")
+    assert column is not None
+    assert column.type_chain == ("uuid", "string")
+    assert '"d_id" UUID' in generate_sql(model)
+
+
+def test_a_range_naming_nothing_still_raises(tmp_path: pathlib.Path) -> None:
+    """The chain resolves what it can and never invents the rest."""
+    table = dimension()
+    table["attributes"]["d_id"]["range"] = "intger"
+    model = build(tmp_path, {"DimThing": table})
+    column = model.dimensions[0].column("d_id")
+    assert column is not None
+    assert column.type_chain == ("intger",)
+    with pytest.raises(GenerationError, match="tried intger"):
+        generate_sql(model)
+
+
+# --- type facets -------------------------------------------------------------
 
 
 def _sized(**facets: Any) -> dict[str, Any]:
@@ -3447,6 +4088,46 @@ def test_generated_docs_render_drill_paths(tmp_path: pathlib.Path) -> None:
     model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
     page = generate_docs(model)
     assert "**Drill path** (geography): `country` → `region` → `city`" in page
+
+
+def test_generated_docs_say_what_makes_a_level_unique(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A drill path is a list of names, and a name is not an identity.
+
+    `concepts.md` makes this argument and the generated page never showed
+    it: `city` holds "Springfield" for cities in three states. The model
+    computed the answer on `Level.identity` and nothing read it.
+    """
+    model = build(tmp_path, {"DimThing": _geo("country", "region", "city")})
+    page = generate_docs(model)
+    assert (
+        "**Unique within the path:** one member is "
+        "`country`, `region`, `city` together" in page
+    )
+
+
+def test_the_identity_note_names_a_declared_key() -> None:
+    """The whole tuple, not the finest key plus what qualifies it.
+
+    A level may be named by one column and identified by another —
+    `product_name` keyed on `gtin` — and the identity then holds `gtin`,
+    which the path above it never mentions. Rendering the tuple states the
+    answer without putting a stray column in a sentence about the path.
+    """
+    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    page = generate_docs(model)
+    assert "one member is `brand`, `gtin` together" in page
+
+
+def test_no_identity_note_when_a_level_identifies_itself(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A one-level identity has nothing to qualify, so nothing is said."""
+    table = dimension()
+    table["attributes"]["only"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    model = build(tmp_path, {"DimThing": table})
+    assert "Unique within the path" not in generate_docs(model)
 
 
 def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
