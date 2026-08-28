@@ -151,13 +151,30 @@ def dialect(name: str) -> Dialect:
 
 
 def sql_type(column: Column, sql: Dialect) -> str:
-    """Map a column's range to a SQL type, or raise naming the column."""
-    rng = column.range
-    mapped = sql.type_of(rng.lower())
+    """Map a column's range to a SQL type, or raise naming the column.
+
+    Resolved through the range's own type chain, nearest first, so a schema
+    declaring ``money: {typeof: decimal}`` gets `NUMERIC` rather than
+    stopping the generator. That used to be the worst of the two answers a
+    model can get: `varda check --strict` reported nothing and `varda
+    generate` refused, and the first one is the one people trust.
+
+    Nearest first is what keeps `uuid` a `UUID`. It is declared
+    ``typeof: string``, so a chain walked the other way would find `VARCHAR`
+    and hand back a 36-character column that sorts and compares as text.
+    Every entry in :data:`TYPES` is now reachable this way, which makes the
+    `uuid` row an instance of the rule rather than an exception to it.
+    """
+    mapped = next(
+        (t for rng in column.type_chain if (t := sql.type_of(rng)) is not None),
+        None,
+    )
     if mapped is None:
         known = ", ".join(sorted(TYPES))
+        tried = " -> ".join(column.type_chain)
         msg = (
-            f"{column}: range {rng!r} has no SQL mapping. Known ranges: {known}"
+            f"{column}: range {column.range!r} has no SQL mapping "
+            f"(tried {tried}). Known ranges: {known}"
         )
         raise GenerationError(msg)
     if sql.sizes_strings and mapped == "VARCHAR" and column.max_length is None:

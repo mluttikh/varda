@@ -271,6 +271,26 @@ is a number somebody acts on — and asks nothing of strings, because a warning
 that fires a dozen times on a small star is a warning that gets switched off,
 and it would take the measures with it.
 
+## Why a range is resolved through its `typeof`
+
+A range names a type, and in LinkML a type may be declared in terms of
+another one. A schema writing `money: {typeof: decimal}` and ranging a
+measure on `money` is ordinary LinkML, and every LinkML generator resolves it
+the same way: follow `typeof` until something concrete is reached.
+
+Varda reads the chain rather than the name the slot happens to mention, and
+reads it nearest first. Both halves matter. Reading only the name meant a
+declared type validated cleanly and then stopped the generator — the pair of
+answers that costs most, because the clean one is the one people trust.
+Reading nearest first is what keeps `uuid` a `UUID`: it is declared
+`typeof: string`, so a chain resolved from the far end would find `VARCHAR`
+and hand back a 36-character column that sorts and compares as text.
+
+The same chain answers whether a facet applies, which is why `money` may
+carry a `precision`. Asking only the range dropped the facet and silenced
+`V707` at the same time, so a measure on a declared decimal type went
+unwidened and unwarned at once — the failure wearing both of its faces.
+
 ## Why there is a dialect, and why its default is named
 
 There is no neutral SQL to emit, and saying there was is how the wrong thing

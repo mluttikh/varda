@@ -307,6 +307,43 @@ class Column:
     def range(self) -> str:
         return str(self.slot.range or "string")
 
+    @cached_property
+    def type_chain(self) -> tuple[str, ...]:
+        """This column's range, then every type it is declared in terms of.
+
+        Nearest first and including the range itself: `uuid` gives
+        ``("uuid", "string")`` and a schema's own ``money: {typeof: decimal}``
+        gives ``("money", "decimal")``. LinkML resolves a range this way and
+        so must everything downstream — a declared type is an ordinary part
+        of a LinkML schema, and reading only the name a slot happens to
+        mention makes a model that validates and cannot be generated from.
+
+        A range naming nothing resolves to itself rather than raising. That
+        is V804's finding to report, and the same reasoning that keeps
+        ``grain_columns`` and ``Hierarchy.resolved`` from raising applies: a
+        generator running under ``--force`` on a model that has not passed
+        `check` wants a partial answer, not an exception out of a property.
+        """
+        try:
+            found = self.table.model.view.type_ancestors(self.range)
+        except ValueError:
+            return (self.range,)
+        return tuple(str(t) for t in found) or (self.range,)
+
+    def parameterizes(self, facet: str) -> bool:
+        """Flag whether this column's type is one ``facet`` says anything on.
+
+        Asked of the whole type chain rather than of the range alone, so a
+        column ranged on a schema's own ``money: {typeof: decimal}`` may
+        carry a precision. Asking only the range dropped the facet there and
+        kept V707 quiet about it at the same time — the measure went
+        unwidened *and* unwarned, which is both halves of one failure.
+
+        Here rather than in the rules, because :meth:`facet`, V707 and V803
+        all ask it and three copies of a legality test drift.
+        """
+        return bool(FACETS[facet] & {t.lower() for t in self.type_chain})
+
     def facet(self, name: str) -> int | None:
         """Read one physical type facet, or ``None`` if it does not apply.
 
@@ -318,7 +355,7 @@ class Column:
         a nonconforming model under ``--force``, so the guard holds on this
         side too.
         """
-        if self.range.lower() not in FACETS[name]:
+        if not self.parameterizes(name):
             return None
         raw = get(self.slot, name)
         if raw is None:

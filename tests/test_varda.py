@@ -3479,6 +3479,116 @@ def test_v804_leaves_the_examples_alone() -> None:
         assert "V804" not in codes(model)
 
 
+# --- declared types ---------------------------------------------------------
+
+
+def _declared_type(tmp_path: pathlib.Path, **facets: Any) -> DimensionalModel:
+    """Build a model whose measure is ranged on a type the schema declares."""
+    fact = {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:fact_type": "TRANSACTION",
+            "varda:grain": "d_key",
+            "varda:grain_statement": "one row per thing measured once",
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            },
+            "amount": {
+                "range": "money",
+                "unit": {"symbol": "EUR"},
+                "annotations": {
+                    "varda:role": "MEASURE",
+                    "varda:additivity": "ADDITIVE",
+                    **{f"varda:{k}": v for k, v in facets.items()},
+                },
+            },
+        },
+    }
+    schema = {
+        "id": "https://example.org/t",
+        "name": "t",
+        "prefixes": {
+            "linkml": "https://w3id.org/linkml/",
+            "varda": "https://w3id.org/varda/",
+        },
+        "default_prefix": "t",
+        "default_range": "string",
+        "imports": ["linkml:types"],
+        "types": {"money": {"typeof": "decimal"}},
+        "classes": {"DimThing": dimension(), "FctThing": fact},
+    }
+    path = tmp_path / "t.yaml"
+    path.write_text(yaml.safe_dump(schema), encoding="utf-8")
+    return DimensionalModel.load(path, importmap=registry.importmap())
+
+
+def test_a_declared_type_generates(tmp_path: pathlib.Path) -> None:
+    """Clean check and then a GenerationError is the worst pair of answers.
+
+    V804 closed the case where a range names nothing. A range naming a type
+    the schema declares reached the same place by a different road: LinkML
+    resolves it, `varda check --strict` reported nothing, and the generator
+    refused. The first answer is the one people trust.
+    """
+    model = _declared_type(tmp_path, precision=12, scale=2)
+    assert not codes(model)
+    assert '"amount" NUMERIC(12, 2)' in generate_sql(model)
+
+
+def test_a_declared_type_carries_facets(tmp_path: pathlib.Path) -> None:
+    """Legality is asked of the chain, so `money` takes a precision."""
+    model = _declared_type(tmp_path, precision=12, scale=2)
+    column = model.facts[0].column("amount")
+    assert column is not None
+    assert column.type_chain == ("money", "decimal")
+    assert (column.precision, column.scale) == (12, 2)
+
+
+def test_a_declared_type_is_warned_about_like_any_decimal(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The other half of the same failure.
+
+    Asking only the range dropped the facet *and* kept V707 quiet, so a
+    measure on a declared decimal type went unwidened and unwarned at once.
+    """
+    assert "V707" in codes(_declared_type(tmp_path))
+
+
+def test_the_type_chain_is_walked_nearest_first(
+    tmp_path: pathlib.Path,
+) -> None:
+    """What keeps `uuid` a UUID rather than a 36-character string.
+
+    It is declared `typeof: string`, so a chain resolved the other way
+    around would find VARCHAR and hand back a column that sorts and compares
+    as text.
+    """
+    model = _uuid_key(tmp_path)
+    column = model.dimensions[0].column("d_id")
+    assert column is not None
+    assert column.type_chain == ("uuid", "string")
+    assert '"d_id" UUID' in generate_sql(model)
+
+
+def test_a_range_naming_nothing_still_raises(tmp_path: pathlib.Path) -> None:
+    """The chain resolves what it can and never invents the rest."""
+    table = dimension()
+    table["attributes"]["d_id"]["range"] = "intger"
+    model = build(tmp_path, {"DimThing": table})
+    column = model.dimensions[0].column("d_id")
+    assert column is not None
+    assert column.type_chain == ("intger",)
+    with pytest.raises(GenerationError, match="tried intger"):
+        generate_sql(model)
+
+
 # --- type facets ------------------------------------------------------------
 
 
