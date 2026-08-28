@@ -1109,6 +1109,82 @@ def test_colliding_generator_name_is_refused() -> None:
         activate(_bare("a", "one", generators=(gen,)))
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../escaped.sql",
+        "sql/../../escaped.sql",
+        "/tmp/escaped.sql",  # noqa: S108 — the point is that it is refused
+        "C:\\out\\escaped.sql",
+        "",
+    ],
+)
+def test_an_artifact_path_that_leaves_the_output_tree_is_refused(
+    path: str,
+) -> None:
+    """Declaring a path is what makes it checkable, so check it.
+
+    `cli.generate` joins a declared path straight onto `--out`, and until
+    this was refused the join was the only thing constraining it: a
+    generator declaring `../escaped.sql` wrote a file outside the tree and
+    the run reported success. The Windows form is refused on POSIX too,
+    because the same extension is installed on both and the answer should
+    not depend on which machine loaded it.
+    """
+
+    def run(_ctx: Any) -> dict[str, str]:
+        return {path: ""}
+
+    gen = Generator(name="esc", artifacts=(path,), run=run)
+    with pytest.raises(ExtensionError, match="stay inside"):
+        activate(_bare("a", "one", generators=(gen,)))
+
+
+def test_nothing_is_written_outside_the_output_directory(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The end-to-end form of the rule above, through the CLI."""
+
+    def run(_ctx: Any) -> dict[str, str]:
+        return {"../escaped.sql": "-- no\n"}
+
+    gen = Generator(name="esc", artifacts=("../escaped.sql",), run=run)
+    out = tmp_path / "out"
+    with pytest.raises(ExtensionError):
+        activate(_bare("a", "one", generators=(gen,)))
+    assert not (tmp_path / "escaped.sql").exists()
+    assert not out.exists()
+
+
+def test_every_cached_lookup_is_reset() -> None:
+    """A reset that stops short is a cache that silently goes stale.
+
+    `annotation_shape` and `structured_shape` were both missing from the
+    hand-written list this replaces, so a shape looked up before an
+    extension was active stayed `None` afterwards and V004 quietly stopped
+    checking that extension's structured annotations. The list is now built
+    rather than listed; this asserts the build finds everything.
+    """
+    owned = {
+        name
+        for name, obj in vars(registry).items()
+        if hasattr(obj, "cache_clear")
+        and getattr(obj, "__module__", None) == registry.__name__
+    }
+    reset = {fn.__name__ for fn in registry._cached()}
+    assert owned - reset == registry._KEEP_CACHED
+
+
+def test_a_structured_shape_is_seen_after_an_extension_is_activated() -> None:
+    """The failure the reset above exists to prevent, from the outside."""
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    assert registry.structured_shape("acme", "AcmeTableAnnotations") is None
+    with registry.using(EXTENSION):
+        shape = registry.structured_shape("acme", "AcmeTableAnnotations")
+    assert shape == {"cost_center": "string", "retention_days": "integer"}
+
+
 def test_profile_prefix_must_match(tmp_path: pathlib.Path) -> None:
     profile = tmp_path / "p.yaml"
     profile.write_text(
@@ -1558,6 +1634,21 @@ def test_check_strict_fails_on_a_stale_exemption() -> None:
     assert cli.main(["check", str(RETAIL), "--exempt", "V999", "--strict"]) == 1
 
 
+def test_generate_reports_a_stale_exemption_too(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The command that writes files was the one saying nothing.
+
+    A suppression that has outlived its rule is a maintenance finding
+    wherever it is read, and `_blocking` promises the two commands cannot
+    disagree about whether a model is fit to generate from.
+    """
+    args = ["generate", str(RETAIL), "--out", str(tmp_path), "--exempt", "V999"]
+    assert cli.main(args) == 0
+    assert "names no registered rule: V999" in capsys.readouterr().err
+    assert cli.main([*args, "--strict"]) == 1
+
+
 def test_unknown_generator_is_a_usage_error() -> None:
     assert cli.main(["generate", str(RETAIL), "--only", "nope"]) == 2
 
@@ -1725,6 +1816,72 @@ def test_toml_exemptions_are_read(
     monkeypatch.setenv("VARDA_CONFIG", str(path))
     registry.reset_caches()
     assert registry.exemptions() == ["V502", "V705"]
+
+
+def test_toml_unknown_key_is_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`exempts` for `exempt` suppresses nothing and reads like it does.
+
+    V001's argument one layer up. A misspelled annotation is a constraint
+    that silently never applies; a misspelled config key is a rule
+    suppressed nowhere, and the file is small enough that saying so costs
+    nothing.
+    """
+    path = write_config(
+        tmp_path,
+        """
+        exempts = ["V502"]
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    with pytest.raises(ExtensionError, match="unknown key"):
+        registry.exemptions()
+
+
+def test_toml_unknown_severity_is_refused(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typo here used to end the run in a KeyError traceback.
+
+    The config file has the final word over an extension's severity
+    defaults, and having the final word is not a reason to go unchecked:
+    the value reached `Finding.__str__`, which indexes a closed three-key
+    table.
+    """
+    path = write_config(
+        tmp_path,
+        """
+        [severity]
+        V101 = "eror"
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    with pytest.raises(ExtensionError, match="not one of"):
+        registry.severities()
+
+
+def test_toml_severity_for_a_retired_rule_is_reported(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An override nobody applies is the same silence as a stale exemption."""
+    path = write_config(
+        tmp_path,
+        """
+        [severity]
+        V999 = "error"
+        """,
+    )
+    monkeypatch.setenv("VARDA_CONFIG", str(path))
+    registry.reset_caches()
+    assert cli.main(["check", str(RETAIL)]) == 0
+    assert "severity override names no registered rule" in (
+        capsys.readouterr().err
+    )
 
 
 def test_toml_missing_profile_is_refused(

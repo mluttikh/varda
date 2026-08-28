@@ -51,20 +51,51 @@ def _extensions_line() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _exempt(args: argparse.Namespace) -> list[str]:
+    """List the rules this run skips: the config file's, then the flag's."""
+    return [*registry.exemptions(), *(args.exempt or [])]
+
+
+def _stale(exempt: Sequence[str], *, strict: bool) -> bool:
+    """Warn about every configured code no active extension registers.
+
+    Exemptions and severity overrides together, because both name a rule and
+    both go on meaning nothing the moment that rule is retired — a
+    suppression nobody has noticed has stopped applying, which is the whole
+    reason :func:`varda.rules.unknown_codes` exists.
+
+    Shared by both commands rather than sitting in `check` alone. The one
+    that writes files was the one that said nothing, and `_blocking` already
+    promises the two cannot disagree about whether a model is fit to
+    generate from.
+
+    Returns whether the run should stop, which is under ``--strict`` only: a
+    stale code is a maintenance finding about the configuration and not a
+    statement about the model.
+    """
+    found = (
+        ("exemption", unknown_codes(exempt)),
+        ("severity override", unknown_codes(registry.severities())),
+    )
+    reported = False
+    for what, codes in found:
+        if not codes:
+            continue
+        print(
+            f"warning: {what} names no registered rule: {'; '.join(codes)}",
+            file=sys.stderr,
+        )
+        reported = True
+    return reported and strict
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Validate a model against every active extension's rules."""
     model = _load(args.model)
-    exempt = [*registry.exemptions(), *(args.exempt or [])]
+    exempt = _exempt(args)
 
-    stale = unknown_codes(exempt)
-    if stale:
-        where = "; ".join(stale)
-        print(
-            f"warning: exemption names no registered rule: {where}",
-            file=sys.stderr,
-        )
-        if args.strict:
-            return EXIT_FAIL
+    if _stale(exempt, strict=args.strict):
+        return EXIT_FAIL
 
     findings = check(model, exemptions=exempt)
     for finding in findings:
@@ -109,7 +140,7 @@ def _blocking(
     The same rules `check` runs and the same exemptions, so the two commands
     cannot disagree about whether a model is fit to generate from.
     """
-    exempt = [*registry.exemptions(), *(args.exempt or [])]
+    exempt = _exempt(args)
     stop = {"error", "warning"} if args.strict else {"error"}
     return [f for f in check(model, exemptions=exempt) if f.severity in stop]
 
@@ -131,6 +162,39 @@ def _report(findings: list[Finding], *, forced: bool) -> None:
         else "nothing was written. Pass --force to generate anyway"
     )
     print(f"\n{found}; {tail}", file=sys.stderr)
+
+
+class _RunError(Exception):
+    """A generator raised, or produced a path it never declared."""
+
+
+def _collect(chosen: list[Generator], ctx: Context) -> dict[str, str]:
+    """Run every generator and gather what it produced, writing nothing.
+
+    Separated from :func:`cmd_generate` so that the two-phase guarantee is
+    visible in the shape of the code: this function cannot write, so a
+    failure anywhere in it cannot leave a partial output tree behind.
+    """
+    collected: dict[str, str] = {}
+    for gen in chosen:
+        try:
+            produced = gen.run(ctx)
+        except Exception as exc:
+            # Deliberately broad. A third-party generator may raise anything,
+            # and the CLI's job at this point is to fail closed with a legible
+            # message naming the culprit, rather than to hand the operator a
+            # traceback through somebody else's code. Nothing has been written
+            # yet, which is the whole reason for collecting before writing.
+            msg = f"{gen.name} failed: {type(exc).__name__}: {exc}"
+            raise _RunError(msg) from exc
+        undeclared = sorted(set(produced) - set(gen.artifacts))
+        if undeclared:
+            msg = (
+                f"{gen.name} wrote undeclared path(s): {', '.join(undeclared)}"
+            )
+            raise _RunError(msg)
+        collected.update(produced)
+    return collected
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -160,6 +224,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
         print("no generators registered", file=sys.stderr)
         return EXIT_USAGE
 
+    if _stale(_exempt(args), strict=args.strict):
+        return EXIT_FAIL
+
     blocking = _blocking(model, args)
     if blocking:
         _report(blocking, forced=args.force)
@@ -172,30 +239,11 @@ def cmd_generate(args: argparse.Namespace) -> int:
         schema=args.schema,
         dialect=args.dialect,
     )
-    collected: dict[str, str] = {}
-    for gen in chosen:
-        try:
-            produced = gen.run(ctx)
-        except Exception as exc:  # noqa: BLE001
-            # Deliberately broad. A third-party generator may raise anything,
-            # and the CLI's job at this point is to fail closed with a legible
-            # message naming the culprit, rather than to hand the operator a
-            # traceback through somebody else's code. Nothing has been written
-            # yet, which is the whole reason for collecting before writing.
-            print(
-                f"{gen.name} failed: {type(exc).__name__}: {exc}\n"
-                f"nothing was written",
-                file=sys.stderr,
-            )
-            return EXIT_FAIL
-        undeclared = sorted(set(produced) - set(gen.artifacts))
-        if undeclared:
-            print(
-                f"{gen.name} wrote undeclared path(s): {', '.join(undeclared)}",
-                file=sys.stderr,
-            )
-            return EXIT_FAIL
-        collected.update(produced)
+    try:
+        collected = _collect(chosen, ctx)
+    except _RunError as exc:
+        print(f"{exc}\nnothing was written", file=sys.stderr)
+        return EXIT_FAIL
 
     out = pathlib.Path(args.out)
     for rel, content in sorted(collected.items()):
