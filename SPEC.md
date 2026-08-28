@@ -46,8 +46,8 @@ comment, 731 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 15 annotations, 5 enums, 1 type — and 268
-tests in 4,067 lines.
+Plus `profile/varda.yaml` — 15 annotations, 5 enums, 1 type — and 270
+tests in 4,150 lines.
 
 ### The four seams
 

@@ -4,6 +4,30 @@ Structured around what could actually go wrong rather than around the module
 layout: a section per property the design depends on. The largest section is
 extension validation, because those are the failures that are unfixable once
 somebody has shipped a model against them.
+
+That arrangement is worth keeping and stopped being visible. At four thousand
+lines the sections are the index, so they are listed here — a banner rule is
+one of these, and `# --- name ---` is a subsection of the banner above it,
+never a section in its own right.
+
+    Helpers
+    The model layer
+    Rules — one per rule, named for the failure it catches
+    The rule set itself
+    The registry and the extension mechanism
+    Extension validation — unfixable once somebody has shipped against it
+    Generation
+    The command line
+    varda.toml — the extension route that needs no Python at all
+    Distribution — the routes a shipped extension takes
+    The namespace — the one identifier that can never change
+    Versioning columns
+    Hierarchies — the named paths a dimension is drilled down
+    Bridges, and the annotations that carry structure
+    Identity — what makes two rows the same thing
+    Physical names — the collisions no rule used to see
+    Dialects — the spellings the one model comes out in
+    Types — what a column says it holds
 """
 
 from __future__ import annotations
@@ -22,7 +46,7 @@ import yaml
 from sqlglot import expressions as sqlglot_exp
 
 from varda import __version__, cli, gen_sql, registry, rules
-from varda.ext import Extension, ExtensionError, Generator
+from varda.ext import Context, Extension, ExtensionError, Generator
 from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
@@ -915,6 +939,28 @@ def test_rule_set_rejects_an_unknown_severity() -> None:
     rs = RuleSet(tag="V")
     with pytest.raises(ValueError, match="not one of"):
         rs.rule("V901", "critical", "nope")
+
+
+def test_an_info_rule_never_stops_a_run(tmp_path: pathlib.Path) -> None:
+    """The third severity, which the core ships and does not use.
+
+    All 48 Varda rules are `error` or `warning`. `info` is there for
+    extensions, which have reason to report a house convention worth naming
+    in a build log without failing it — so `extending.md` says it never
+    stops a run, and this is what makes that true.
+    """
+    rs = RuleSet(tag="LL")
+    rs.rule("LL001", "info", "Noted")(
+        lambda m: iter(
+            [rules.Finding("LL001", "info", str(t), "noted") for t in m.tables]
+        )
+    )
+    model = build(tmp_path, {"DimThing": dimension()})
+    with registry.using(_bare("l", "lll", rule_tag="LL", rules=rs)):
+        found = rules.check(model)
+        assert "LL001" in {f.rule for f in found}
+        path = tmp_path / "t.yaml"
+        assert cli.main(["check", str(path), "--strict"]) == 0
 
 
 def test_unknown_codes_finds_stale_exemptions() -> None:
@@ -1920,7 +1966,9 @@ def test_toml_severity_for_a_retired_rule_is_reported(
     )
 
 
-# --- the two routes a shipped extension actually takes ----------------------
+# ---------------------------------------------------------------------------
+# Distribution — the routes a shipped extension takes
+# ---------------------------------------------------------------------------
 #
 # `registry` names three ways an extension becomes active and SPEC lists
 # distribution as the fourth seam, stating each is covered by a test. Two of
@@ -2458,7 +2506,9 @@ def test_v120_fact_type_on_a_dimension(tmp_path: pathlib.Path) -> None:
     assert "V104" in codes(model)
 
 
-# --- hierarchies -----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Hierarchies — the named paths a dimension is drilled down
+# ---------------------------------------------------------------------------
 
 
 def _geo(*levels: str, name: str = "geography") -> dict[str, Any]:
@@ -2868,7 +2918,9 @@ def test_a_missing_reference_key_names_the_far_table(
     assert "not a column of DimCountry" in found[0].message
 
 
-# --- bridges and structured annotations -------------------------------------
+# ---------------------------------------------------------------------------
+# Bridges, and the annotations that carry structure
+# ---------------------------------------------------------------------------
 
 
 def test_v133_a_bridge_that_references_nothing(
@@ -2961,7 +3013,12 @@ def test_v134_is_silent_on_a_well_formed_hierarchy(
     assert "V004" not in codes(model)
 
 
-# --- two identities ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Identity — what makes two rows the same thing
+# ---------------------------------------------------------------------------
+
+
+# --- several natural keys ----------------------------------------------------
 
 
 def _two_identities(**extra: Any) -> dict[str, Any]:
@@ -3108,7 +3165,7 @@ def test_a_nullable_lone_key_does_not_hold(tmp_path: pathlib.Path) -> None:
     assert kept == (3,)
 
 
-# --- unique keys ------------------------------------------------------------
+# --- declared unique keys ----------------------------------------------------
 
 
 def _two_keyed(**extra: Any) -> dict[str, Any]:
@@ -3414,7 +3471,9 @@ def test_a_column_collision_would_not_execute(
         duckdb.connect().execute(sql)
 
 
-# --- dialects ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Dialects — the spellings the one model comes out in
+# ---------------------------------------------------------------------------
 
 #: sqlglot's name for each dialect Varda ships.
 SQLGLOT_NAMES = {
@@ -3508,6 +3567,25 @@ def test_the_default_dialect_is_postgres() -> None:
     assert gen_sql.DIALECTS["postgres"].types == {}
 
 
+def test_the_context_default_matches_the_generator_default() -> None:
+    """Two copies of one string, and the reason for them is good.
+
+    `Context.dialect` is a name rather than a table so that `ext.py` — the
+    only module a third party imports — stays free of SQL. That is worth
+    keeping, and it leaves the default written down twice. `ONE_IDENTITY`
+    exists on the argument that two copies of a threshold drift, and the
+    version is single-sourced on the same one; this is the copy that was
+    left ungated.
+    """
+    assert (
+        Context(
+            model=DimensionalModel.load(RETAIL, importmap=registry.importmap()),
+            source=RETAIL,
+        ).dialect
+        == gen_sql.DEFAULT_DIALECT
+    )
+
+
 def test_an_unknown_dialect_names_the_known_ones() -> None:
     with pytest.raises(gen_sql.GenerationError) as caught:
         gen_sql.dialect("orcale")
@@ -3580,7 +3658,12 @@ def test_the_header_names_the_dialect(tmp_path: pathlib.Path) -> None:
     assert "-- Dialect: duckdb" in generate_sql(model, dialect_name="duckdb")
 
 
-# --- uuid -------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Types — what a column says it holds
+# ---------------------------------------------------------------------------
+
+
+# --- uuid --------------------------------------------------------------------
 
 
 def _uuid_key(tmp_path: pathlib.Path) -> DimensionalModel:
@@ -3652,7 +3735,7 @@ def test_uuid_without_the_import_is_reported(tmp_path: pathlib.Path) -> None:
     assert "imports: - varda" in found[0].message
 
 
-# --- V804 -------------------------------------------------------------------
+# --- V804 — a range that names nothing ---------------------------------------
 
 
 def test_v804_a_range_naming_nothing(tmp_path: pathlib.Path) -> None:
@@ -3681,7 +3764,7 @@ def test_v804_leaves_the_examples_alone() -> None:
         assert "V804" not in codes(model)
 
 
-# --- declared types ---------------------------------------------------------
+# --- types the schema declares for itself ------------------------------------
 
 
 def _declared_type(tmp_path: pathlib.Path, **facets: Any) -> DimensionalModel:
@@ -3791,7 +3874,7 @@ def test_a_range_naming_nothing_still_raises(tmp_path: pathlib.Path) -> None:
         generate_sql(model)
 
 
-# --- type facets ------------------------------------------------------------
+# --- type facets -------------------------------------------------------------
 
 
 def _sized(**facets: Any) -> dict[str, Any]:

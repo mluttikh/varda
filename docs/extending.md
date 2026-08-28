@@ -176,6 +176,14 @@ exempt = ["V705"]
 V502 = "error"
 ```
 
+The three severities are `error`, `warning` and `info`. Varda's own rules use
+only the first two — a rule that is arguable is a `warning`, and one that is
+unambiguously illegal is an `error`. `info` is there for extensions, which
+have reason to report things Varda does not: a house convention worth naming
+in a build log without failing it, or a metric an extension wants to surface
+alongside the findings. A rule registered at `info` never stops a run, not
+even under `--strict`.
+
 There is deliberately **no severity floor** an upstream can set and a team
 cannot lower. It would not work: the repository can exempt the rule outright,
 so a floor is a lock with its key taped beside it.
