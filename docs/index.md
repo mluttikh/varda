@@ -79,9 +79,15 @@ core vocabulary, and it is deliberately the entire core vocabulary — see the
 | `V701`–`V707` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross, a decimal one that never says what it keeps |
 | `V801`–`V804` | Physical naming and types — two classes emitting one table, a width on a column that has none, a range naming nothing |
 
-**Two generators**, `sql` and `docs`. Both deterministic: no timestamps, no
-environment, same model in and same bytes out, so output can be committed and
-diffed.
+**Three generators**, `sql`, `docs` and `assertions`. All deterministic: no
+timestamps, no environment, same model in and same bytes out, so output can be
+committed and diffed.
+
+**Three levels of enforcement** — `--constraints enforced` (the default),
+`asserted`, `none`. A constraint claims something about the data *and* asks
+the database to check it on every write; the checking is most of the cost of
+a bulk load, and a lakehouse cannot do it at all. The weaker levels stop the
+checking without losing the claim, which moves into `sql/assertions.sql`.
 
 **Four dialects** for the DDL — `postgres` (the default), `duckdb`,
 `snowflake`, `sqlserver`. Named rather than assumed, because there is no

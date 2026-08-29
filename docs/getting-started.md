@@ -91,8 +91,9 @@ columns at which rows are unique, `varda:grain_statement` as the sentence.
     is usually doing two jobs.
 
     The two halves check each other. The columns make the claim testable —
-    they become a `UNIQUE` constraint in the generated DDL — and the sentence
-    carries the intent a column list cannot.
+    they become a `UNIQUE` constraint in the generated DDL, and a query in
+    the generated assertions — and the sentence carries the intent a column
+    list cannot.
 
 ## Check it
 

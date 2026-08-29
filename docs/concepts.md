@@ -65,8 +65,10 @@ treatment of dimensional modeling the grain *is* that set. Stating it makes
 the claim testable. [`V203`](reference/rules.md#v203) checks the columns
 exist, [`V204`](reference/rules.md#v204) checks each is a foreign key or a
 degenerate dimension — a grain is what a row *is*, not what it records — and
-the SQL generator turns the set into a `UNIQUE` constraint the database
-enforces.
+the SQL generator turns the set into a `UNIQUE` constraint. Whether the
+database polices that constraint on every write, or the claim is checked once
+per load by the generated assertions instead, is what `--constraints`
+chooses; either way the claim is stated somewhere a machine reads.
 
 `varda:grain_statement` says the same thing in words, conventionally "one row
 per …". It carries what a column list cannot: *why* those columns, and what a

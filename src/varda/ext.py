@@ -78,6 +78,12 @@ class Context:
     #: looks this up, and a generator emitting something other than DDL is
     #: free to ignore it.
     dialect: str = "postgres"
+    #: How much of the model the database is asked to police — one of
+    #: `enforced`, `asserted`, `none`. A name for the same reason `dialect`
+    #: is one, and defaulted for a second: a generator written before this
+    #: field existed keeps working, and one that emits something other than
+    #: DDL has no use for it.
+    constraints: str = "enforced"
 
 
 @dataclass(frozen=True, eq=False)

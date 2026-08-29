@@ -146,6 +146,14 @@ generation fail closed. Paths are declared up front so that two extensions
 claiming the same output file are caught at load rather than by one silently
 overwriting the other.
 
+`ctx` is a closed record — the model, its source path, and the three things
+the invocation chose: `ctx.schema`, `ctx.dialect`, and `ctx.constraints`, one
+of `enforced`, `asserted` or `none`. All three are plain strings rather than
+resolved objects, so a generator emitting something other than SQL can ignore
+them and one emitting SQL for an engine the core has never heard of is not
+limited to the core's table. Every field is defaulted, so a generator written
+against an earlier version keeps working when a new one is added.
+
 ## Severity
 
 An extension may propose a different severity for any rule, including one it
