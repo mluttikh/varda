@@ -56,6 +56,7 @@ $ varda check model.yaml
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
+wrote out/sql/assertions.sql
 wrote out/sql/mart.sql
 ```
 
@@ -96,9 +97,18 @@ live. A structural mistake usually breaks a query. An additivity mistake
 returns a number that looks entirely reasonable and is wrong, to someone who
 will act on it.
 
-**Two generators**, `sql` and `docs`, producing runnable DDL and a Markdown
-reference. Both are deterministic: no timestamps, no environment, same model
-in and same bytes out, so the output can be committed and diffed.
+**Three generators**, `sql`, `docs` and `assertions`, producing runnable DDL,
+a Markdown reference, and the model's claims as queries over the data. All
+deterministic: no timestamps, no environment, same model in and same bytes
+out, so the output can be committed and diffed.
+
+**Three levels of enforcement** — `varda generate mart.yaml --constraints
+asserted`. A constraint is two things at once: a claim about the data, and an
+instruction to check it on every write. Checking dominates a bulk load, and
+some warehouses cannot do it at all, so the two can be separated. What the
+database stops policing does not stop being checked — it moves into
+`sql/assertions.sql`, which runs once per load and reports what it finds
+instead of aborting a transaction.
 
 **Four dialects** — `varda generate mart.yaml --dialect sqlserver`. Named
 rather than assumed: there is no neutral SQL, and a `TIMESTAMP` emitted for

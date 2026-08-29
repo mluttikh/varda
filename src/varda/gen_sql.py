@@ -5,6 +5,11 @@ whole file run against an empty database: every table follows the ones it
 references, because a foreign key cannot be declared before its target exists.
 Facts fall last on their own, since nothing may reference a fact.
 
+How much of the model the database is asked to police is a level rather than
+a given — see :data:`LEVELS`. The ordering above runs at every level, even
+where no reference is emitted and nothing depends on it, so that changing the
+level produces a diff about constraints and not about where the tables sit.
+
 Nothing here is timestamped and nothing depends on the environment. That is
 not a stylistic preference — a generated file that changes when nothing about
 the model changed makes "is this output current?" unanswerable, and turns
@@ -16,8 +21,6 @@ from __future__ import annotations
 import textwrap
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-
-from .model import ONE_IDENTITY
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -67,16 +70,17 @@ class Dialect:
 
     A narrow record on purpose. This is not an abstraction over SQL — that is
     a transpiler, and a transpiler is a much larger thing to own than a
-    generator. It carries the two ways the emitted file actually differs
-    between the engines named here: what the types are called, and how a
-    schema is asked for.
+    generator. It carries the three ways the emitted file actually differs
+    between the engines named here: what the types are called, how a schema
+    is asked for, and whether a constraint can be stated without also being
+    policed.
 
     Engines are added by being verified, not by being plausible. `bigquery`
-    and `oracle` are absent for that reason and not by oversight: BigQuery has
-    no `UNIQUE` constraint and needs `NOT ENFORCED` on the keys it does have,
-    and Oracle has no `CREATE SCHEMA` and no UUID type. Both need more than a
-    type table, and half a dialect emits a file that looks right and does not
-    run.
+    and `oracle` are absent for that reason and not by oversight: BigQuery
+    has no `UNIQUE` constraint, and Oracle has no `CREATE SCHEMA` and no UUID
+    type. Both need more than a type table, and half a dialect emits a file
+    that looks right and does not run. BigQuery's other blocker was needing
+    `NOT ENFORCED` on the keys it does have; that one is now a field.
     """
 
     name: str
@@ -87,6 +91,12 @@ class Dialect:
     #: Whether an unsized string is safe to emit. False where a bare
     #: `VARCHAR` means something other than "as long as it needs to be".
     sizes_strings: bool = False
+    #: How this dialect marks a constraint as declared but not policed, or
+    #: empty where it cannot say it. A constraint carries two meanings — an
+    #: assertion about the data, and an instruction to check every write —
+    #: and only some engines separate them. Where this is empty, the only
+    #: way to stop the checking is to stop emitting the constraint.
+    unenforced: str = ""
 
     def type_of(self, rng: str) -> str | None:
         """Give this dialect's name for a range, or ``None`` if it has none."""
@@ -104,7 +114,16 @@ DIALECTS: dict[str, Dialect] = {
     # Also accepts the base table. `UUID` is a real type here as of its
     # general availability, so a key that arrives as one stays 16 bytes
     # rather than becoming a 36-character string.
-    "snowflake": Dialect("snowflake"),
+    #
+    # Snowflake enforces `NOT NULL` and nothing else: it records a primary,
+    # unique or foreign key and never checks it. `RELY` is the difference
+    # between recorded and trusted — the optimizer will eliminate a join
+    # against a key marked this way, and will not against one that is not.
+    # So the default emission stays bare, which is the honest rendering of
+    # "I asked for enforcement and this engine does not enforce", and
+    # `--constraints asserted` adds `RELY`, which is the operator saying the
+    # loader guarantees it.
+    "snowflake": Dialect("snowflake", unenforced="RELY"),
     "sqlserver": Dialect(
         "sqlserver",
         types={
@@ -135,9 +154,93 @@ DIALECTS: dict[str, Dialect] = {
 #: name rather than under a claim of neutrality.
 DEFAULT_DIALECT = "postgres"
 
+#: How much of the model the database is asked to police, weakest last.
+#:
+#: `enforced` is the default and the right one: a claim the database checks
+#: is a claim that stays true. It is not free — on the engines that really
+#: enforce, the checking dominates a bulk load, and the cost falls almost
+#: entirely on a fact table's grain and its foreign keys.
+#:
+#: `asserted` says the claims hold and the loader is what makes them hold.
+#: Where a dialect can mark a constraint unenforced it is emitted and marked,
+#: which keeps it in the catalog and available to the optimizer. Where it
+#: cannot, the constraint is emitted as a comment instead, so the DDL still
+#: records what the loader is promising.
+#:
+#: `none` emits bare tables. Column typing and `NOT NULL` stay at every
+#: level: they are what a column *is* rather than a claim made about the
+#: rows, they cost nothing measurable, and a `VARCHAR(20)` that stops being
+#: twenty characters wide is a different schema rather than a faster one.
+#:
+#: Under the two weaker levels the claims do not disappear — `gen_assertions`
+#: emits every one of them as a query that runs once per load instead of once
+#: per row.
+LEVELS = ("enforced", "asserted", "none")
+
+#: The level assumed when none is named.
+DEFAULT_LEVEL = "enforced"
+
 
 class GenerationError(Exception):
     """A model cannot be generated from, and the run must stop."""
+
+
+@dataclass(frozen=True)
+class Enforcement:
+    """What one level of :data:`LEVELS` means against one dialect.
+
+    Resolved once per run rather than tested at each emission site, so that
+    "what does `asserted` mean here" has exactly one answer and it is
+    written down in one place.
+    """
+
+    #: Emit `PRIMARY KEY` on surrogate keys. Kept under `asserted` even
+    #: where the rest is dropped: it is a fraction of the load cost, it is
+    #: the identity of a dimension row rather than a claim about it, and
+    #: every foreign key that names it needs it to exist — standard SQL
+    #: requires a reference target to carry a primary or unique key, so a
+    #: level that dropped it would have to drop those too and would be
+    #: `none` under another name.
+    keys: bool
+    #: Emit `UNIQUE` for each of the table's unique claims.
+    unique: bool
+    #: Emit `FOREIGN KEY`.
+    references: bool
+    #: Appended to each constraint to mark it declared but not policed.
+    suffix: str = ""
+    #: Render the claims this level drops as comments, so the DDL still
+    #: states what the loader is being trusted to hold.
+    documented: bool = False
+
+
+def enforcement(level: str, sql: Dialect) -> Enforcement:
+    """Resolve a level against a dialect, or raise listing the levels.
+
+    `asserted` means one thing — the claims hold, do not check them on every
+    write — and reaches the DDL as whichever form the engine has for saying
+    it. That is not a silent degradation: the header names the level, and
+    where the engine has no way to mark a constraint the claims it drops are
+    written into the file as comments. An engine that cannot say something
+    is a reason to say it differently, not a reason to refuse.
+    """
+    if level not in LEVELS:
+        known = ", ".join(LEVELS)
+        msg = f"unknown constraint level {level!r}. Known levels: {known}"
+        raise GenerationError(msg)
+    if level == "enforced":
+        return Enforcement(keys=True, unique=True, references=True)
+    if level == "none":
+        return Enforcement(keys=False, unique=False, references=False)
+    if sql.unenforced:
+        return Enforcement(
+            keys=True,
+            unique=True,
+            references=True,
+            suffix=f" {sql.unenforced}",
+        )
+    return Enforcement(
+        keys=True, unique=False, references=False, documented=True
+    )
 
 
 def dialect(name: str) -> Dialect:
@@ -282,7 +385,9 @@ def _pending(table: Table, remaining: dict[str, Table]) -> set[str]:
     return (targets & set(remaining)) - {table.name}
 
 
-def _by_dependency(tables: tuple[Table, ...]) -> list[Table]:
+def _by_dependency(
+    tables: tuple[Table, ...], *, references: bool
+) -> list[Table]:
     """Order tables so every reference target precedes the table using it.
 
     Sorting by name is not enough once one dimension references another,
@@ -293,6 +398,11 @@ def _by_dependency(tables: tuple[Table, ...]) -> list[Table]:
     Ties are broken by name, so a model with no dimension-to-dimension
     references emits in exactly the order it did before — a flat star sees no
     diff.
+
+    The ordering runs whether or not foreign keys are emitted, so that
+    turning enforcement off does not reshuffle a file and produce a diff
+    that means nothing. Only the refusal is conditional: with no foreign
+    keys in the output there is nothing an order could violate.
     """
     remaining = {t.name: t for t in tables}
     out: list[Table] = []
@@ -305,21 +415,28 @@ def _by_dependency(tables: tuple[Table, ...]) -> list[Table]:
         if not ready:
             # Every remaining table waits on another one. With the foreign
             # keys inline in CREATE TABLE there is no order that works, so
-            # this raises rather than emitting a file that cannot run —
-            # the same treatment an unmapped range gets. Breaking the cycle
-            # needs ALTER TABLE after creation, which is a feature and not
-            # a fallback.
-            names = ", ".join(sorted(remaining))
-            msg = (
-                f"foreign keys form a cycle among: {names}. "
-                f"No CREATE TABLE order satisfies them."
-            )
-            raise GenerationError(msg)
+            # this raises rather than emitting a file that cannot run — the
+            # same treatment an unmapped range gets.
+            #
+            # Only while they are being emitted. Under `--constraints
+            # asserted` or `none` the file declares no references, nothing
+            # in it depends on the order, and a pair of dimensions that
+            # point at each other — which V404 permits — generates. The
+            # remainder is emitted by name so the output stays
+            # deterministic.
+            if references:
+                names = ", ".join(sorted(remaining))
+                msg = (
+                    f"foreign keys form a cycle among: {names}. "
+                    f"No CREATE TABLE order satisfies them."
+                )
+                raise GenerationError(msg)
+            ready = sorted(remaining)
         out += [remaining.pop(name) for name in ready]
     return out
 
 
-def _ordered(model: DimensionalModel) -> list[Table]:
+def _ordered(model: DimensionalModel, *, references: bool) -> list[Table]:
     """Order tables so every foreign key's target is already created.
 
     Dimensions and bridges are ordered together rather than as two blocks.
@@ -329,125 +446,104 @@ def _ordered(model: DimensionalModel) -> list[Table]:
     may reference a fact.
     """
     return [
-        *_by_dependency((*model.dimensions, *model.bridges)),
+        *_by_dependency(
+            (*model.dimensions, *model.bridges), references=references
+        ),
         *model.facts,
     ]
 
 
-def _column_line(column: Column, sql: Dialect) -> str:
+def _column_line(column: Column, sql: Dialect, rule: Enforcement) -> str:
+    """Render one column, with whatever the level lets it carry.
+
+    `NOT NULL` is not conditional. It is not a claim about which rows go
+    together, it costs nothing measurable on a load, and a column that
+    quietly starts accepting nulls changes what every query against it
+    means. A surrogate key that loses its `PRIMARY KEY` under `none` picks
+    `NOT NULL` up instead, because half of what a primary key says is that
+    the column is populated and that half is free.
+    """
     parts = [f"    {quoted(column.physical)}", sql_type(column, sql)]
     if column.role == "SURROGATE_KEY":
-        parts.append("PRIMARY KEY")
+        parts.append(f"PRIMARY KEY{rule.suffix}" if rule.keys else "NOT NULL")
     elif column.required:
         parts.append("NOT NULL")
     return " ".join(parts)
 
 
-def _unique_constraints(table: Table) -> list[str]:
-    """Render the uniqueness constraints that apply to one table.
+def _unique_line(columns: tuple[Column, ...], rule: Enforcement) -> str:
+    """Render one uniqueness claim as a constraint."""
+    names = ", ".join(quoted(c.physical) for c in columns)
+    return f"UNIQUE ({names}){rule.suffix}"
 
-    Each distinct combination once. A grain and a declared `unique_keys`
-    entry may name the same columns — one is Varda's vocabulary and one is
-    LinkML's, and writing both is a reasonable thing to do — and every
-    database accepts the doubled constraint by building a second index for
-    it. Two indexes maintained on every write, for one claim, and nothing
-    anywhere says so.
+
+def _reference_line(fk: Column, schema: str, rule: Enforcement) -> str | None:
+    """Render one foreign key, or nothing where there is no target to name.
+
+    REFERENCES goes on its own line, always rather than only when the
+    one-liner overflows. Quoting pushed the longer keys past the width a
+    terminal shows, and a format that changes shape with the length of a
+    name produces diffs that look meaningful and are not.
     """
-    claims: list[tuple[Column, ...]] = []
+    target = fk.table.model.table(fk.references or "")
+    if target is None:
+        return None  # V403 already reported it; do not also crash here
+    key = target.surrogate_keys
+    if not key:
+        return None  # V301's business
+    return (
+        f"FOREIGN KEY ({quoted(fk.physical)})\n"
+        f"        REFERENCES {quoted(schema)}."
+        f"{quoted(target.physical)} ({quoted(key[0].physical)}){rule.suffix}"
+    )
 
-    # The grain, as a constraint the database enforces rather than a comment
-    # it ignores. This is the whole return on declaring `varda:grain` as
-    # columns: a uniqueness claim nobody checks is a uniqueness claim that
-    # stops being true, quietly, on some load nobody is watching.
-    if table.grain_columns:
-        claims.append(table.grain_columns)
 
-    # LinkML's own `unique_keys`, when a model declares them, and nothing
-    # derived. One combination per constraint rather than every key column
-    # concatenated into one: a table identified two different ways by two
-    # different sources needs two constraints, and merging them produces one
-    # that is weaker than either — and inert besides, since a NULL on one
-    # side of a merged key makes the whole row unconstrained.
-    #
-    # Declared keys replace the derived one rather than joining it, so that
-    # a table states its uniqueness in one place or the other, never both.
-    for unique in table.unique_keys:
-        if not unique.columns:
-            continue  # V303 reports a key that names nothing
-        claims.append(unique.columns)
+def _claims(table: Table, schema: str, rule: Enforcement) -> list[str]:
+    """Render every claim beyond the primary key, in model order.
 
-    # The uniqueness a dimension implies by declaring a natural key, when it
-    # has not stated one itself. V302 requires that key and calls it what a
-    # loader matches on; leaving it unenforced makes the claim exactly as
-    # true as the comment above says an unchecked claim stays.
-    if table.is_dimension and not table.unique_keys:
-        derived = _derived_key(table)
-        if derived:
-            claims.append(derived)
-
-    # Ordered, not sorted: the grain leads because it is the table's own
-    # statement of what a row is, and a reader comparing the DDL against the
-    # model should meet them in the order the model declares them.
+    What the table says is unique first, then what it says it references.
+    The uniqueness comes from :attr:`varda.model.Table.unique_claims`, which
+    the assertion generator reads too — the DDL renders each claim as a
+    constraint and the assertions render each as a query, and one claim
+    computed in two places is one claim that eventually disagrees with
+    itself.
+    """
     out: list[str] = []
-    seen: set[tuple[str, ...]] = set()
-    for columns in claims:
-        names = tuple(c.physical for c in columns)
-        if names in seen:
-            continue
-        seen.add(names)
-        out.append(f"    UNIQUE ({', '.join(quoted(n) for n in names)})")
+    if rule.unique:
+        out += [_unique_line(c, rule) for c in table.unique_claims]
+    if rule.references:
+        out += [
+            line
+            for fk in table.foreign_keys
+            if (line := _reference_line(fk, schema, rule)) is not None
+        ]
     return out
 
 
-def _derived_key(table: Table) -> tuple[Column, ...]:
-    """Derive what a dimension is unique on from its roles alone.
+def _dropped(table: Table, schema: str, rule: Enforcement) -> list[str]:
+    """Say, in the file, which claims the level left to the loader.
 
-    Empty whenever the answer cannot be reached without guessing, and the
-    three ways that happens are all reported elsewhere. Silence is the safe
-    direction here: emitting a natural key alone on a table that turns out
-    to version would reject the second version of every row, which is the
-    constraint being wrong in the direction that looks like broken data.
-
-    Two natural keys are the third way, and the one that reads as though it
-    needed no guess. They mean either one compound identity — a store known
-    by its chain and its number — or two alternative ones, a product carrying
-    a barcode from one source and a supplier's part number from another. A
-    role cannot tell those apart, and the two want opposite constraints: one
-    over both columns, or one over each. Emitting the merged form for a table
-    that meant the second is worse than emitting nothing, because it is
-    weaker than either key alone and a NULL on one side leaves the row
-    unconstrained entirely. V306 asks the model to say which.
+    Only where the level dropped them and the dialect had no way to mark
+    them. A claim that vanishes from the DDL without a word is a claim
+    nobody knows is being made, and the DDL is what a DBA reads. Under
+    `none` this is silent by design: that level asks for bare tables.
     """
-    if not table.natural_keys:
-        return ()  # V302 reports it
-    if len(table.natural_keys) > ONE_IDENTITY:
-        return ()  # V306 reports it
-    if table.scd in {"TYPE_0", "TYPE_1"}:
-        # Neither keeps a second row for one business entity, so the natural
-        # key is the whole of it.
-        return table.natural_keys
-    if table.scd == "TYPE_2":
-        # A type-2 dimension's natural key repeats once per version, so the
-        # uniqueness that applies to it is the natural key *plus* whatever
-        # marks the versions apart.
-        #
-        # One discriminator, not both. Concatenating them weakens the very
-        # constraint this exists to tighten: `UNIQUE (nk, start, number)`
-        # permits two rows sharing a natural key and a start that differ
-        # only in their counter, which either column alone would have
-        # forbidden. Declaring more versioning metadata must not buy a
-        # worse guarantee.
-        #
-        # The start wins when both are present, because a period is the more
-        # specific claim — a counter orders versions, a start says when.
-        # `is_current` is not a discriminator at all: it is true of exactly
-        # one version, so a constraint carrying it is vacuous.
-        marks = table.version_starts or table.version_numbers
-        return (*table.natural_keys, marks[0]) if marks else ()  # V506
-    return ()  # no varda:scd — V502 reports it, and guessing costs rows
+    if not rule.documented:
+        return []
+    plain = Enforcement(keys=True, unique=True, references=True)
+    claims = _claims(table, schema, plain)
+    if not claims:
+        return []
+    # Each claim in the shape it would have had, one comment line per line
+    # of it, so a reference still breaks before REFERENCES and the block
+    # stays inside the width a terminal shows.
+    return [
+        "-- Not enforced here. The loader is trusted to hold:",
+        *[f"--   {line}" for claim in claims for line in claim.splitlines()],
+    ]
 
 
-def _table(table: Table, schema: str, sql: Dialect) -> str:
+def _table(table: Table, schema: str, sql: Dialect, rule: Enforcement) -> str:
     """Render one CREATE TABLE, with its grain as a comment."""
     lines: list[str] = []
     if table.description:
@@ -458,28 +554,12 @@ def _table(table: Table, schema: str, sql: Dialect) -> str:
         lines += _comment(table.scd, "Slowly-changing: ")
     lines.append(f"CREATE TABLE {quoted(schema)}.{quoted(table.physical)} (")
 
-    body = [_column_line(c, sql) for c in table.columns]
-    for fk in table.foreign_keys:
-        target = fk.table.model.table(fk.references or "")
-        if target is None:
-            continue  # V403 already reported it; do not also crash here
-        key = target.surrogate_keys
-        if not key:
-            continue  # V301's business
-        body.append(
-            # REFERENCES on its own line, always rather than only when the
-            # one-liner overflows. Quoting pushed the longer keys past the
-            # width a terminal shows, and a format that changes shape with
-            # the length of a name produces diffs that look meaningful and
-            # are not.
-            f"    FOREIGN KEY ({quoted(fk.physical)})\n"
-            f"        REFERENCES {quoted(schema)}."
-            f"{quoted(target.physical)} ({quoted(key[0].physical)})"
-        )
-    body += _unique_constraints(table)
+    body = [_column_line(c, sql, rule) for c in table.columns]
+    body += [f"    {claim}" for claim in _claims(table, schema, rule)]
 
     lines.append(",\n".join(body))
     lines.append(");")
+    lines += _dropped(table, schema, rule)
     return "\n".join(lines)
 
 
@@ -487,14 +567,20 @@ def generate(
     model: DimensionalModel,
     schema: str = "mart",
     dialect_name: str = DEFAULT_DIALECT,
+    level: str = DEFAULT_LEVEL,
 ) -> str:
     """Render the whole model as one runnable DDL script."""
     sql = dialect(dialect_name)
+    rule = enforcement(level, sql)
     name = quoted(schema)
     header = [
         "-- Generated by varda. Do not edit.",
         f"-- Source: {model.source.name}",
         f"-- Dialect: {sql.name}",
+        # Named on every level, including the default. A header that says
+        # which mode produced the file only when the mode is unusual is one
+        # a reader cannot trust when it is silent.
+        f"-- Constraints: {level}",
         "",
         sql.create_schema.format(
             quoted=name,
@@ -504,10 +590,15 @@ def generate(
         "",
         "",
     ]
-    blocks = [_table(t, schema, sql) for t in _ordered(model)]
+    tables = _ordered(model, references=rule.references)
+    blocks = [_table(t, schema, sql, rule) for t in tables]
     return "\n".join(header) + "\n\n".join(blocks) + "\n"
 
 
 def run(ctx: Context) -> dict[str, str]:
     """Run this generator and return its artifacts."""
-    return {"sql/mart.sql": generate(ctx.model, ctx.schema, ctx.dialect)}
+    return {
+        "sql/mart.sql": generate(
+            ctx.model, ctx.schema, ctx.dialect, ctx.constraints
+        )
+    }

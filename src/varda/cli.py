@@ -33,6 +33,11 @@ def _dialects() -> str:
     return ", ".join(sorted(gen_sql.DIALECTS))
 
 
+def _levels() -> str:
+    """Name the constraint levels, for the flag's help text."""
+    return ", ".join(gen_sql.LEVELS)
+
+
 def _load(path: str) -> DimensionalModel:
     """Load a model, resolving symbolic profile imports."""
     return DimensionalModel.load(path, importmap=registry.importmap())
@@ -238,6 +243,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         source=model.source,
         schema=args.schema,
         dialect=args.dialect,
+        constraints=args.constraints,
     )
     try:
         collected = _collect(chosen, ctx)
@@ -350,6 +356,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=gen_sql.DEFAULT_DIALECT,
         metavar="NAME",
         help=f"which database the DDL is for ({_dialects()})",
+    )
+    # Not `choices`, for the reason above and one more: the levels are
+    # Varda's vocabulary but the string reaches a generator, and an
+    # extension's SQL generator may resolve it against engines the core does
+    # not name. `gen_sql.enforcement` raises, listing what it knows.
+    p_gen.add_argument(
+        "--constraints",
+        default=gen_sql.DEFAULT_LEVEL,
+        metavar="LEVEL",
+        help=(
+            f"how much the database is asked to police ({_levels()}); "
+            f"weaker levels move the claims into sql/assertions.sql"
+        ),
     )
     p_gen.add_argument(
         "--only",

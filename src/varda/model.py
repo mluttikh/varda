@@ -508,6 +508,122 @@ class Table:
                 )
         return tuple(seen[n] for n in sorted(seen))
 
+    @cached_property
+    def unique_claims(self) -> tuple[tuple[Column, ...], ...]:
+        """Every distinct combination this table claims is unique.
+
+        The primary key is not among them. A surrogate key is emitted inline
+        as ``PRIMARY KEY`` and is the table's identity rather than a claim
+        made about it; everything here is a claim the model states on top of
+        that, and every one of them is optional in the DDL.
+
+        Each combination once. A grain and a declared `unique_keys` entry may
+        name the same columns — one is Varda's vocabulary and one is
+        LinkML's, and writing both is a reasonable thing to do — and every
+        database accepts the doubled constraint by building a second index
+        for it. Two indexes maintained on every write, for one claim, and
+        nothing anywhere says so.
+
+        Ordered, not sorted: the grain leads because it is the table's own
+        statement of what a row is, and a reader comparing generated output
+        against the model should meet them in the order the model declares
+        them.
+
+        This lives on the model rather than in a generator because two
+        generators read it — the DDL renders each claim as a constraint, the
+        assertions render each as a query — and one claim computed twice is
+        one claim that eventually disagrees with itself.
+        """
+        claims: list[tuple[Column, ...]] = []
+
+        # The grain, as something checkable rather than a comment. This is
+        # the whole return on declaring `varda:grain` as columns: a
+        # uniqueness claim nobody checks is a uniqueness claim that stops
+        # being true, quietly, on some load nobody is watching.
+        if self.grain_columns:
+            claims.append(self.grain_columns)
+
+        # LinkML's own `unique_keys`, when a model declares them, and nothing
+        # derived. One combination per claim rather than every key column
+        # concatenated into one: a table identified two different ways by two
+        # different sources needs two claims, and merging them produces one
+        # that is weaker than either — and inert besides, since a NULL on one
+        # side of a merged key makes the whole row unconstrained.
+        #
+        # Declared keys replace the derived one rather than joining it, so
+        # that a table states its uniqueness in one place or the other.
+        for unique in self.unique_keys:
+            if not unique.columns:
+                continue  # V303 reports a key that names nothing
+            claims.append(unique.columns)
+
+        # The uniqueness a dimension implies by declaring a natural key, when
+        # it has not stated one itself. V302 requires that key and calls it
+        # what a loader matches on; leaving it unstated makes the claim
+        # exactly as true as the comment above says an unchecked claim stays.
+        if self.is_dimension and not self.unique_keys:
+            derived = self._derived_key()
+            if derived:
+                claims.append(derived)
+
+        out: list[tuple[Column, ...]] = []
+        seen: set[tuple[str, ...]] = set()
+        for columns in claims:
+            names = tuple(c.physical for c in columns)
+            if names in seen:
+                continue
+            seen.add(names)
+            out.append(columns)
+        return tuple(out)
+
+    def _derived_key(self) -> tuple[Column, ...]:
+        """Derive what a dimension is unique on from its roles alone.
+
+        Empty whenever the answer cannot be reached without guessing, and the
+        three ways that happens are all reported elsewhere. Silence is the
+        safe direction: claiming a natural key alone on a table that turns
+        out to version would reject the second version of every row, which is
+        the claim being wrong in the direction that looks like broken data.
+
+        Two natural keys are the third way, and the one that reads as though
+        it needed no guess. They mean either one compound identity — a store
+        known by its chain and its number — or two alternative ones, a
+        product carrying a barcode from one source and a supplier's part
+        number from another. A role cannot tell those apart, and the two want
+        opposite claims: one over both columns, or one over each. Deriving
+        the merged form for a table that meant the second is worse than
+        deriving nothing, because it is weaker than either key alone and a
+        NULL on one side leaves the row unconstrained entirely. V306 asks the
+        model to say which.
+        """
+        if not self.natural_keys:
+            return ()  # V302 reports it
+        if len(self.natural_keys) > ONE_IDENTITY:
+            return ()  # V306 reports it
+        if self.scd in {"TYPE_0", "TYPE_1"}:
+            # Neither keeps a second row for one business entity, so the
+            # natural key is the whole of it.
+            return self.natural_keys
+        if self.scd == "TYPE_2":
+            # A type-2 dimension's natural key repeats once per version, so
+            # the uniqueness that applies to it is the natural key *plus*
+            # whatever marks the versions apart.
+            #
+            # One discriminator, not both. Concatenating them weakens the
+            # very claim this exists to tighten: `(nk, start, number)` permits
+            # two rows sharing a natural key and a start that differ only in
+            # their counter, which either column alone would have forbidden.
+            # Declaring more versioning metadata must not buy a worse
+            # guarantee.
+            #
+            # The start wins when both are present, because a period is the
+            # more specific claim — a counter orders versions, a start says
+            # when. `is_current` is not a discriminator at all: it is true of
+            # exactly one version, so a claim carrying it is vacuous.
+            marks = self.version_starts or self.version_numbers
+            return (*self.natural_keys, marks[0]) if marks else ()  # V506
+        return ()  # no varda:scd — V502 reports it, and guessing costs rows
+
     @property
     def fact_type(self) -> str | None:
         return get(self.cls, "fact_type")

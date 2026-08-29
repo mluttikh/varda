@@ -28,6 +28,7 @@ never a section in its own right.
     Physical names — the collisions no rule used to see
     Dialects — the spellings the one model comes out in
     Types — what a column says it holds
+    Constraints — how much the database is asked to police
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from sqlglot import expressions as sqlglot_exp
 
 from varda import __version__, cli, gen_sql, registry, rules
 from varda.ext import Context, Extension, ExtensionError, Generator
+from varda.gen_assertions import generate as generate_assertions
 from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
@@ -1516,8 +1518,16 @@ def test_sql_emits_foreign_keys() -> None:
 
 
 def test_sql_lines_fit_the_limit() -> None:
-    sql = generate_sql(DimensionalModel.load(RETAIL))
-    assert max(len(line) for line in sql.splitlines()) <= 80
+    model = DimensionalModel.load(RETAIL)
+    written = [
+        generate_sql(model, "mart", dialect, level)
+        for dialect in gen_sql.DIALECTS
+        for level in gen_sql.LEVELS
+    ] + [generate_assertions(model)]
+    # Every level and every dialect, because the comment block a weaker
+    # level writes and the predicate a compound grain produces are both
+    # longer than the constraint they stand in for.
+    assert max(len(line) for out in written for line in out.splitlines()) <= 80
 
 
 def test_unmapped_range_raises(tmp_path: pathlib.Path) -> None:
@@ -4148,3 +4158,435 @@ def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
     sql = generate_sql(model)
     assert 'UNIQUE ("d_id", "vs")' in sql
     assert 'UNIQUE ("d_id", "vs", "vn")' not in sql
+
+
+# ---------------------------------------------------------------------------
+# Constraints — how much the database is asked to police
+# ---------------------------------------------------------------------------
+
+
+# --- the levels --------------------------------------------------------------
+
+
+def _star(tmp_path: pathlib.Path) -> DimensionalModel:
+    """Build a dimension and a fact referencing it, with a compound grain."""
+    fact = {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:grain": ["d_key", "line_no"],
+            "varda:grain_statement": "one row per thing per line",
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "required": True,
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            },
+            "line_no": {
+                "range": "integer",
+                "required": True,
+                "annotations": {"varda:role": "DEGENERATE_DIMENSION"},
+            },
+            "amount": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "MEASURE",
+                    "varda:additivity": "ADDITIVE",
+                },
+            },
+        },
+    }
+    return build(tmp_path, {"DimThing": dimension(), "FctThing": fact})
+
+
+def test_enforced_is_the_default_and_the_header_says_so(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The level is named on every level, not only the unusual ones.
+
+    A header that says which mode produced the file only when the mode is
+    surprising is one a reader cannot trust when it is silent.
+    """
+    sql = generate_sql(_star(tmp_path))
+    assert "-- Constraints: enforced" in sql
+    assert "PRIMARY KEY" in sql
+    assert 'UNIQUE ("d_key", "line_no")' in sql
+    assert 'FOREIGN KEY ("d_key")' in sql
+
+
+def test_asserted_keeps_the_primary_key_and_drops_the_rest(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The cheap claim stays; the two that dominate a load go.
+
+    The primary key is a fraction of the cost, it is the identity of a row
+    rather than a claim about it, and every foreign key needs it to exist.
+    """
+    sql = generate_sql(_star(tmp_path), "mart", "duckdb", "asserted")
+    assert '"d_key" INTEGER PRIMARY KEY' in sql
+    assert "UNIQUE (" not in sql.split("-- Not enforced")[0]
+    assert "FOREIGN KEY" not in sql.split("-- Not enforced")[0]
+
+
+def test_asserted_records_what_the_loader_is_trusted_to_hold(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A claim that vanishes without a word is one nobody knows is made."""
+    sql = generate_sql(_star(tmp_path), "mart", "duckdb", "asserted")
+    assert "-- Not enforced here. The loader is trusted to hold:" in sql
+    assert '--   UNIQUE ("d_key", "line_no")' in sql
+    assert '--   FOREIGN KEY ("d_key")' in sql
+
+
+def test_asserted_marks_rather_than_drops_where_it_can_be_said(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Snowflake keeps every constraint and marks it trusted.
+
+    `RELY` is the difference between a key the optimizer records and one it
+    will eliminate a join against, so dropping the constraint there would
+    cost query performance to buy load performance the engine never charged
+    for in the first place.
+    """
+    sql = generate_sql(_star(tmp_path), "mart", "snowflake", "asserted")
+    assert '"d_key" INTEGER PRIMARY KEY RELY' in sql
+    assert 'UNIQUE ("d_key", "line_no") RELY' in sql
+    assert '("d_key") RELY' in sql
+    assert "-- Not enforced here" not in sql
+
+
+def test_none_leaves_bare_tables(tmp_path: pathlib.Path) -> None:
+    """Nothing table-level, and no comment either — `none` means bare."""
+    sql = generate_sql(_star(tmp_path), "mart", "duckdb", "none")
+    for absent in ("PRIMARY KEY", "UNIQUE (", "FOREIGN KEY", "-- Not enforced"):
+        assert absent not in sql
+
+
+def test_a_surrogate_key_keeps_not_null_when_it_loses_its_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Half of what a primary key says is free, so that half stays.
+
+    A key column that quietly starts accepting nulls changes what every
+    join against it means, and costs nothing to forbid.
+    """
+    sql = generate_sql(_star(tmp_path), "mart", "duckdb", "none")
+    assert '"d_key" INTEGER NOT NULL' in sql
+
+
+def test_not_null_survives_every_level(tmp_path: pathlib.Path) -> None:
+    """`NOT NULL` is what a column is, not a claim about its rows.
+
+    It does not register on a load, and a column that quietly starts
+    accepting nulls changes what every query against it means.
+    """
+    for level in gen_sql.LEVELS:
+        sql = generate_sql(_star(tmp_path), "mart", "duckdb", level)
+        assert '"line_no" INTEGER NOT NULL' in sql, level
+
+
+def test_an_unknown_level_raises_naming_the_ones_there_are() -> None:
+    """The same treatment an unknown dialect gets."""
+    with pytest.raises(GenerationError, match="enforced, asserted, none"):
+        gen_sql.enforcement("relaxed", gen_sql.dialect("duckdb"))
+
+
+def test_every_level_executes_and_the_catalog_shrinks(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The form the database sees, rather than of the DDL."""
+    model = _star(tmp_path)
+    found = []
+    for level in gen_sql.LEVELS:
+        con = duckdb.connect()
+        con.execute(generate_sql(model, "mart", "duckdb", level))
+        row = con.execute(
+            "select count(*) from duckdb_constraints() "
+            "where constraint_type in ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY')"
+        ).fetchone()
+        assert row is not None
+        found.append(row[0])
+    assert found[0] > found[1] > found[2]
+    assert found[2] == 0
+
+
+def test_the_emission_order_does_not_move_with_the_level() -> None:
+    """Turning enforcement off must not reshuffle the file.
+
+    The dependency ordering runs whether or not foreign keys are emitted, so
+    that a level change produces a diff about constraints and nothing else.
+    """
+    model = DimensionalModel.load(SNOWFLAKE)
+    orders = [
+        [
+            line
+            for line in generate_sql(
+                model, "mart", "duckdb", level
+            ).splitlines()
+            if line.startswith("CREATE TABLE")
+        ]
+        for level in gen_sql.LEVELS
+    ]
+    assert orders[0] == orders[1] == orders[2]
+
+
+def test_a_cycle_only_blocks_while_references_are_emitted(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Two dimensions pointing at each other are legal and unorderable.
+
+    V404 permits the pair, and with the foreign keys inline no CREATE TABLE
+    order satisfies them — so `enforced` refuses. Under the weaker levels
+    the file declares no references, nothing in it depends on the order, and
+    the same model generates.
+    """
+    left, right = dimension(), dimension()
+    left["attributes"]["r_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimRight",
+        },
+    }
+    right["attributes"]["l_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimLeft",
+        },
+    }
+    model = build(tmp_path, {"DimLeft": left, "DimRight": right})
+    with pytest.raises(GenerationError, match="DimLeft, DimRight"):
+        generate_sql(model)
+    for level in ("asserted", "none"):
+        sql = generate_sql(model, "mart", "duckdb", level)
+        assert sql.count("CREATE TABLE") == 2
+        duckdb.connect().execute(sql)
+
+
+def test_the_level_reaches_the_generator_from_the_flag(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The flag, the context field and the generator, end to end."""
+    model_path = tmp_path / "m.yaml"
+    _star(tmp_path)
+    model_path.write_text((tmp_path / "t.yaml").read_text())
+    out = tmp_path / "out"
+    code = cli.main(
+        [
+            "generate",
+            str(model_path),
+            "--out",
+            str(out),
+            "--constraints",
+            "none",
+        ]
+    )
+    capsys.readouterr()
+    assert code == 0
+    written = (out / "sql" / "mart.sql").read_text()
+    assert "-- Constraints: none" in written
+    assert "FOREIGN KEY" not in written
+
+
+def test_a_generator_written_before_the_field_still_sees_a_level(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`Context` is defaulted, so an extension's generator keeps working."""
+    ctx = Context(model=_star(tmp_path), source=tmp_path / "t.yaml")
+    assert ctx.constraints == gen_sql.DEFAULT_LEVEL
+
+
+# --- the assertions the weaker levels move the claims into --------------------
+
+
+def _seeded(model: DimensionalModel) -> duckdb.DuckDBPyConnection:
+    """Load a star with one duplicate key and one orphan reference."""
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_thing" ("d_key", "d_id") '
+        "VALUES (1, 'A'), (1, 'A')"
+    )
+    con.execute(
+        'INSERT INTO "mart"."fct_thing" ("d_key", "line_no", "amount") '
+        "VALUES (99, 1, 5)"
+    )
+    return con
+
+
+def _fired(con: duckdb.DuckDBPyConnection, sql: str) -> list[str]:
+    """Run every assertion and name the ones that found something."""
+    out = []
+    for block in sql.split("\n\n"):
+        if "SELECT" not in block:
+            continue
+        label = block.splitlines()[0]
+        query = block[block.index("SELECT") :].rstrip().rstrip(";")
+        rows = con.execute(query).fetchall()
+        if rows and any(row[-1] for row in rows):
+            out.append(label)
+    return out
+
+
+def test_the_assertions_find_what_the_constraints_would_have(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The duplicate and the orphan, against a database that enforced neither.
+
+    This is the whole claim of the file: the same failures, caught once per
+    load instead of once per row.
+    """
+    model = _star(tmp_path)
+    fired = _fired(_seeded(model), generate_assertions(model))
+    assert fired == [
+        '-- dim_thing: PRIMARY KEY ("d_key")',
+        '-- dim_thing: UNIQUE ("d_id")',
+        "-- fct_thing.d_key -> dim_thing.d_key",
+    ]
+
+
+def test_the_assertions_are_quiet_on_data_that_holds(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No false positives, which is what decides whether they get run."""
+    model = _star(tmp_path)
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_thing" ("d_key", "d_id") '
+        "VALUES (1, 'A'), (2, 'B')"
+    )
+    con.execute(
+        'INSERT INTO "mart"."fct_thing" ("d_key", "line_no", "amount") '
+        "VALUES (1, 1, 5)"
+    )
+    assert _fired(con, generate_assertions(model)) == []
+
+
+def test_the_assertions_read_nulls_the_way_the_constraint_does(
+    tmp_path: pathlib.Path,
+) -> None:
+    """SQL admits both, so an assertion standing in for it must too.
+
+    A `UNIQUE` key holding a null is not a duplicate and a null foreign key
+    is not an orphan. An assertion stricter than the constraint it replaces
+    reports rows the database would have taken, and a check that cries wolf
+    is one people switch off.
+    """
+    # Purpose-built: the star above requires its keys, and a required
+    # column cannot show what happens to a null one.
+    nullable = dimension()
+    nullable["attributes"]["d_id"] = {
+        "annotations": {"varda:role": "NATURAL_KEY"}
+    }
+    fact = {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:grain": ["d_key", "line_no"],
+            "varda:grain_statement": "one row per thing per line",
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            },
+            "line_no": {
+                "range": "integer",
+                "annotations": {"varda:role": "DEGENERATE_DIMENSION"},
+            },
+        },
+    }
+    model = build(tmp_path, {"DimThing": nullable, "FctThing": fact})
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_thing" ("d_key", "d_id") '
+        "VALUES (1, NULL), (2, NULL)"
+    )
+    con.execute(
+        'INSERT INTO "mart"."fct_thing" ("d_key", "line_no") VALUES (NULL, 1)'
+    )
+    assert _fired(con, generate_assertions(model)) == []
+
+
+def test_the_assertions_state_the_ddl_claims_and_no_others() -> None:
+    """One claim, computed once.
+
+    The DDL renders each unique claim as a constraint and the assertions
+    render each as a query; both read `Table.unique_claims`, so the two
+    files cannot come to disagree about what the model said.
+    """
+    model = DimensionalModel.load(RETAIL)
+    in_ddl = generate_sql(model).count("UNIQUE (")
+    in_assertions = generate_assertions(model).count(": UNIQUE (")
+    assert in_ddl == in_assertions > 0
+
+
+def test_the_assertions_parse_everywhere_including_the_absent_dialects() -> (
+    None
+):
+    """Plain SQL is the point: a lakehouse gets the check it cannot enforce.
+
+    `bigquery` and `oracle` have no Varda dialect and cannot be sent DDL at
+    all, and this file still runs against both. That is the gap it closes.
+    """
+    blocks = [
+        block[block.index("SELECT") :]
+        for block in generate_assertions(DimensionalModel.load(RETAIL)).split(
+            "\n\n"
+        )
+        if "SELECT" in block
+    ]
+    assert blocks
+    for read in (
+        "postgres",
+        "duckdb",
+        "snowflake",
+        "tsql",
+        "bigquery",
+        "oracle",
+        "databricks",
+    ):
+        for block in blocks:
+            sqlglot.parse_one(block, read=read)
+
+
+def test_a_self_reference_joins_two_distinct_names(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A reporting line joins a table to itself, so one alias will not do."""
+    employee = dimension()
+    employee["attributes"]["manager_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimEmployee",
+        },
+    }
+    sql = generate_assertions(build(tmp_path, {"DimEmployee": employee}))
+    assert 'FROM "mart"."dim_employee" AS "src"' in sql
+    assert 'LEFT JOIN "mart"."dim_employee" AS "tgt"' in sql
+    duckdb.connect().execute(
+        'CREATE SCHEMA mart; CREATE TABLE "mart"."dim_employee" '
+        '("d_key" INTEGER, "d_id" VARCHAR, "manager_key" INTEGER);'
+        + sql[sql.index("SELECT") :]
+    )
+
+
+def test_the_assertions_say_so_when_a_model_claims_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An empty file reads as a generator that failed quietly."""
+    bare = {
+        "annotations": {"varda:role": "DIMENSION", "varda:scd": "TYPE_1"},
+        "attributes": {"note": {"annotations": {"varda:role": "ATTRIBUTE"}}},
+    }
+    sql = generate_assertions(build(tmp_path, {"DimBare": bare}))
+    assert "no claim that a database enforces" in sql

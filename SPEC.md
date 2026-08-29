@@ -32,22 +32,23 @@ reason the core can stay small enough to be correct.
 | Module | Lines | Responsibility |
 | --- | --- | --- |
 | `anns.py` | ~150 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
-| `model.py` | ~690 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
-| `ext.py` | ~180 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
+| `model.py` | ~800 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
+| `ext.py` | ~190 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
 | `registry.py` | ~730 | Discovery, validation, lookup. Where colliding extensions are refused. |
 | `rules.py` | ~1640 | `RuleSet`, `Finding`, and the 48 core rules. |
-| `gen_sql.py` | ~510 | SQL DDL, and the dialects it is spelled in. |
+| `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~170 | Markdown reference. |
-| `generators.py` | ~25 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~410 | Five commands. |
+| `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
+| `generators.py` | ~35 | Varda's generators, registered through the public interface. |
+| `cli.py` | ~430 | Five commands. |
 
-**4,549 lines of source**: 2,469 of code, 1,056 of docstrings, 293 of
-comment, 731 blank. The prose share is deliberate and is house style —
+**4,973 lines of source**: 2,652 of code, 1,171 of docstrings, 364 of
+comment, 786 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 15 annotations, 5 enums, 1 type — and 270
-tests in 4,150 lines.
+Plus `profile/varda.yaml` — 15 annotations, 5 enums, 1 type — and 290
+tests in 4,592 lines.
 
 ### The four seams
 
@@ -182,6 +183,16 @@ states each key once; a range resolves through its `typeof`, so a type the
 schema declares generates instead of stopping the generator. Plus the two
 extension-discovery routes a third party actually uses, which had never been
 tested — and which broke the moment they were.
+
+**Unreleased — the operator chooses when the check runs.** A constraint is a
+claim about the data *and* an instruction to verify it on every write, and
+Varda emitted the two together because SQL spells them with one word.
+Checking is twenty-three times the cost of a bulk load on the engines that
+really do it, and impossible on the ones that do not. `--constraints` now
+takes a level — `enforced`, `asserted`, `none` — which `Dialect` renders into
+whatever the engine has for saying it, and the claims a weaker level drops
+move into `sql/assertions.sql` rather than disappearing. Design note and
+measurements in `design/constraint-enforcement.md`.
 
 ### Next, in the order it is worth doing
 

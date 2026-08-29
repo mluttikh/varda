@@ -343,6 +343,97 @@ choice and the wrong one: `MAX` columns cannot be key columns, so a natural
 key emitted that way takes the whole file down at its `UNIQUE` constraint,
 having read perfectly well.
 
+## Why enforcement is a level, not a switch
+
+A constraint in a `CREATE TABLE` is two things at once. It is a claim about
+the data — these columns identify a row, this key names a row that exists —
+and it is an instruction to the engine to verify that claim on every write.
+Varda emitted both together because SQL spells them with one word, and the
+two have very different costs.
+
+The checking dominates a bulk load. Measured on DuckDB against a 200,000-row
+dimension and a 2,000,000-row fact, the same load takes twenty-three times as
+long with the constraints in place as without, and the distribution is
+lopsided: a dimension's `PRIMARY KEY` is around two percent of that overhead
+and the fact table's grain `UNIQUE` and its foreign keys are the rest. Plenty
+of warehouses are loaded by a pipeline that already guarantees these
+properties, and pay for the guarantee a second time, row by row, forever.
+Plenty of others run on an engine that cannot enforce a key at all.
+
+So `--constraints` takes a level rather than a boolean, and the level names
+what is wanted rather than what to emit.
+
+`enforced` is the default and today's output. `asserted` says the claims hold
+and the loader is what makes them hold. `none` asks for bare tables.
+
+`asserted` is one intention with two renderings, and which one arrives is a
+property of the engine. Snowflake, which records a key and never checks it,
+gets `RELY` — the mark that turns a recorded key into one the optimizer will
+eliminate a join against. PostgreSQL, DuckDB and SQL Server have no way to
+say it, so the constraint is dropped and written into the file as a comment
+naming what the loader is being trusted to hold. That is not a silent
+degradation: the header names the level on every level, including the
+default, and a claim that vanishes without a word is a claim nobody knows is
+being made.
+
+Two things stay at every level. `NOT NULL` is what a column *is* rather than
+a claim about which rows go together, and it does not register on a load; a
+surrogate key that loses its `PRIMARY KEY` picks it up instead, because half
+of what a primary key says is free. Type facets stay for the same reason — a
+`VARCHAR(20)` that stops being twenty characters wide is a different schema,
+not a faster one.
+
+The levels are ordered rather than independent because SQL orders them.
+A foreign key's target must carry a primary or unique key, so a level that
+dropped a dimension's `PRIMARY KEY` while keeping the facts' foreign keys
+would emit DDL that does not parse. Three named levels cannot express that
+combination; four booleans could.
+
+One refusal became conditional. Two dimensions that reference each other are
+legal — `V404` permits it — and have no `CREATE TABLE` order that satisfies
+both while the foreign keys are inline, so `enforced` refuses and names them.
+Under the weaker levels the file declares no references, nothing in it
+depends on the order, and the same model generates. The dependency ordering
+still runs, so that changing the level produces a diff about constraints and
+nothing else.
+
+## Why the claims outlive the constraints
+
+Turning enforcement off would otherwise withdraw a guarantee. Several
+arguments in this package rest on a wrong model failing visibly at load — a
+grain missing a column, a natural key that repeats — and all of them assume
+the database is checking.
+
+So the claims do not disappear when the constraints do. `sql/assertions.sql`
+carries every one of them as a query that returns the rows breaking it and
+nothing when it holds: uniqueness as `GROUP BY ... HAVING count(*) > 1`,
+references as a `LEFT JOIN` finding rows with no target.
+
+It is generated at every level, not only the weak ones, because it is worth
+running against an enforcing database too and because a generator whose
+output appears and disappears with a flag is one nobody wires into a
+pipeline. Three properties make it more than a cheaper substitute. It runs
+once per load rather than once per row, which is when the answer can differ.
+It reports — a violated constraint aborts a transaction and names one row, a
+violated assertion hands back every offending key and how many rows carry it.
+And it is plain SQL, so it runs on the engines that have no Varda dialect and
+cannot enforce a key at all; on a lakehouse this file is not the cheap option
+but the only one.
+
+Nulls follow SQL's reading, which is the reading the constraints use: a
+`UNIQUE` key holding a null is not a duplicate, a null foreign key is not an
+orphan. An assertion stricter than the constraint it stands in for would
+report rows the database would have accepted, and a check that cries wolf is
+one people switch off.
+
+What it does not do is make claims of its own. It asserts exactly what the
+DDL can be asked not to enforce — primary keys, uniqueness, references — and
+nothing else. `NOT NULL` on an ordinary column and the width of a type are
+never dropped, so there is nothing to relocate, and asserting them anyway
+would be this file starting to say things the model did not. Both generators
+read `Table.unique_claims` for the same reason: one claim computed in two
+places is one claim that eventually disagrees with itself.
+
 ## Why the grain sentence is not checked against the columns
 
 A fact declares its grain twice — as columns and as a sentence — and nothing
@@ -358,7 +449,12 @@ while giving you nothing to lean on.
 
 The failure such a rule would reach for is caught exactly, further down. A
 grain missing a column becomes a `UNIQUE` constraint that fails on load:
-language-independent, and impossible to write around.
+language-independent, and impossible to write around. Under
+`--constraints asserted` or `none` the constraint is not there to fail, and
+the same grain becomes a query in `sql/assertions.sql` that returns the rows
+sharing it. Later than a load that aborts, and the argument holds either way:
+the check is somewhere, it is not English, and nothing about how the sentence
+is phrased changes what it finds.
 
 There is a second cost, and it is the one that decides it. A rule shaping the
 sentence teaches people to write for the rule. The sentence exists to carry
