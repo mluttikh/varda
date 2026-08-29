@@ -21,6 +21,13 @@ tool reads it and ignores what it does not understand. Varda adds no new
 syntax, forks no metamodel, and requires no changes to LinkML. Anything
 proposed later that breaks this property is not a Varda feature.
 
+It is also the property that was argued for three releases and never run, and
+was false: `imports: - varda` reached a profile declaring four annotation
+classes, a LinkML import is a union, and every stock generator emitted them.
+The suite now runs `gen-erdiagram`, `gen-json-schema`, `gen-pydantic` and
+`gen-owl` over both examples and asserts that nothing of Varda's own appears
+in the output. A property this load-bearing is worth what it is tested at.
+
 The second critical property: **the core is small, and organizations extend
 it themselves.** Cost centers, retention policy, data classification,
 ownership — these differ per organization and none of them belong in Varda.
@@ -33,22 +40,25 @@ reason the core can stay small enough to be correct.
 | --- | --- | --- |
 | `anns.py` | ~150 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
 | `model.py` | ~800 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
-| `ext.py` | ~190 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
-| `registry.py` | ~730 | Discovery, validation, lookup. Where colliding extensions are refused. |
+| `ext.py` | ~210 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
+| `registry.py` | ~770 | Discovery, validation, lookup. Where colliding extensions are refused. |
 | `rules.py` | ~1640 | `RuleSet`, `Finding`, and the 48 core rules. |
 | `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~170 | Markdown reference. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
 | `generators.py` | ~35 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~430 | Five commands. |
+| `cli.py` | ~450 | Five commands. |
 
-**4,973 lines of source**: 2,652 of code, 1,171 of docstrings, 364 of
-comment, 786 blank. The prose share is deliberate and is house style —
+**5,062 lines of source**: 2,683 of code, 1,198 of docstrings, 384 of
+comment, 797 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus `profile/varda.yaml` — 15 annotations, 5 enums, 1 type — and 290
-tests in 4,592 lines.
+Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
+5 enums — which the registry reads off disk and no model imports.
+`profile/types.yaml` holds the one type a model may need to name, and is all
+that `imports: - varda` resolves to; a LinkML import is a union, so what is
+importable is kept to what is meant to be imported. And 305 tests in 4,788 lines.
 
 ### The four seams
 
@@ -183,6 +193,15 @@ states each key once; a range resolves through its `typeof`, so a type the
 schema declares generates instead of stopping the generator. Plus the two
 extension-discovery routes a third party actually uses, which had never been
 tested — and which broke the moment they were.
+
+**Unreleased — a model imports what it needs and nothing else.** The profile
+is split: the vocabulary stays where the registry reads it, and a new
+`types.yaml` carries the one type a model names. `imports: - varda` means
+what it always did and no model needs an edit; what changed is that four
+annotation classes and five enums stop arriving with it and stop appearing in
+every stock generator's output. `Extension.types` generalizes it, the import
+map is built from it alone, and `varda importmap --json` prints the map in
+the shape a generator's `--importmap` reads.
 
 **Unreleased — the operator chooses when the check runs.** A constraint is a
 claim about the data *and* an instruction to verify it on every write, and

@@ -9,6 +9,7 @@ tell" is one that turns a red build green.
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import sys
 from typing import TYPE_CHECKING
@@ -308,9 +309,23 @@ def cmd_ext(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def cmd_importmap(_: argparse.Namespace) -> int:
-    """Print the map that resolves symbolic profile imports."""
-    for prefix, path in sorted(registry.importmap().items()):
+def cmd_importmap(args: argparse.Namespace) -> int:
+    """Print the map that resolves symbolic imports.
+
+    ``--json`` prints it in the shape LinkML's own generators read, which is
+    the whole reason a model may write `imports: - varda` and still be a
+    schema other tools can build from::
+
+        varda importmap --json > im.json
+        gen-erdiagram --importmap im.json mart.yaml
+
+    The default stays one line per prefix, for reading.
+    """
+    found = registry.importmap()
+    if args.json:
+        print(json.dumps(found, indent=2, sort_keys=True))
+        return EXIT_OK
+    for prefix, path in sorted(found.items()):
         print(f"{prefix}={path}")
     return EXIT_OK
 
@@ -403,6 +418,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ext.set_defaults(fn=cmd_ext)
 
     p_map = sub.add_parser("importmap", help="print the LinkML import map")
+    p_map.add_argument(
+        "--json",
+        action="store_true",
+        help="print it as JSON, for a generator's --importmap",
+    )
     p_map.set_defaults(fn=cmd_importmap)
 
     return parser

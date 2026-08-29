@@ -146,6 +146,16 @@ generation fail closed. Paths are declared up front so that two extensions
 claiming the same output file are caught at load rather than by one silently
 overwriting the other.
 
+An extension that declares a **type** — not an annotation, an actual LinkML
+type a model will name as a range — puts it in a separate schema and points
+`Extension.types` at it. That schema, and only that schema, goes into the
+import map, so a model can write `imports: - acme` and get the type without
+getting the vocabulary. A LinkML import is a union: anything an importable
+schema declares turns up in every generator's output for every model that
+imports it, which is why `types` refuses a class or an enum at load. An
+extension adding annotations only — most of them — declares no types schema
+and is not importable at all.
+
 `ctx` is a closed record — the model, its source path, and the three things
 the invocation chose: `ctx.schema`, `ctx.dialect`, and `ctx.constraints`, one
 of `enforced`, `asserted` or `none`. All three are plain strings rather than

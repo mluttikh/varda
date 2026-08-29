@@ -39,6 +39,14 @@ description: >-
   `gen-owl`, `gen-json-schema` and every other LinkML generator will consume
   happily, ignoring what they do not understand.
 
+  **A domain model does not import this file.** `varda check` reads it
+  directly, so the vocabulary is available without any model asking for it.
+  What a model may need is the `uuid` type, and that lives in `types.yaml`,
+  which is what `imports: - varda` resolves to. The separation is what makes
+  the paragraph above true: a LinkML import is a union, so anything declared
+  here would otherwise appear in every generator's output as though it were
+  part of the model.
+
   **Scope.** This is the deliberately small core: fifteen annotations that
   describe a standard star schema and nothing else. Anything specific to one
   organization — cost centers, retention, data classification, ownership —
@@ -60,37 +68,12 @@ imports:
   - linkml:types
 
 # ---------------------------------------------------------------------------
-# Types — what LinkML's own set does not carry.
+# Types are not here. LinkML has no `uuid` among its built-in types, so a
+# model with a UUID key has no legal way to say so, and Varda declares one —
+# in `types.yaml`, because that is the file a model imports. A type must be
+# imported to be usable as a range; everything below must be *read*, and
+# reading is what the registry does.
 #
-# One entry, and it earns its place the same way an annotation has to: LinkML
-# has no `uuid` among its nineteen built-in types, so a model with a UUID key
-# has no legal way to say so. Declared here rather than mapped by name inside
-# the generator, because a range that names nothing is not a LinkML schema any
-# more — and a model staying an ordinary LinkML schema is the premise of the
-# whole profile. A model reaches this with `imports: - varda`.
-# ---------------------------------------------------------------------------
-
-types:
-
-  uuid:
-    typeof: string
-    uri: xsd:string
-    description: >-
-      A 128-bit identifier, written in the canonical 8-4-4-4-12 hexadecimal
-      form. Emitted as the database's own UUID type where there is one —
-      `UUID` on PostgreSQL, DuckDB and Snowflake, `UNIQUEIDENTIFIER` on SQL
-      Server — and as characters where there is not.
-
-      Almost always a natural key rather than a surrogate one. A surrogate
-      key exists to be narrow, and a UUID is four times the width of an
-      integer in every fact row that joins to it; a UUID arriving from a
-      source system is a business identifier and belongs where the other
-      business identifiers are. Varda does not enforce that, because where a
-      warehouse gets its keys is a decision with more behind it than a rule
-      here could see.
-    pattern: '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
-
-# ---------------------------------------------------------------------------
 # Enumerations — the closed vocabularies.
 #
 # These are closed on purpose, and the constraint is load-bearing: an

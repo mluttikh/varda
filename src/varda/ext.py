@@ -134,6 +134,22 @@ class Extension:
     #: vocabulary that silently never applies.
     profile: pathlib.Path | None = None
 
+    #: Path to a LinkML schema a domain model may import by this
+    #: extension's prefix, or ``None`` where there is nothing to import.
+    #:
+    #: Separate from ``profile`` because the two are read by different
+    #: parties for different reasons. The profile is *read* — by Varda,
+    #: off disk, to learn what annotations exist. This is *imported* — by
+    #: a model, so that a range it names resolves.
+    #:
+    #: A LinkML import is a union: everything the imported schema declares
+    #: becomes part of the importing schema and appears in the output of
+    #: every generator that walks its classes. So an extension that only
+    #: declares annotations sets nothing here, and a model cannot import
+    #: it even by mistake. Only an extension declaring a *type* has
+    #: something a model needs.
+    types: pathlib.Path | None = None
+
     #: Conformance rules. Every code must begin with `rule_tag`.
     rules: RuleSet | None = None
 
@@ -181,6 +197,11 @@ class Extension:
     def profile_view(self) -> SchemaView | None:
         """The parsed profile, or ``None`` if this extension declares none."""
         return None if self.profile is None else SchemaView(str(self.profile))
+
+    @cached_property
+    def types_view(self) -> SchemaView | None:
+        """The parsed types schema, or ``None`` where there is none."""
+        return None if self.types is None else SchemaView(str(self.types))
 
     @cached_property
     def profile_version(self) -> str | None:

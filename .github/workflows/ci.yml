@@ -136,16 +136,22 @@ jobs:
       - name: twine check
         run: twine check --strict dist/*
 
-      # The profile is data, not code, and setuptools will happily build a
-      # wheel without it if package-data is misconfigured. The failure then
-      # appears only for someone who pip-installed — every rule raises
-      # "unknown annotation" because the vocabulary is not there.
-      - name: profile and type marker are in the wheel
+      # The schemas are data, not code, and setuptools will happily build a
+      # wheel without them if package-data is misconfigured. The failures then
+      # appear only for someone who pip-installed: without the profile every
+      # rule raises "unknown annotation" because the vocabulary is not there,
+      # and without the types schema every model naming `uuid` fails to load
+      # at all, because that is what `imports: - varda` resolves to.
+      - name: schemas and type marker are in the wheel
         run: |
           python - <<'PY'
           import glob, sys, zipfile
           names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
-          required = {"varda/profile/varda.yaml", "varda/py.typed"}
+          required = {
+              "varda/profile/varda.yaml",
+              "varda/profile/types.yaml",
+              "varda/py.typed",
+          }
           missing = required - set(names)
           if missing:
               sys.exit(f"missing from wheel: {', '.join(sorted(missing))}")

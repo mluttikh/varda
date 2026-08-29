@@ -58,6 +58,62 @@ and a lapsed domain baked into published schemas is unrecoverable.
 Group, separates the identifier — permanent — from the redirect target, which
 is a one-line change. LinkML itself works this way.
 
+## Why the profile is split, and which half a model imports
+
+Varda ships two schemas. `varda.yaml` is the vocabulary — the annotation
+classes, the enumerations, the shapes of the structured annotations.
+`types.yaml` holds one type, `uuid`, and is what `imports: - varda` resolves
+to. A model imports the second and never the first.
+
+The split exists because a LinkML import is a **union**. Everything the
+imported schema declares becomes part of the importing schema, and every
+generator that walks the class list emits it. While the vocabulary was
+importable, a model following the documentation got four classes it never
+declared, and every stock tool duly rendered them:
+
+```
+gen-erdiagram   12 entities, 4 of them ColumnAnnotations, Hierarchy,
+                Level, TableAnnotations — none of which is a table
+gen-json-schema 4 phantom $defs, plus 5 enums nothing is ranged on
+gen-pydantic    4 phantom models
+gen-owl         4 phantom owl:Class, for objects never instantiated
+```
+
+That falsified the claim this package is built on — that a Varda-annotated
+model is an ordinary LinkML schema every other tool reads correctly. The
+claim was true for a model that did not import the profile and false for one
+that did, which was the configuration the docs told people to write.
+
+The two files are read by different parties for different reasons, and that
+is what makes the split natural rather than a workaround. The vocabulary is
+*read*: `varda check` opens it off disk, which is why a model never needed to
+import it to be validated. The type is *imported*: a range has to resolve for
+the file to be a legal LinkML schema at all, and LinkML has no `uuid` among
+its built-in types. Reading needs no import. Only naming does.
+
+So `Extension` carries both, and `varda importmap` is built from `types`
+alone. An extension that declares only annotations — which is most of them —
+appears in the map not at all, and a model cannot import it even by mistake.
+An extension that does declare a type puts it in its own types schema, and a
+load-time check refuses one carrying a class or an enum, where the message
+can name the file.
+
+`imports: - varda` still means what it always did, so no existing model needs
+an edit. What changed is what arrives.
+
+One thing the split does not fix. `imports: - varda` is symbolic, so a stock
+tool run straight at a model cannot resolve it — the generators take
+`--importmap FILE` and read JSON, which is what `varda importmap --json` is
+for:
+
+```console
+$ varda importmap --json > im.json
+$ gen-erdiagram --importmap im.json mart.yaml
+```
+
+A model that never names `uuid` needs no import and no map, which is the
+common case and is why `examples/snowflake.yaml` carries neither.
+
 ## Why annotations rather than a new format
 
 A model annotated with Varda is a legal LinkML schema. Every other LinkML

@@ -29,21 +29,26 @@ never a section in its own right.
     Dialects — the spellings the one model comes out in
     Types — what a column says it holds
     Constraints — how much the database is asked to police
+    Interop — the claim that a Varda model is an ordinary LinkML schema
 """
 
 from __future__ import annotations
 
 import dataclasses
 import decimal
+import importlib
 import importlib.metadata
+import json
 import pathlib
 import textwrap
+import warnings
 from typing import TYPE_CHECKING, Any
 
 import duckdb
 import pytest
 import sqlglot
 import yaml
+from linkml_runtime.utils.schemaview import SchemaView
 from sqlglot import expressions as sqlglot_exp
 
 from varda import __version__, cli, gen_sql, registry, rules
@@ -52,7 +57,7 @@ from varda.gen_assertions import generate as generate_assertions
 from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
-from varda.model import DimensionalModel, physical_name
+from varda.model import PROFILE, TYPES, DimensionalModel, physical_name
 from varda.rules import RuleSet
 
 if TYPE_CHECKING:
@@ -4590,3 +4595,194 @@ def test_the_assertions_say_so_when_a_model_claims_nothing(
     }
     sql = generate_assertions(build(tmp_path, {"DimBare": bare}))
     assert "no claim that a database enforces" in sql
+
+
+# ---------------------------------------------------------------------------
+# Interop — the claim that a Varda model is an ordinary LinkML schema
+# ---------------------------------------------------------------------------
+
+# The premise of the package, stated in `SPEC.md` §1 and in the profile's own
+# description: a model carrying Varda annotations is a legal LinkML schema
+# that every other LinkML tool reads, ignoring what it does not understand.
+#
+# It was argued for three releases and never run. It was false. `imports:
+# - varda` reached a profile declaring four annotation classes and five
+# enums, and a LinkML import is a union — so `gen-erdiagram` drew
+# `TableAnnotations` as a table, `gen-pydantic` emitted a model for `Level`,
+# and `gen-owl` wrote an `owl:Class` for each. These tests run the real
+# generators, because reading the claim is what let it go wrong.
+
+#: Every name the profile declares. None may appear in output generated from
+#: a domain model: they are vocabulary a validator reads, not data a model
+#: holds.
+VOCABULARY = (
+    "TableAnnotations",
+    "ColumnAnnotations",
+    "Hierarchy",
+    "Level",
+    "TableRole",
+    "ColumnRole",
+    "Additivity",
+    "SlowlyChangingType",
+    "FactType",
+)
+
+
+def _generated(generator: Any, model: pathlib.Path) -> str:
+    """Run one stock LinkML generator over a model, through the import map.
+
+    Warnings are captured rather than filtered. `OwlSchemaGenerator`
+    announces two defaults that will change, through a helper that calls
+    `warnings.filterwarnings("default", ...)` itself — which re-arms the
+    filter as it emits and defeats a `filterwarnings` mark. What is asserted
+    below is which names appear, and no OWL axiom default can move that.
+    """
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("ignore")
+        instance = generator(str(model), importmap=registry.importmap())
+        return str(instance.serialize())
+
+
+@pytest.mark.parametrize("model", [RETAIL, SNOWFLAKE])
+@pytest.mark.parametrize(
+    "generator",
+    [
+        pytest.param("erdiagramgen.ERDiagramGenerator", id="gen-erdiagram"),
+        pytest.param("jsonschemagen.JsonSchemaGenerator", id="gen-json-schema"),
+        pytest.param("pydanticgen.PydanticGenerator", id="gen-pydantic"),
+        pytest.param("owlgen.OwlSchemaGenerator", id="gen-owl"),
+    ],
+)
+def test_no_stock_generator_emits_varda_vocabulary(
+    generator: str, model: pathlib.Path
+) -> None:
+    """The claim, executed against the four generators the README names.
+
+    Both examples, because they differ in the way that matters: `retail.yaml`
+    imports the profile for `uuid` and `snowflake.yaml` does not, and the
+    polluted one was the one following the documentation.
+    """
+    module, _, name = generator.partition(".")
+    imported = importlib.import_module(f"linkml.generators.{module}")
+    out = _generated(getattr(imported, name), model)
+    found = [word for word in VOCABULARY if word in out]
+    assert not found, f"{generator} emitted {found} from {model.name}"
+
+
+def test_a_generator_sees_exactly_the_tables_the_model_declares() -> None:
+    """Counted rather than pattern-matched, so a rename cannot hide a leak.
+
+    `VOCABULARY` above is a list of names and goes stale the moment the
+    profile grows one. This says the stronger thing: what a stock tool sees
+    is the model's own classes and nothing whatsoever besides.
+    """
+    model = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    assert set(model.view.all_classes()) == {t.name for t in model.tables}
+
+
+def test_the_types_schema_declares_only_types() -> None:
+    """The regression guard, on the file that ships.
+
+    A class or an enum here is not vocabulary a model gains. It is output a
+    model did not ask for, in every generator that walks the class list.
+    """
+    view = SchemaView(str(TYPES))
+    assert not view.schema.classes
+    assert not view.schema.enums
+    assert sorted(view.schema.types) == ["uuid"]
+
+
+def test_the_profile_is_not_importable_and_the_types_schema_is() -> None:
+    """The map is what a model imports, so it carries the importable one."""
+    varda = registry.varda_extension()
+    assert varda.profile == PROFILE
+    assert varda.types == TYPES
+    assert registry.importmap()["varda"] == str(TYPES.with_suffix(""))
+
+
+def test_a_types_schema_declaring_a_class_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Caught at load, where the message can name the file and the class."""
+    schema = tmp_path / "acme_types.yaml"
+    schema.write_text(
+        yaml.safe_dump(
+            {
+                "id": "https://example.org/acme/types",
+                "name": "acme_types",
+                "prefixes": {"acme": "https://example.org/acme/"},
+                "default_prefix": "acme",
+                "default_range": "string",
+                "classes": {"Leaks": {"attributes": {"x": {}}}},
+            }
+        )
+    )
+    ext = Extension(name="acme", prefix="acme", types=schema)
+    with (
+        pytest.raises(ExtensionError, match="may declare types only"),
+        registry.using(ext),
+    ):
+        pass
+
+
+def test_an_extension_declaring_no_types_is_not_in_the_map(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An extension that only adds annotations has nothing a model imports.
+
+    Being in the map is what let Varda's own profile pollute every model
+    that followed the documentation, so the map now carries only what is
+    meant to be imported.
+    """
+    profile = tmp_path / "acme.yaml"
+    profile.write_text(
+        yaml.safe_dump(
+            {
+                "id": "https://example.org/acme",
+                "name": "acme",
+                "prefixes": {"acme": "https://example.org/acme/"},
+                "default_prefix": "acme",
+                "default_range": "string",
+                "classes": {
+                    "AcmeTableAnnotations": {
+                        "annotations": {"acme:applies_to": "table"},
+                        "attributes": {"owner": {"range": "string"}},
+                    }
+                },
+            }
+        )
+    )
+    ext = Extension(name="acme", prefix="acme", profile=profile)
+    with registry.using(ext):
+        assert registry.declared_annotations("table") >= {"acme:owner"}
+        assert "acme" not in registry.importmap()
+
+
+def test_the_import_map_is_json_a_generator_can_read(
+    capsys: pytest.CaptureFixture[str], tmp_path: pathlib.Path
+) -> None:
+    """`--json` exists so the map can be handed to the tools it is for.
+
+    LinkML's generators all take `--importmap FILE` and read JSON. Printing
+    `prefix=path` is legible and is not that, so a user following the docs
+    had to reformat it by hand.
+    """
+    assert cli.main(["importmap", "--json"]) == 0
+    written = tmp_path / "im.json"
+    written.write_text(capsys.readouterr().out)
+    loaded = json.loads(written.read_text())
+    assert loaded == registry.importmap()
+    imported = importlib.import_module("linkml.generators.erdiagramgen")
+    out = imported.ERDiagramGenerator(str(RETAIL), importmap=loaded).serialize()
+    assert "DimCustomer" in out
+
+
+def test_uuid_still_resolves_through_the_import() -> None:
+    """The one thing the import is for still works.
+
+    Splitting the profile would be no fix at all if it took `range: uuid`
+    with it: the type is why the import exists.
+    """
+    model = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    assert "uuid" in model.view.all_types()
+    assert "UUID" in generate_sql(model)
