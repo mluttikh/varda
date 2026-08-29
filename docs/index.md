@@ -85,9 +85,16 @@ core vocabulary, and it is deliberately the entire core vocabulary — see the
 | `V701`–`V707` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross, a decimal one that never says what it keeps |
 | `V801`–`V804` | Physical naming and types — two classes emitting one table, a width on a column that has none, a range naming nothing |
 
-**Three generators**, `sql`, `docs` and `assertions`. All deterministic: no
-timestamps, no environment, same model in and same bytes out, so output can be
-committed and diffed.
+**Four generators** — `sql`, `docs`, `assertions` and `sqlalchemy`. All
+deterministic: no timestamps, no environment, same model in and same bytes
+out, so output can be committed and diffed.
+
+**The annotations reach runtime.** `sqlalchemy` emits SQLAlchemy Core tables
+— a `MetaData` and one `sa.Table`, no ORM — carrying every annotation on the
+`info` mapping. A consumer can read `SEMI_ADDITIVE over date_key` off a
+column and refuse the sum while the query is still being built, with no Varda
+installed. The module is checked against `sql/mart.sql` by building both in a
+real database and comparing catalogs.
 
 **Three levels of enforcement** — `--constraints enforced` (the default),
 `asserted`, `none`. A constraint claims something about the data *and* asks

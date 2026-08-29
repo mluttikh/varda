@@ -453,6 +453,70 @@ depends on the order, and the same model generates. The dependency ordering
 still runs, so that changing the level produces a diff about constraints and
 nothing else.
 
+## Why the SQLAlchemy generator is Core and not the ORM
+
+A star schema has no object graph to map. Its rows arrive in bulk and are
+read in aggregate, so the identity map, the unit of work and lazy loading are
+costs with nothing on the other side, and mapped classes would double the
+surface the generator has to keep correct. Core is also the layer that
+matches what Varda already knows — a name, columns, types and constraints —
+which is what makes the emitted module and `sql/mart.sql` two renderings of
+one model rather than two models. Somebody who wants an ORM maps against the
+`MetaData` this emits.
+
+Two things a `MetaData` carries that a `.sql` file cannot, and they are the
+reason this exists at all.
+
+`sa.Table` and `sa.Column` both take an `info` mapping that SQLAlchemy stores
+and never interprets, so the annotations reach runtime. A consumer holding
+the module reads `SEMI_ADDITIVE over date_key` off a column and refuses the
+sum while the query is still being built, with no Varda installed. Until this
+generator, `varda:additivity` and `varda:semi_additive_over` reached no
+machine-readable output at all: the rules call an unclassified measure the
+most expensive error a dimensional model produces, check it, and then the DDL
+gives the semi-additive balance and the additive quantity the same `NUMERIC`
+and records the difference nowhere.
+
+`comment` becomes a real `COMMENT ON TABLE` or `COMMENT ON COLUMN` when the
+metadata is created, which is where `information_schema` and every BI tool
+look. The DDL writes descriptions as `--` comments and the parser discards
+them.
+
+## Why the SQLAlchemy types are not the generic ones
+
+SQLAlchemy's defaults are tuned for OLTP and the ORM, and four of them are
+wrong for a warehouse.
+
+An integer primary key renders as `SERIAL`, because SQLAlchemy reads it as
+one the database generates. A warehouse surrogate key is assigned by the
+loader, and a sequence default would quietly fill in for a load that left it
+null — so every surrogate key carries `autoincrement=False`.
+
+`sa.DateTime()` is `DATETIME` on SQL Server at every server version, never
+`DATETIME2`: the bug the named dialects exist to prevent, arriving through
+another door, with 3.33 ms resolution and a floor at 1753. `sa.Date()` and
+`sa.Time()` are worse, because they are gated on the *connected* server's
+version and compile to `DATETIME` when nothing is connected — and compiling
+offline is what a generated module is for.
+
+An unsized `sa.String()` is `VARCHAR(max)` on SQL Server, which parses and
+then cannot carry the `UNIQUE` a natural key needs. The generator refuses it
+under that dialect exactly as the DDL does, so the two agree about which
+models are generatable.
+
+The answer to the three type findings is the shape already in the package: a
+base table with per-dialect overlays, which SQLAlchemy spells `with_variant`.
+There is no second dialect table — `gen_sql.TYPES` decides what a range
+means, `gen_sqlalchemy.TYPES` renders that decision, and a test says the two
+cover the same ranges.
+
+Identifier quoting is the one difference left alone. SQLAlchemy quotes
+reserved words and anything not plain lower case and leaves the rest bare,
+where Varda quotes everything. That is a per-dialect list maintained by
+people who do it for a living, which is the argument `sqlglot` is already
+trusted on — and it is why the two renderings are compared as database
+catalogs rather than as text.
+
 ## Why the claims outlive the constraints
 
 Turning enforcement off would otherwise withdraw a guarantee. Several

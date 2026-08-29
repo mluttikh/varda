@@ -1,123 +1,14 @@
 # A SQLAlchemy Core generator
 
-**Status: proposal. Nothing here is implemented.** Researched against
-SQLAlchemy 2.0.52 with a working prototype; every measurement below was taken
-rather than estimated. Sections that survive into the package belong in
-`docs/design.md`, in the register used there, and should be deleted from here
-when they get there.
+**Status: shipped, unreleased — except the two decisions below.** The
+generator, the type table, the variants and the catalog-equivalence check
+exist. The reasoning that survives into the package is in `docs/design.md`,
+under *Why the SQLAlchemy generator is Core and not the ORM* and *Why the
+SQLAlchemy types are not the generic ones*.
 
-## What it emits, and what it does not
-
-One Python module per model, holding SQLAlchemy **Core** table definitions: a
-`MetaData` and one `sa.Table` per table. No ORM — no declarative base, no
-mapped classes, no relationships, no session. A star schema has no object
-graph to map. Rows are loaded in bulk and read in aggregate, and the ORM's
-identity map and lazy loading are costs with nothing on the other side.
-
-Core is also the layer that matches what Varda already knows. A `Table` is a
-name, columns, types and constraints, which is exactly `gen_sql`'s subject
-matter — so the two generators are two renderings of one model rather than
-two models.
-
-## Why it is worth having
-
-The DDL is a file you run once. A `MetaData` is an object your code holds,
-and it can carry three things `sql/mart.sql` cannot.
-
-**Semantics that survive to runtime.** `sa.Table` and `sa.Column` both take an
-`info` dict — an arbitrary payload SQLAlchemy stores and never interprets.
-Varda's annotations go there, and a consumer reads them with no Varda
-installed:
-
-```
-table info : {'role': 'FACT', 'grain': ['date_key', 'product_key',
-              'store_key'], 'grain_statement': 'one row per product per
-              store per day', 'fact_type': 'PERIODIC_SNAPSHOT'}
-  quantity_on_hand SEMI_ADDITIVE  over=date_key
-```
-
-Which is enough to refuse an unsound query while it is still being built:
-
-```
-sum(quantity_on_hand) grouped by ['date_key']    -> sum(...)
-sum(quantity_on_hand) grouped by ['product_key'] -> REFUSED
-    quantity_on_hand is SEMI_ADDITIVE over date_key;
-    group by it or do not sum across it
-```
-
-That is roughly fifteen lines of ordinary Python in the consumer's own
-codebase. It matters because `varda:additivity` and `varda:semi_additive_over`
-currently reach **zero lines** of any machine-readable output: `rules.py`
-declares that an unclassified measure is the most expensive error a
-dimensional model produces, checks it, and then writes a `CREATE TABLE` where
-a semi-additive balance and an additive quantity are both `NUMERIC` and
-nothing anywhere records the difference. This is the first Varda output where
-that knowledge reaches something a program acts on.
-
-**Descriptions that reach the database catalog.** `sa.Column(comment=...)`
-becomes a real `COMMENT ON COLUMN` when the metadata is created:
-
-```
-CREATE TABLE mart.fct_inventory (...)
-COMMENT ON TABLE mart.fct_inventory IS 'Stock position, measured at ...'
-COMMENT ON COLUMN mart.fct_inventory.date_key IS 'The day this snapshot ...'
-```
-
-Varda's own DDL writes descriptions as `--` comments, which the parser
-discards. Through this path they land where `information_schema`, dbt's docs
-and every BI tool look for them.
-
-**A migration baseline.** Alembic's autogenerate diffs a live database
-against a `MetaData`, which is the object this emits. `SPEC.md` §4 defers
-model diffing because it "needs a stable vocabulary to diff against" — this
-does not settle that, but it does hand the standard tool the standard input.
-*Unverified: Alembic was not run. Do not put this in user-facing docs until
-it is.*
-
-## The shape
-
-```python
-bridge_customer_segment = sa.Table(
-    "bridge_customer_segment",
-    metadata,
-    sa.Column(
-        "customer_key",
-        sa.Integer(),
-        sa.ForeignKey("dim_customer.customer_key"),
-        nullable=False,
-        info={"role": "FOREIGN_KEY"},
-    ),
-    sa.Column(
-        "allocation_factor",
-        sa.Numeric(9, 6),
-        nullable=False,
-        comment="The share of this customer attributable to this segment.",
-        info={
-            "role": "MEASURE",
-            "additivity": "NON_ADDITIVE",
-            "unit": "ratio",
-        },
-    ),
-    sa.UniqueConstraint("customer_key", "segment_key"),
-    info={"role": "BRIDGE", "grain": ["customer_key", "segment_key"]},
-)
-```
-
-`MetaData(schema=...)` carries `--schema`, and foreign-key strings resolve
-into it — the prototype's targets report `schema='mart'` without the schema
-being written on each reference.
-
-Definition order does not matter. SQLAlchemy resolves a `ForeignKey` string
-lazily and `metadata.sorted_tables` orders `create_all` itself, so the module
-needs none of `gen_sql`'s dependency ordering. Emitting in the same order
-anyway is worth it for a reader comparing the two files.
-
-The emitted Python must be what `ruff format` would produce, at 79 columns.
-Generated output is read by people, the house rule applies to it, and a
-module that reformats on the consumer's first commit produces a diff nobody
-asked for. The prototype was 21 lines over 80 and `ruff format` fixed 13 of
-them; the remaining 8 were long `comment=` strings, which the generator has
-to wrap itself.
+Kept here: the measurements the design rests on and how to reproduce them,
+the SQLAlchemy behavior that was verified rather than assumed, the
+alternatives rejected, and the two decisions still open.
 
 ## What SQLAlchemy gets wrong for a warehouse
 
@@ -173,43 +64,27 @@ maintained by people who do it for a living, which is the argument `sqlglot`
 is already trusted on. It does mean the two DDL texts never match character
 for character, which is why the check below compares catalogs.
 
-## Types: a base table with overlays, which is `Dialect` again
+## What only the equivalence check found
 
-The first four findings all say the same thing — a generic SQLAlchemy type is
-not neutral, in precisely the way `gen_sql`'s module docstring says an
-imagined neutral SQL is not neutral. The answer is the same shape as the one
-already in the package: a base table, overlaid where Varda has a verified
-opinion. SQLAlchemy spells the overlay `with_variant`:
+`SERIAL` above was found by running the prototype at all. This one needed the
+check itself.
 
-```python
-sa.DateTime().with_variant(mssql.DATETIME2(), "mssql")
-# postgresql -> TIMESTAMP WITHOUT TIME ZONE      mssql -> DATETIME2
-```
-
-Measured, one type per row:
-
-| Varda range | postgresql | duckdb | mssql |
-| --- | --- | --- | --- |
-| `uuid` (`sa.Uuid`) | `UUID` | `UUID` | `UNIQUEIDENTIFIER` |
-| `boolean` | `BOOLEAN` | `BOOLEAN` | `BIT` |
-| `double` | `DOUBLE PRECISION` | `DOUBLE PRECISION` | `DOUBLE PRECISION` |
-| `datetime` + variant | `TIMESTAMP WITHOUT TIME ZONE` | same | `DATETIME2` |
-| `date` + variant | `DATE` | `DATE` | `DATE` |
-
-`sa.Uuid()` needs no variant: it is already `UUID` where there is one and
-`CHAR(32)` where there is not, which is the same judgment `TYPES` makes.
-
-There must not be a second type table. `gen_sql.TYPES` and `Dialect.types`
-are where a range's meaning is decided, and a parallel mapping in another
-generator is two answers to one question. The SQLAlchemy names are a
-*rendering* of the same decision and belong beside it.
+**A surrogate key that is not declared `required`.** The equivalence check
+failed on `examples/snowflake.yaml` under `--constraints none` and nowhere
+else. `gen_sql._column_line` gives a surrogate key `NOT NULL` when it has
+lost its `PRIMARY KEY` — half of what a primary key says, for free — and the
+first version of the SQLAlchemy column read `required` alone. `retail.yaml`
+declares its surrogate keys required and `snowflake.yaml` does not, so only
+one example told the two apart. Exactly the divergence the check exists for,
+found the day it was written.
 
 ## How it is verified
 
-Not by reading it. The prototype module was generated from
-`examples/retail.yaml`, its DDL compiled for PostgreSQL, executed against
-DuckDB, and the resulting catalog compared against the catalog that
-`gen_sql`'s own output produces:
+Not by reading it. The module is generated, its DDL compiled for PostgreSQL,
+executed against DuckDB, and the resulting catalog compared against the
+catalog `gen_sql`'s own output produces — for both examples at every
+constraint level, six combinations, since the levels are exactly where the
+two renderings could disagree about what to emit. On `retail.yaml`:
 
 ```
 columns match     : True (42 columns)
@@ -224,35 +99,32 @@ for, and it is the reason this generator is safe to own: it cannot drift from
 It needs no `duckdb_engine`. Compiling for PostgreSQL and executing on plain
 DuckDB is what the suite already does, and it keeps the dependency at one.
 
-The check should run at every `--constraints` level, since the levels are
-exactly where the two renderings could disagree.
-
 ## Decisions still open
 
 **Constraint naming.** SQLAlchemy's `MetaData(naming_convention=...)` turns a
-bare `UNIQUE (code)` into `CONSTRAINT uq_dim_x_code UNIQUE (code)`. Named
-constraints are much better for migrations — Alembic needs a name to drop or
-alter one — and half the reason to want this generator is migrations. The
-cost is that the emitted DDL then differs from `sql/mart.sql` by more than
-whitespace, and the catalog comparison above needs to compare constraint
-*shapes* rather than whole rows. Worth doing, and worth deciding
-deliberately.
+bare `UNIQUE (code)` into `CONSTRAINT uq_dim_x_code UNIQUE (code)`. Alembic
+needs a name to alter or drop a constraint, and migrations are half the
+reason to want this generator. The cost is the byte-level agreement with
+`sql/mart.sql`: the equivalence test compares database catalogs, and DuckDB
+reports constraint names, so adding a convention means comparing constraint
+*shapes* rather than whole rows. Shipped without one, deliberately, so that
+the check could be as strict as possible while the generator was new.
 
-**How `--constraints` maps.** A `Table` object is a declaration; nothing is
-enforced until `create_all` runs. So `asserted` is arguably what a `MetaData`
-already is. The recommendation is to honor the level anyway, so that the
-module and the DDL make the same claims and the equivalence check can run at
-all three — with the dropped claims recorded in `info`, as the DDL records
-them in comments.
+**Alembic, unverified.** Autogenerate diffs a live database against a
+`MetaData`, which is what this emits, and that is the expected use. It has
+not been run. Nothing in `docs/` claims it works, and nothing should until it
+has been.
 
-**The unsized-string refusal.** `gen_sql` refuses an unsized string under
-`--dialect sqlserver` only. This module is dialect-*neutral* — one file, every
-engine — so there is no dialect to condition on. Three options, none obviously
-right: refuse always, which is stricter than Varda is today; emit
-`sa.String()` and accept `VARCHAR(max)`, which reintroduces the bug; or invent
-a width in the variant, which is the default number nobody chose that `_facets`
-exists to refuse. Neither shipped example is affected — `customer_id` is
-`uuid`, not a bare string — so this can be settled when a model provokes it.
+**The unsized-string refusal, settled but worth revisiting.** `gen_sql`
+refuses an unsized string under `--dialect sqlserver`, and the generator now
+carries the same refusal, conditioned the same way. That keeps the two
+agreeing about which models are generatable, which is what the CLI's
+collect-then-write guarantee rests on. It is still odd that a
+dialect-*neutral* module is refused on account of a dialect flag. The
+alternative — always requiring a width — is stricter than Varda is anywhere
+else, and inventing one in the variant is the default number nobody chose
+that `_facets` exists to refuse. Neither shipped example is affected, and a
+model that provokes it is the right time to reopen this.
 
 ## What not to build
 
@@ -268,18 +140,6 @@ emitted — 2.1 MB, against the 174 MB `linkml` already costs. `pyproject.toml`
 already has the paragraph explaining why dev differs from runtime.
 
 **A second dialect table.** See above. One decision, two renderings.
-
-## Sequencing
-
-1. **The generator and the equivalence test.** `gen_sqlalchemy.py`, the
-   SQLAlchemy names beside `gen_sql.TYPES`, `python/mart.py` as the artifact,
-   and the DuckDB catalog comparison at all three constraint levels.
-2. **`info` as a documented contract.** What keys a consumer may rely on, in
-   `docs/`, with the refuse-an-unsound-sum example. The keys are the
-   annotation names, so there is nothing new to invent — but a consumer
-   reading them needs to know they are stable.
-3. **Alembic, verified.** Run autogenerate against a live database and a
-   generated `MetaData`, and only then say in the docs that it works.
 
 ## Reproducing the numbers
 

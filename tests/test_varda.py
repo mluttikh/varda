@@ -30,6 +30,7 @@ never a section in its own right.
     Types — what a column says it holds
     Constraints — how much the database is asked to police
     Interop — the claim that a Varda model is an ordinary LinkML schema
+    SQLAlchemy — the same model as objects, checked against the DDL
 """
 
 from __future__ import annotations
@@ -40,18 +41,31 @@ import importlib
 import importlib.metadata
 import json
 import pathlib
+import shutil
+import subprocess
 import textwrap
 import warnings
 from typing import TYPE_CHECKING, Any
 
 import duckdb
 import pytest
+import sqlalchemy as sa
 import sqlglot
 import yaml
 from linkml_runtime.utils.schemaview import SchemaView
+from sqlalchemy.dialects import mssql as sa_mssql
+from sqlalchemy.dialects import postgresql as sa_postgresql
+from sqlalchemy.schema import CreateTable
 from sqlglot import expressions as sqlglot_exp
 
-from varda import __version__, cli, gen_sql, registry, rules
+from varda import (
+    __version__,
+    cli,
+    gen_sql,
+    gen_sqlalchemy,
+    registry,
+    rules,
+)
 from varda.ext import Context, Extension, ExtensionError, Generator
 from varda.gen_assertions import generate as generate_assertions
 from varda.gen_docs import generate as generate_docs
@@ -4786,3 +4800,281 @@ def test_uuid_still_resolves_through_the_import() -> None:
     model = DimensionalModel.load(RETAIL, importmap=registry.importmap())
     assert "uuid" in model.view.all_types()
     assert "UUID" in generate_sql(model)
+
+
+# ---------------------------------------------------------------------------
+# SQLAlchemy — the same model as objects, checked against the DDL
+# ---------------------------------------------------------------------------
+
+# The generator is safe to own because it does not have to be trusted. Its
+# module and `sql/mart.sql` are two renderings of one model, and a real
+# database is asked whether they agree — so a change to either that the other
+# does not follow is a failing test rather than a discovery six months later.
+
+
+def _module(source: str, tmp_path: pathlib.Path, name: str) -> Any:
+    """Import a generated module, the way its reader would."""
+    path = tmp_path / f"{name}.py"
+    path.write_text(source)
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _sa_dialect(module: Any) -> Any:
+    """Build one SQLAlchemy dialect, without tripping `no-untyped-call`.
+
+    `sqlalchemy.dialects.postgresql.dialect` is assigned at import time
+    rather than declared, so it reaches mypy untyped. Reading it through an
+    `Any` says that in one place instead of putting a `type: ignore` at every
+    call site.
+    """
+    factory: Any = module.dialect
+    return factory()
+
+
+def _duckdb_catalog(con: duckdb.DuckDBPyConnection) -> tuple[Any, Any]:
+    """Read back what a database actually built, columns and constraints."""
+    columns = con.execute(
+        "select table_name, column_name, data_type, is_nullable "
+        "from information_schema.columns where table_schema = 'mart' "
+        "order by table_name, column_name"
+    ).fetchall()
+    constraints = con.execute(
+        "select table_name, constraint_type, "
+        "constraint_column_names::varchar from duckdb_constraints() "
+        "where schema_name = 'mart' "
+        "order by table_name, constraint_type, 3"
+    ).fetchall()
+    return columns, constraints
+
+
+@pytest.mark.parametrize("model", [RETAIL, SNOWFLAKE])
+@pytest.mark.parametrize("level", gen_sql.LEVELS)
+def test_the_module_and_the_ddl_build_the_same_database(
+    model: pathlib.Path, level: str, tmp_path: pathlib.Path
+) -> None:
+    """The check the whole generator rests on.
+
+    Both renderings are executed and the resulting catalogs compared, rather
+    than the two texts diffed: SQLAlchemy quotes only what needs quoting and
+    spells `TIMESTAMP WITHOUT TIME ZONE` in full, so the files never match
+    character for character even when they say the same thing.
+
+    Every level, because the levels are exactly where the two could disagree
+    about what to emit — and one of them did. Under `none` a surrogate key
+    keeps `NOT NULL`, and a model whose surrogate keys are not declared
+    `required` was what told the two apart.
+    """
+    loaded = DimensionalModel.load(model, importmap=registry.importmap())
+    module = _module(
+        gen_sqlalchemy.generate(loaded, "mart", "duckdb", level),
+        tmp_path,
+        f"mart_{level}",
+    )
+    theirs = duckdb.connect()
+    theirs.execute(generate_sql(loaded, "mart", "duckdb", level))
+    ours = duckdb.connect()
+    ours.execute("CREATE SCHEMA mart;")
+    for table in module.metadata.sorted_tables:
+        ours.execute(
+            str(CreateTable(table).compile(dialect=_sa_dialect(sa_postgresql)))
+        )
+    assert _duckdb_catalog(theirs) == _duckdb_catalog(ours)
+
+
+def test_the_type_tables_cover_the_same_ranges() -> None:
+    """Two lists of the ranges Varda knows are two answers to one question.
+
+    The SQLAlchemy names are a rendering of the decision `gen_sql.TYPES`
+    makes, not a second decision, so a range added to one and not the other
+    is a generator that raises on a model the other one builds.
+    """
+    assert set(gen_sqlalchemy.TYPES) == set(gen_sql.TYPES)
+
+
+@pytest.mark.parametrize("dialect_name", ["postgres", "sqlserver"])
+def test_every_range_renders_the_type_the_ddl_names(dialect_name: str) -> None:
+    """The variants exist to make SQLAlchemy agree with the dialect tables.
+
+    Compiled rather than compared as strings in a table, because that is the
+    whole point: `sa.DateTime()` is `DATETIME` on SQL Server at every server
+    version, and `sa.Date()` and `sa.Time()` are gated on a version that is
+    unknown when nothing is connected, so all three compile to `DATETIME`
+    offline. Only running the compiler finds that.
+
+    `WITHOUT TIME ZONE` is PostgreSQL spelling out the default the DDL leaves
+    implicit, and the unsized strings are refused under `sqlserver` before
+    they can be emitted — see `sa_type`.
+    """
+    sql = gen_sql.dialect(dialect_name)
+    compiler = {"postgres": sa_postgresql, "sqlserver": sa_mssql}[dialect_name]
+    unsized = {"string", "uri", "uriorcurie", "ncname"}
+    for rng in gen_sql.TYPES:
+        if sql.sizes_strings and rng in unsized:
+            continue
+        built = eval(  # noqa: S307 - the table's own values, no input
+            gen_sqlalchemy.TYPES[rng] + "()",
+            {"sa": sa, "mssql": sa_mssql},
+        )
+        if rng in gen_sqlalchemy.VARIANTS:
+            expr, name = gen_sqlalchemy.VARIANTS[rng]
+            built = built.with_variant(
+                eval(expr, {"mssql": sa_mssql}),  # noqa: S307
+                name,
+            )
+        rendered = built.compile(dialect=_sa_dialect(compiler))
+        assert rendered.replace(" WITHOUT TIME ZONE", "") == sql.type_of(rng)
+
+
+def test_a_surrogate_key_is_not_generated_by_the_database(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`autoincrement=False`, or SQLAlchemy emits SERIAL.
+
+    It reads an integer primary key as one the database generates. A
+    warehouse surrogate key is assigned by the loader, and a sequence default
+    would quietly fill in for a load that left it null — which is the bug the
+    key exists to make impossible. The first prototype died on DuckDB with
+    `Type with name SERIAL does not exist`.
+    """
+    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    source = gen_sqlalchemy.generate(loaded)
+    assert "autoincrement=False" in source
+    module = _module(source, tmp_path, "no_serial")
+    rendered = str(
+        CreateTable(module.metadata.tables["mart.dim_product"]).compile(
+            dialect=_sa_dialect(sa_postgresql)
+        )
+    )
+    assert "SERIAL" not in rendered
+    assert "product_key INTEGER NOT NULL" in rendered
+
+
+def test_the_annotations_reach_runtime(tmp_path: pathlib.Path) -> None:
+    """The reason this is worth more than a second rendering of the DDL.
+
+    `info` is a mapping SQLAlchemy stores and never interprets, so a consumer
+    holding the module reads what the model claimed with no Varda installed.
+    Until this generator, `varda:additivity` and `varda:semi_additive_over`
+    reached no machine-readable output at all.
+    """
+    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    module = _module(gen_sqlalchemy.generate(loaded), tmp_path, "runtime")
+    fact = module.metadata.tables["mart.fct_inventory"]
+    assert fact.info["role"] == "FACT"
+    assert fact.info["grain_statement"].startswith("one row per")
+    measure = fact.c["quantity_on_hand"]
+    assert measure.info["additivity"] == "SEMI_ADDITIVE"
+    assert measure.info["semi_additive_over"] == "date_key"
+
+    date = module.metadata.tables["mart.dim_date"]
+    assert [h["name"] for h in date.info["hierarchies"]] == [
+        "calendar",
+        "fiscal",
+    ]
+
+
+def test_a_description_becomes_a_database_comment(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Where `information_schema` and every BI tool look.
+
+    The DDL writes a description as a `--` comment and the parser throws it
+    away. Through this path it is a `COMMENT ON`, and it persists.
+    """
+    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    module = _module(gen_sqlalchemy.generate(loaded), tmp_path, "comments")
+    emitted: list[str] = []
+
+    def record(statement: Any, *_: Any, **__: Any) -> None:
+        emitted.append(str(statement.compile(dialect=engine.dialect)))
+
+    engine = sa.create_mock_engine("postgresql://", record)
+    module.metadata.create_all(engine)
+    comments = [s for s in emitted if s.strip().startswith("COMMENT ON")]
+    assert any("COMMENT ON TABLE mart.dim_customer" in c for c in comments)
+    assert any("COMMENT ON COLUMN mart.dim_customer" in c for c in comments)
+
+
+def test_the_emitted_module_is_already_formatted(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Generated Python is read by people and lands in somebody's repository.
+
+    A module that reformats on its reader's first commit produces a diff
+    nobody asked for, so the generator emits what `ruff format` would. The
+    drill paths of the date dimension are what force the wrapping: written
+    flat they run to 192 columns.
+    """
+    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    source = gen_sqlalchemy.generate(loaded)
+    assert max(len(line) for line in source.splitlines()) <= 80
+    written = tmp_path / "mart.py"
+    written.write_text(source)
+    ruff = shutil.which("ruff")
+    if ruff is None:
+        pytest.skip("ruff is not on PATH")
+    # S603: the arguments are a resolved executable, literals, and a path
+    # written two lines above into a directory pytest made.
+    run = subprocess.run(  # noqa: S603
+        [ruff, "format", "--check", "--line-length", "80", str(written)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_the_module_imports_nothing_of_vardas() -> None:
+    """The consumer installs SQLAlchemy, not Varda.
+
+    A generated artifact that needs its generator at runtime is a dependency
+    nobody agreed to, and it would put Varda in the import graph of every
+    service that reads the warehouse.
+    """
+    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    source = gen_sqlalchemy.generate(loaded)
+    assert "varda" not in source.replace("Generated by varda", "")
+    imports = [
+        ln for ln in source.splitlines() if ln.startswith(("import ", "from "))
+    ]
+    assert imports == [
+        "import sqlalchemy as sa",
+        "from sqlalchemy.dialects import mssql",
+    ]
+
+
+def test_the_dialect_import_appears_only_when_it_is_used(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An unused import is a finding in the reader's own lint run."""
+    plain = dimension()
+    plain["attributes"]["label"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    source = gen_sqlalchemy.generate(build(tmp_path, {"DimThing": plain}))
+    assert "mssql" not in source
+    _module(source, tmp_path, "no_mssql")
+
+
+def test_an_unsized_string_is_refused_where_it_cannot_be_a_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The DDL's refusal, carried over rather than reinvented.
+
+    SQLAlchemy renders an unsized `sa.String()` as `VARCHAR(max)` on SQL
+    Server. That parses, and then cannot carry the `UNIQUE` a natural key
+    needs. Refusing keeps the two generators agreeing about which models are
+    generatable, which is what the CLI's collect-then-write rests on.
+    """
+    model = build(tmp_path, {"DimThing": dimension()})
+    with pytest.raises(GenerationError, match="varda:max_length"):
+        gen_sqlalchemy.generate(model, "mart", "sqlserver")
+
+
+def test_generation_is_deterministic() -> None:
+    """Same model in, same bytes out — the property the whole tree rests on."""
+    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    assert gen_sqlalchemy.generate(loaded) == gen_sqlalchemy.generate(loaded)

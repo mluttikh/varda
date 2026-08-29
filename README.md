@@ -67,6 +67,7 @@ $ varda check model.yaml
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
+wrote out/python/mart.py
 wrote out/sql/assertions.sql
 wrote out/sql/mart.sql
 ```
@@ -108,10 +109,24 @@ live. A structural mistake usually breaks a query. An additivity mistake
 returns a number that looks entirely reasonable and is wrong, to someone who
 will act on it.
 
-**Three generators**, `sql`, `docs` and `assertions`, producing runnable DDL,
-a Markdown reference, and the model's claims as queries over the data. All
-deterministic: no timestamps, no environment, same model in and same bytes
-out, so the output can be committed and diffed.
+**Four generators** — `sql`, `docs`, `assertions` and `sqlalchemy` —
+producing runnable DDL, a Markdown reference, the model's claims as queries
+over the data, and SQLAlchemy Core table definitions. All deterministic: no
+timestamps, no environment, same model in and same bytes out, so the output
+can be committed and diffed.
+
+**The annotations reach runtime.** `sqlalchemy` emits a `MetaData` and one
+`sa.Table` per table — Core, not the ORM — with every annotation on the
+`info` mapping SQLAlchemy stores and never interprets. A consumer holding the
+module, with no Varda installed, can refuse a query before it runs:
+
+```
+sum(quantity_on_hand) grouped by ['product_key'] → REFUSED
+    quantity_on_hand is SEMI_ADDITIVE over date_key
+```
+
+The module and `sql/mart.sql` are held together by execution: both are run
+against DuckDB at every constraint level and the resulting catalogs compared.
 
 **Three levels of enforcement** — `varda generate mart.yaml --constraints
 asserted`. A constraint is two things at once: a claim about the data, and an
