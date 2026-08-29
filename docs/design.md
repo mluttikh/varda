@@ -482,40 +482,53 @@ metadata is created, which is where `information_schema` and every BI tool
 look. The DDL writes descriptions as `--` comments and the parser discards
 them.
 
-## Why the SQLAlchemy types are not the generic ones
+## Why the SQLAlchemy module names no database
 
-SQLAlchemy's defaults are tuned for OLTP and the ORM, and four of them are
-wrong for a warehouse.
+The DDL names one engine per run, deliberately, because there is no neutral
+SQL. The SQLAlchemy module is the opposite artifact on purpose: generic types
+throughout, no dialect imported, one file every engine reads. That is the
+whole reason to have both.
 
-An integer primary key renders as `SERIAL`, because SQLAlchemy reads it as
-one the database generates. A warehouse surrogate key is assigned by the
+Which means Varda does not correct SQLAlchemy's type table, and there is a
+temptation to. `sa.DateTime()` compiles to `DATETIME` on SQL Server at every
+server version rather than `DATETIME2` — 3.33 ms resolution and a floor at
+1753, which is close to the bug the named dialects exist to prevent. One
+`with_variant` would fix it.
+
+It is not taken, because the same judgment was already delegated one line
+away. Identifier quoting is SQLAlchemy's: it quotes reserved words and
+anything not plain lower case and leaves the rest bare, where Varda quotes
+everything, and Varda does not second-guess it — a per-dialect list is
+maintained by people who do it for a living, which is the argument `sqlglot`
+is already trusted on. What a type means on each engine is the same kind of
+knowledge kept by the same people. Pinning one engine's spelling into every
+module would take half of that judgment back while leaving the rest, and put
+`from sqlalchemy.dialects import mssql` into modules read by people who will
+never touch SQL Server.
+
+Where Varda does have an engine-specific opinion, it is in `sql/mart.sql`
+under `--dialect sqlserver`, which is the artifact for creating tables on a
+named engine. The generated module's header says so, so a reader who needs
+`DATETIME2` knows where it lives.
+
+The divergences are pinned rather than left to chance: a test compiles every
+range against PostgreSQL and SQL Server and asserts each lands either on what
+the dialect tables name or on a listed exception — nine of them, each with the
+reason it is tolerated. A new disagreement from either side fails there. Two
+of the nine are worth knowing about because they read worse than they are:
+`sa.Date()` and `sa.Time()` are gated on the *connected* server's version and
+resolve correctly against any SQL Server 2008 or later, so `DATETIME` is what
+they compile to with nothing connected and not what a real deployment gets.
+
+One SQLAlchemy default is corrected, because it is not a dialect opinion at
+all. An integer primary key renders as `SERIAL`, since SQLAlchemy reads it as
+one the database generates; a warehouse surrogate key is assigned by the
 loader, and a sequence default would quietly fill in for a load that left it
-null — so every surrogate key carries `autoincrement=False`.
+null. Every surrogate key carries `autoincrement=False`.
 
-`sa.DateTime()` is `DATETIME` on SQL Server at every server version, never
-`DATETIME2`: the bug the named dialects exist to prevent, arriving through
-another door, with 3.33 ms resolution and a floor at 1753. `sa.Date()` and
-`sa.Time()` are worse, because they are gated on the *connected* server's
-version and compile to `DATETIME` when nothing is connected — and compiling
-offline is what a generated module is for.
-
-An unsized `sa.String()` is `VARCHAR(max)` on SQL Server, which parses and
-then cannot carry the `UNIQUE` a natural key needs. The generator refuses it
-under that dialect exactly as the DDL does, so the two agree about which
-models are generatable.
-
-The answer to the three type findings is the shape already in the package: a
-base table with per-dialect overlays, which SQLAlchemy spells `with_variant`.
-There is no second dialect table — `gen_sql.TYPES` decides what a range
-means, `gen_sqlalchemy.TYPES` renders that decision, and a test says the two
-cover the same ranges.
-
-Identifier quoting is the one difference left alone. SQLAlchemy quotes
-reserved words and anything not plain lower case and leaves the rest bare,
-where Varda quotes everything. That is a per-dialect list maintained by
-people who do it for a living, which is the argument `sqlglot` is already
-trusted on — and it is why the two renderings are compared as database
-catalogs rather than as text.
+There is no second table of ranges. `gen_sql.TYPES` decides what a range
+means, `gen_sqlalchemy.TYPES` says which generic type renders that decision,
+and a test asserts the two cover the same ranges.
 
 ## Why the claims outlive the constraints
 

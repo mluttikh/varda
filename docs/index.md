@@ -93,8 +93,9 @@ out, so output can be committed and diffed.
 — a `MetaData` and one `sa.Table`, no ORM — carrying every annotation on the
 `info` mapping. A consumer can read `SEMI_ADDITIVE over date_key` off a
 column and refuse the sum while the query is still being built, with no Varda
-installed. The module is checked against `sql/mart.sql` by building both in a
-real database and comparing catalogs.
+installed. It names no database — generic types, one module for every engine
+— while the DDL goes on naming one at a time, and the two are checked against
+each other by building both in a real database and comparing catalogs.
 
 **Three levels of enforcement** — `--constraints enforced` (the default),
 `asserted`, `none`. A constraint claims something about the data *and* asks

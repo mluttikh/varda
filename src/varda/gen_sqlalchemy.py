@@ -34,27 +34,38 @@ from __future__ import annotations
 import textwrap
 from typing import TYPE_CHECKING
 
-from .gen_sql import (
-    DEFAULT_DIALECT,
-    DEFAULT_LEVEL,
-    GenerationError,
-    enforcement,
-)
-from .gen_sql import dialect as sql_dialect
+from .gen_sql import DEFAULT_LEVEL, Dialect, GenerationError, enforcement
 
 if TYPE_CHECKING:
     from .ext import Context
-    from .gen_sql import Dialect, Enforcement
+    from .gen_sql import Enforcement
     from .model import Column, DimensionalModel, Table
 
 #: LinkML range to the SQLAlchemy type that renders it. The keys are
 #: :data:`varda.gen_sql.TYPES`'s keys and a test says so, because two lists of
 #: the ranges Varda knows are two answers to one question.
 #:
-#: The values are a *rendering* of the decision that table makes, not a second
-#: decision. `float` maps to `sa.Double` rather than `sa.Float` because
-#: `TYPES` maps it to `DOUBLE PRECISION`; `sa.Float` renders a bare `FLOAT`,
-#: which PostgreSQL treats as the same thing and spells differently.
+#: Generic types only, and no dialect ever appears in the emitted module.
+#: That is the point of the artifact: one definition every engine reads,
+#: where `gen_sql` deliberately writes one dialect at a time.
+#:
+#: It is also the same delegation this generator already makes about
+#: identifiers. SQLAlchemy quotes what each engine needs quoted and leaves
+#: the rest bare, and Varda does not second-guess it, because that list is
+#: maintained per dialect by people who do it for a living — the argument
+#: `sqlglot` is already trusted on. What a type means on each engine is the
+#: same kind of knowledge, kept by the same people. Pinning
+#: `mssql.DATETIME2()` into every module to correct one of them would be
+#: taking half that judgment back while leaving the rest.
+#:
+#: Where Varda does have an opinion an engine needs and SQLAlchemy's generic
+#: type does not carry — `DATETIME2` rather than `DATETIME` on SQL Server —
+#: it is in `sql/mart.sql` under `--dialect sqlserver`, which is the artifact
+#: for creating tables on a named engine. The module header says so.
+#:
+#: `float` maps to `sa.Double` rather than `sa.Float` because `TYPES` maps it
+#: to `DOUBLE PRECISION`. That is not a dialect opinion — it is which generic
+#: type renders the decision `TYPES` already made.
 TYPES = {
     "string": "sa.String",
     "integer": "sa.Integer",
@@ -71,30 +82,6 @@ TYPES = {
     "ncname": "sa.String",
 }
 
-#: Where a generic SQLAlchemy type does not render what Varda decided, per
-#: dialect. The same shape :class:`varda.gen_sql.Dialect` already uses — a
-#: base table with overlays — because the finding is the same one: there is
-#: no neutral SQL, and a type that looks neutral is a type nobody checked.
-#:
-#: Three of the four are the same failure. SQLAlchemy compiles `Date`, `Time`
-#: and `DateTime` for SQL Server against the *connected server's* version, and
-#: with nothing connected it assumes a server older than 2008 and renders all
-#: three as `DATETIME`. Compiling offline is what a generated module is for,
-#: so the offline answer is the one that ships. `DATETIME` for a `valid_from`
-#: is the bug the named dialects exist to prevent, arriving through another
-#: door: 3.33 ms resolution and a floor at 1753.
-#:
-#: `FLOAT` is not a correction but an agreement. T-SQL treats it as a synonym
-#: for `DOUBLE PRECISION`, and naming it the way `Dialect.types` names it
-#: keeps the two generators comparable character for character.
-VARIANTS = {
-    "date": ("mssql.DATE()", "mssql"),
-    "time": ("mssql.TIME()", "mssql"),
-    "datetime": ("mssql.DATETIME2()", "mssql"),
-    "float": ("mssql.FLOAT()", "mssql"),
-    "double": ("mssql.FLOAT()", "mssql"),
-}
-
 #: The width the emitted module is wrapped to, matching the house rule the
 #: rest of the generated output follows.
 LINE_LIMIT = 80
@@ -109,7 +96,7 @@ COLUMN_INFO = (
 )
 
 
-def sa_type(column: Column, sql: Dialect) -> str:
+def sa_type(column: Column) -> str:
     """Render a column's type as the SQLAlchemy expression that builds it.
 
     Resolved through the range's own type chain, nearest first, exactly as
@@ -117,12 +104,9 @@ def sa_type(column: Column, sql: Dialect) -> str:
     ``money: {typeof: decimal}`` reaches `sa.Numeric` the same way it reaches
     `NUMERIC`.
 
-    The unsized-string refusal is carried over rather than reinvented. Under a
-    dialect where a bare `VARCHAR` is not "as long as it needs to be",
-    SQLAlchemy renders `sa.String()` as `VARCHAR(max)` — which parses, and
-    then cannot carry the `UNIQUE` a natural key needs. Refusing here keeps
-    the two generators agreeing about which models are generatable, which is
-    what the collect-then-write guarantee in the CLI rests on.
+    No dialect is consulted and none can be. What each engine makes of a
+    generic type is SQLAlchemy's to know, and the module is worth having
+    because it is the one artifact here that does not pick an engine.
     """
     base = next((TYPES[r] for r in column.type_chain if r in TYPES), None)
     if base is None:
@@ -133,19 +117,7 @@ def sa_type(column: Column, sql: Dialect) -> str:
             f"(tried {tried}). Known ranges: {known}"
         )
         raise GenerationError(msg)
-    if sql.sizes_strings and base == "sa.String" and column.max_length is None:
-        msg = (
-            f"{column}: a string column needs varda:max_length under "
-            f"--dialect {sql.name}, where SQLAlchemy renders an unsized "
-            f"string as VARCHAR(max), which cannot be a key column"
-        )
-        raise GenerationError(msg)
-    out = f"{base}({_args(column)})"
-    found = next((r for r in column.type_chain if r in VARIANTS), None)
-    if found is not None:
-        expr, name = VARIANTS[found]
-        out = f'{out}.with_variant({expr}, "{name}")'
-    return out
+    return f"{base}({_args(column)})"
 
 
 def _args(column: Column) -> str:
@@ -264,12 +236,12 @@ def _hierarchies(table: Table) -> list[dict[str, object]]:
     ]
 
 
-def _column(column: Column, sql: Dialect, rule: Enforcement) -> str:
+def _column(column: Column, rule: Enforcement) -> str:
     """Render one ``sa.Column``, one argument per line."""
     lines = [
         "    sa.Column(",
         f"        {_quote(column.physical)},",
-        f"        {sa_type(column, sql)},",
+        f"        {sa_type(column)},",
     ]
     target = (
         column.table.model.table(column.references or "")
@@ -304,24 +276,31 @@ def _column(column: Column, sql: Dialect, rule: Enforcement) -> str:
     return "\n".join(lines)
 
 
-def _table(table: Table, sql: Dialect, rule: Enforcement) -> str:
+def _table(table: Table, rule: Enforcement) -> str:
     """Render one ``sa.Table``."""
     lines = [
         f"{table.physical} = sa.Table(",
         f"    {_quote(table.physical)},",
         "    metadata,",
     ]
-    lines += [_column(c, sql, rule) for c in table.columns]
+    lines += [_column(c, rule) for c in table.columns]
     if rule.unique:
         for claim in table.unique_claims:
             cols = ", ".join(_quote(c.physical) for c in claim)
             lines.append(f"    sa.UniqueConstraint({cols}),")
     if table.description:
         lines.append(f"    comment={_text(table.description, 4)},")
+    # What the level dropped, said in the one place this module can say it.
+    # The DDL writes the same claims into a comment block; here they are
+    # data, so a consumer can still read what the loader is trusted to hold.
+    dropped: list[list[str]] = []
+    if rule.documented:
+        dropped = [[c.physical for c in claim] for claim in table.unique_claims]
     info = _mapping(
         [
             ("role", table.role),
             ("grain", list(table.grain)),
+            ("unique_unenforced", dropped),
             ("grain_statement", table.grain_statement),
             ("scd", table.scd),
             ("fact_type", table.fact_type),
@@ -338,33 +317,36 @@ def _table(table: Table, sql: Dialect, rule: Enforcement) -> str:
 def generate(
     model: DimensionalModel,
     schema: str = "mart",
-    dialect_name: str = DEFAULT_DIALECT,
     level: str = DEFAULT_LEVEL,
 ) -> str:
     """Render the whole model as one SQLAlchemy Core module."""
-    sql = sql_dialect(dialect_name)
-    rule = enforcement(level, sql)
+    # A dialect with no way to mark a constraint unenforced, which is the
+    # truth about this layer: SQLAlchemy has no `RELY`. So `asserted` reads
+    # here the way it reads on an engine that enforces — the primary keys
+    # stay, the rest of the claims move into `info` rather than being
+    # declared — and that reading is the same on every engine, which is what
+    # a database-neutral module needs it to be.
+    rule = enforcement(level, Dialect("sqlalchemy"))
     # Dimensions, then bridges, then facts — the order the DDL emits, so the
     # two files read side by side. Nothing here needs it: SQLAlchemy resolves
     # a `ForeignKey` string lazily and `metadata.sorted_tables` orders
     # `create_all` itself, so a cycle that stops the DDL does not stop this.
     tables = [*model.dimensions, *model.bridges, *model.facts]
-    blocks = [_table(t, sql, rule) for t in tables]
+    blocks = [_table(t, rule) for t in tables]
     header = [
         '"""Generated by varda. Do not edit.',
         "",
         f"Source: {model.source.name}",
-        f"Dialect: {sql.name}",
         f"Constraints: {level}",
+        "",
+        "Database-neutral: the types are SQLAlchemy's generic ones and no",
+        "dialect is named, so one module serves every engine. Where an",
+        "engine wants a spelling a generic type does not produce —",
+        "DATETIME2 rather than DATETIME on SQL Server — sql/mart.sql under",
+        "--dialect sqlserver is where that decision lives.",
         '"""',
         "",
         "import sqlalchemy as sa",
-    ]
-    # Only when a variant needs it. An unused import is a finding in the
-    # reader's own lint run, and this module is theirs once it is written.
-    if any("mssql." in block for block in blocks):
-        header.append("from sqlalchemy.dialects import mssql")
-    header += [
         "",
         f"metadata = sa.MetaData(schema={_quote(schema)})",
         "",
@@ -374,9 +356,10 @@ def generate(
 
 
 def run(ctx: Context) -> dict[str, str]:
-    """Run this generator and return its artifacts."""
-    return {
-        "python/mart.py": generate(
-            ctx.model, ctx.schema, ctx.dialect, ctx.constraints
-        )
-    }
+    """Run this generator and return its artifacts.
+
+    ``ctx.dialect`` is deliberately unread. `Context` says a generator
+    emitting something other than DDL is free to ignore it, and this is that
+    generator: naming an engine is what the DDL is for.
+    """
+    return {"python/mart.py": generate(ctx.model, ctx.schema, ctx.constraints)}

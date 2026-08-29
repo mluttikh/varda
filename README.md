@@ -125,7 +125,9 @@ sum(quantity_on_hand) grouped by ['product_key'] → REFUSED
     quantity_on_hand is SEMI_ADDITIVE over date_key
 ```
 
-The module and `sql/mart.sql` are held together by execution: both are run
+It names no database — generic types throughout, `import sqlalchemy as sa`
+and nothing else — so one module serves every engine, while the DDL goes on
+naming one at a time. The two are held together by execution: both are run
 against DuckDB at every constraint level and the resulting catalogs compared.
 
 **Three levels of enforcement** — `varda generate mart.yaml --constraints

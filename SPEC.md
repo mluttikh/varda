@@ -45,12 +45,12 @@ reason the core can stay small enough to be correct.
 | `rules.py` | ~1640 | `RuleSet`, `Finding`, and the 48 core rules. |
 | `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~170 | Markdown reference. |
-| `gen_sqlalchemy.py` | ~380 | SQLAlchemy Core tables, carrying the annotations to runtime. |
+| `gen_sqlalchemy.py` | ~365 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~450 | Five commands. |
 
-**5,453 lines of source**: 2,915 of code, 1,267 of docstrings, 430 of
+**5,436 lines of source**: 2,889 of code, 1,268 of docstrings, 438 of
 comment, 841 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
@@ -59,7 +59,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 322 tests in 5,080 lines.
+importable is kept to what is meant to be imported. And 323 tests in 5,132 lines.
 
 ### The four seams
 
@@ -196,13 +196,16 @@ extension-discovery routes a third party actually uses, which had never been
 tested — and which broke the moment they were.
 
 **Unreleased — the model as objects, not only as a script.** A SQLAlchemy
-Core generator: a `MetaData` and one `sa.Table` per table, no ORM. Worth more
+Core generator: a `MetaData` and one `sa.Table` per table, no ORM, and no
+database named anywhere in it — generic types throughout, so one module
+serves every engine while the DDL goes on naming one at a time. Worth more
 than a second rendering, because `info` carries the annotations to runtime —
 a consumer refuses to sum a semi-additive measure across the dimension it is
 not additive over, with no Varda installed — and `comment` reaches the
 database catalog, which the DDL's `--` comments do not. It is held to the DDL
 by execution: both are run against DuckDB at every constraint level and the
-catalogs compared.
+catalogs compared, and where the generic types differ from the dialect tables
+a test pins each divergence rather than correcting it.
 
 **Unreleased — a model imports what it needs and nothing else.** The profile
 is split: the vocabulary stays where the registry reads it, and a new

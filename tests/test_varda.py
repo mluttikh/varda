@@ -4871,7 +4871,7 @@ def test_the_module_and_the_ddl_build_the_same_database(
     """
     loaded = DimensionalModel.load(model, importmap=registry.importmap())
     module = _module(
-        gen_sqlalchemy.generate(loaded, "mart", "duckdb", level),
+        gen_sqlalchemy.generate(loaded, "mart", level),
         tmp_path,
         f"mart_{level}",
     )
@@ -4896,38 +4896,99 @@ def test_the_type_tables_cover_the_same_ranges() -> None:
     assert set(gen_sqlalchemy.TYPES) == set(gen_sql.TYPES)
 
 
-@pytest.mark.parametrize("dialect_name", ["postgres", "sqlserver"])
-def test_every_range_renders_the_type_the_ddl_names(dialect_name: str) -> None:
-    """The variants exist to make SQLAlchemy agree with the dialect tables.
+#: Where a generic SQLAlchemy type does not render what `gen_sql` names for
+#: an engine. Pinned rather than corrected: what a type means on each engine
+#: is SQLAlchemy's to know, the same way what needs quoting is, and a module
+#: that names a dialect is not the database-neutral artifact this is for.
+#: Listed so the divergence is declared and a change in either side is caught.
+KNOWN_TYPE_DIVERGENCE = {
+    # `sa.DateTime()` is `DATETIME` at every SQL Server version. The DDL
+    # emits `DATETIME2` under `--dialect sqlserver`, which is where an
+    # engine-specific decision belongs.
+    ("sqlserver", "datetime"): "DATETIME",
+    # `Date` and `Time` are gated on the *connected* server's version and
+    # resolve correctly against any SQL Server 2008 or later. This is what
+    # they compile to with nothing connected, which is the only way a test
+    # can ask.
+    ("sqlserver", "date"): "DATETIME",
+    ("sqlserver", "time"): "DATETIME",
+    # T-SQL treats `DOUBLE PRECISION` as a synonym for `FLOAT(53)`, so this
+    # is two spellings of one type and nothing turns on it.
+    ("sqlserver", "float"): "DOUBLE PRECISION",
+    ("sqlserver", "double"): "DOUBLE PRECISION",
+    # An unsized string. The DDL refuses this under `--dialect sqlserver`
+    # rather than emitting it, because a `VARCHAR(max)` cannot be a key
+    # column; SQLAlchemy widens instead.
+    ("sqlserver", "string"): "VARCHAR(max)",
+    ("sqlserver", "uri"): "VARCHAR(max)",
+    ("sqlserver", "uriorcurie"): "VARCHAR(max)",
+    ("sqlserver", "ncname"): "VARCHAR(max)",
+}
 
-    Compiled rather than compared as strings in a table, because that is the
-    whole point: `sa.DateTime()` is `DATETIME` on SQL Server at every server
-    version, and `sa.Date()` and `sa.Time()` are gated on a version that is
-    unknown when nothing is connected, so all three compile to `DATETIME`
-    offline. Only running the compiler finds that.
+
+@pytest.mark.parametrize("dialect_name", ["postgres", "sqlserver"])
+def test_every_range_renders_what_it_is_expected_to(dialect_name: str) -> None:
+    """The generic types against the dialect tables, agreement and all.
+
+    They agree everywhere on PostgreSQL, which is the base both are written
+    against. On SQL Server they differ in nine places, every one of them
+    listed above — so this is not a test that they match but a test that the
+    divergence is the one that was decided on. A new disagreement, from
+    either side, fails here.
 
     `WITHOUT TIME ZONE` is PostgreSQL spelling out the default the DDL leaves
-    implicit, and the unsized strings are refused under `sqlserver` before
-    they can be emitted — see `sa_type`.
+    implicit, and is not a divergence.
     """
     sql = gen_sql.dialect(dialect_name)
     compiler = {"postgres": sa_postgresql, "sqlserver": sa_mssql}[dialect_name]
-    unsized = {"string", "uri", "uriorcurie", "ncname"}
     for rng in gen_sql.TYPES:
-        if sql.sizes_strings and rng in unsized:
-            continue
         built = eval(  # noqa: S307 - the table's own values, no input
             gen_sqlalchemy.TYPES[rng] + "()",
-            {"sa": sa, "mssql": sa_mssql},
+            {"sa": sa},
         )
-        if rng in gen_sqlalchemy.VARIANTS:
-            expr, name = gen_sqlalchemy.VARIANTS[rng]
-            built = built.with_variant(
-                eval(expr, {"mssql": sa_mssql}),  # noqa: S307
-                name,
-            )
         rendered = built.compile(dialect=_sa_dialect(compiler))
-        assert rendered.replace(" WITHOUT TIME ZONE", "") == sql.type_of(rng)
+        rendered = rendered.replace(" WITHOUT TIME ZONE", "")
+        expected = KNOWN_TYPE_DIVERGENCE.get(
+            (dialect_name, rng), sql.type_of(rng)
+        )
+        assert rendered == expected, f"{dialect_name}/{rng}"
+
+
+def test_the_module_names_no_database() -> None:
+    """The artifact is worth having because it does not pick an engine.
+
+    Identifier quoting was already SQLAlchemy's to decide, on the grounds
+    that a per-dialect list is maintained by people who do it for a living.
+    Types are the same kind of knowledge kept by the same people, so pinning
+    one engine's spelling into every module would be taking half of that
+    judgment back. Where Varda does have an engine-specific opinion, it is in
+    the DDL, and the module header says where.
+    """
+    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    source = gen_sqlalchemy.generate(loaded)
+    for engine in ("mssql", "postgresql", "duckdb", "snowflake", "variant"):
+        assert engine not in source.replace("sqlserver", ""), engine
+    assert "sql/mart.sql" in source
+
+
+def test_a_weaker_level_records_the_claims_it_drops(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A claim that vanishes without a word is one nobody knows is made.
+
+    The DDL writes them into a comment block. Here they are data, which is
+    the one place this module has to put them — and the more useful of the
+    two, since a consumer can read it.
+    """
+    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    module = _module(
+        gen_sqlalchemy.generate(loaded, "mart", "asserted"),
+        tmp_path,
+        "asserted_claims",
+    )
+    bridge = module.metadata.tables["mart.bridge_customer_segment"]
+    assert not bridge.constraints - {bridge.primary_key}
+    assert bridge.info["unique_unenforced"] == [["customer_key", "segment_key"]]
 
 
 def test_a_surrogate_key_is_not_generated_by_the_database(
@@ -5042,36 +5103,27 @@ def test_the_module_imports_nothing_of_vardas() -> None:
     imports = [
         ln for ln in source.splitlines() if ln.startswith(("import ", "from "))
     ]
-    assert imports == [
-        "import sqlalchemy as sa",
-        "from sqlalchemy.dialects import mssql",
-    ]
+    assert imports == ["import sqlalchemy as sa"]
 
 
-def test_the_dialect_import_appears_only_when_it_is_used(
+def test_an_unsized_string_is_refused_by_the_ddl_and_not_by_the_module(
     tmp_path: pathlib.Path,
 ) -> None:
-    """An unused import is a finding in the reader's own lint run."""
-    plain = dimension()
-    plain["attributes"]["label"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
-    source = gen_sqlalchemy.generate(build(tmp_path, {"DimThing": plain}))
-    assert "mssql" not in source
-    _module(source, tmp_path, "no_mssql")
+    """Where the two generators are allowed to disagree, and why.
 
-
-def test_an_unsized_string_is_refused_where_it_cannot_be_a_key(
-    tmp_path: pathlib.Path,
-) -> None:
-    """The DDL's refusal, carried over rather than reinvented.
-
-    SQLAlchemy renders an unsized `sa.String()` as `VARCHAR(max)` on SQL
-    Server. That parses, and then cannot carry the `UNIQUE` a natural key
-    needs. Refusing keeps the two generators agreeing about which models are
-    generatable, which is what the CLI's collect-then-write rests on.
+    `VARCHAR(max)` on SQL Server parses and then cannot carry the `UNIQUE` a
+    natural key needs, so the DDL refuses it under that dialect. The module
+    names no dialect and so has nothing to refuse on — and nothing is lost,
+    because the run that would have written a bad `CREATE TABLE` is the run
+    the DDL stops, before anything is written.
     """
     model = build(tmp_path, {"DimThing": dimension()})
     with pytest.raises(GenerationError, match="varda:max_length"):
-        gen_sqlalchemy.generate(model, "mart", "sqlserver")
+        generate_sql(model, "mart", "sqlserver")
+    # And the module does not refuse it, because it names no engine: an
+    # unsized string is `VARCHAR` on the engines that have one and
+    # SQLAlchemy's business on the ones that do not.
+    assert "sa.String()" in gen_sqlalchemy.generate(model)
 
 
 def test_generation_is_deterministic() -> None:
