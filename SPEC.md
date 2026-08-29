@@ -226,8 +226,19 @@ conformance kit: `varda ext --check NAME` runs a third-party extension against
 a fixture model twice, asserts identical findings and identical artifacts, and
 AST-scans for imports of anything outside `varda.ext`.
 
-**Generators on demand.** SQLAlchemy models and an ERD are the two most asked
-for. Both are mechanical against `model.py`.
+**A SQLAlchemy Core generator.** Not the ORM — a `MetaData` and one
+`sa.Table` per table. Mechanical against `model.py`, and worth more than a
+second rendering of the DDL: `sa.Column(info=...)` carries the annotations to
+runtime, where a consumer can refuse to sum a semi-additive measure across
+the dimension it is not additive over, and `comment=` reaches the database
+catalog, which `--` comments in the DDL do not. It is also checkable — the
+emitted module's DDL and `sql/mart.sql` produce the same DuckDB catalog, so
+the two cannot drift apart unnoticed. SQLAlchemy's own defaults need
+correcting first, and there are five of them. Design note, measurements and
+the open decisions in `design/sqlalchemy-generator.md`.
+
+**More generators on demand.** An ERD is the next most asked for, and is
+mechanical against `model.py`.
 
 **1.0 — freeze the vocabulary.**
 The commitment at 1.0 is that annotations and rule codes do not change
