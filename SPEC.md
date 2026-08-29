@@ -234,6 +234,18 @@ tree, compare against what is committed, exit non-zero on drift. Add
 as RDF graphs or as a sorted set of SQL statements rather than as bytes. This
 is the highest-value remaining item and it is small.
 
+**Say whether a datetime is an instant.** Varda accepts a timezone-aware
+declaration and silently discards it: a column ranged on a schema's own
+`timestamptz: {typeof: datetime}` passes `--strict` with no findings and
+generates a naive `TIMESTAMP`, because `sql_type` falls through the type
+chain to the base. That fallback is right for a refinement and wrong for a
+variant, and nothing tells them apart. A version period is defined on
+instants — the profile says so — so the ambiguity lands exactly where it
+costs most. The fix is a declared type rather than an annotation, for three
+reasons, one of which is that a range is visible to stock LinkML generators
+and an annotation is not. Design note, measurements, and the two decisions it
+needs — the name, and whether a rule nudges — in `design/temporal-types.md`.
+
 **Make extensions safe to depend on.** `requires_profile` pinning, plus the
 conformance kit: `varda ext --check NAME` runs a third-party extension against
 a fixture model twice, asserts identical findings and identical artifacts, and
