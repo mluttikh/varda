@@ -39,7 +39,7 @@ from .ext import (
     Generator,
     Severity,
 )
-from .model import PROFILE
+from .model import PROFILE, TYPES
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -92,6 +92,7 @@ def varda_extension() -> Extension:
         prefix="varda",
         version=__version__,
         profile=PROFILE,
+        types=TYPES,
         rules=rules.RULES,
         rule_tag="V",
         package="varda",
@@ -336,6 +337,7 @@ def _validate(found: list[Extension]) -> None:
     _check_rule_codes(found)
     _check_artifacts(found)
     _check_profiles(found)
+    _check_types(found)
     _check_vocabulary_collisions(found)
     _check_severity_defaults(found)
 
@@ -455,6 +457,35 @@ def _check_artifacts(found: list[Extension]) -> None:
                     )
                     raise ExtensionError(msg)
                 paths[path] = gen.name
+
+
+def _check_types(found: list[Extension]) -> None:
+    """Refuse a types schema that declares anything a model must not import.
+
+    A LinkML import is a union. Whatever this schema declares becomes part of
+    every model importing it and is emitted by every stock generator that
+    walks the class list — so a class or an enum here is not vocabulary a
+    model gains, it is output a model did not ask for. Varda's own profile
+    was importable for three releases and put `TableAnnotations`, `Level` and
+    `Hierarchy` into every diagram, JSON schema, Pydantic module and OWL
+    graph generated from a model that followed the documentation.
+
+    Checked at load rather than left to a test, because an extension author
+    hits it on their own schema, where the message can name the file.
+    """
+    for ext in found:
+        view = ext.types_view
+        if ext.types is None or view is None:
+            continue
+        declared = sorted(view.schema.classes) + sorted(view.schema.enums)
+        if declared:
+            msg = (
+                f"{ext.name}: {ext.types.name} is imported by domain models "
+                f"and may declare types only, but declares "
+                f"{', '.join(repr(n) for n in declared)}. Move them to the "
+                f"profile, which Varda reads without a model importing it."
+            )
+            raise ExtensionError(msg)
 
 
 def _check_profiles(found: list[Extension]) -> None:
@@ -721,14 +752,23 @@ def exemptions() -> list[str]:
 
 
 def importmap() -> dict[str, str]:
-    """Map symbolic profile imports to paths on this machine.
+    """Map symbolic imports to paths on this machine.
 
     Lets a domain model write ``imports: - varda`` instead of a relative path
     into site-packages. Not cached and never written to disk: the values are
     absolute paths, so a committed map is wrong on every other machine.
+
+    Built from ``Extension.types``, never from ``Extension.profile``. The map
+    is what a model imports, and a LinkML import is a union — so exposing a
+    profile here puts its annotation classes into the importing schema, where
+    every stock generator that walks the class list emits them. Varda's own
+    profile was in this map for three releases, and `gen-erdiagram` drew
+    `TableAnnotations` as a table in every diagram of every model that
+    followed the documentation. An extension declaring only annotations has
+    nothing a model needs and now appears here not at all.
     """
     out: dict[str, str] = {}
     for ext in extensions():
-        if ext.profile is not None:
-            out[ext.prefix] = str(ext.profile.with_suffix(""))
+        if ext.types is not None:
+            out[ext.prefix] = str(ext.types.with_suffix(""))
     return out

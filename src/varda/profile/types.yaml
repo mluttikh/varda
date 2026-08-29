@@ -1,0 +1,58 @@
+# The schema a domain model imports, and the only one it should.
+#
+# Varda's vocabulary lives in `varda.yaml` and is read by the registry
+# straight off disk — a model never imports it and never needs to. What a
+# model can need from Varda is a *type*, because a range has to resolve for
+# the file to be a legal LinkML schema at all. That is this file, and it
+# holds exactly one.
+#
+# The split is not tidiness. A LinkML import is a transitive union: whatever
+# the imported schema declares becomes part of the importing schema, and
+# every generator that walks the class list emits it. While `imports: - varda`
+# reached the vocabulary, `gen-erdiagram` drew `TableAnnotations` as a table,
+# `gen-pydantic` emitted a model for `Level`, and `gen-owl` wrote four
+# `owl:Class` for objects that are never instantiated. Varda's premise is that
+# a model carrying its annotations is an ordinary LinkML schema every other
+# tool reads correctly, and that premise was false for the one configuration
+# the documentation told people to write. See `docs/design.md`.
+id: https://w3id.org/varda/types
+name: varda_types
+title: The Varda profile — types
+description: >-
+  The types a Varda-annotated model may need to name, and nothing else.
+
+  Imported with `imports: - varda`. Everything else Varda declares — the
+  annotations, the enumerations, the shapes of the structured annotations —
+  is in `varda.yaml`, which `varda check` reads directly and which a domain
+  model must not import: a LinkML import is a union, and vocabulary declared
+  for a validator to read becomes output in every generator that walks the
+  classes of the importing schema.
+
+license: https://creativecommons.org/publicdomain/zero/1.0/
+prefixes:
+  linkml: https://w3id.org/linkml/
+  varda: https://w3id.org/varda/
+default_prefix: varda
+default_range: string
+imports:
+  - linkml:types
+
+types:
+
+  uuid:
+    typeof: string
+    uri: xsd:string
+    description: >-
+      A 128-bit identifier, written in the canonical 8-4-4-4-12 hexadecimal
+      form. Emitted as the database's own UUID type where there is one —
+      `UUID` on PostgreSQL, DuckDB and Snowflake, `UNIQUEIDENTIFIER` on SQL
+      Server — and as characters where there is not.
+
+      Almost always a natural key rather than a surrogate one. A surrogate
+      key exists to be narrow, and a UUID is four times the width of an
+      integer in every fact row that joins to it; a UUID arriving from a
+      source system is a business identifier and belongs where the other
+      business identifiers are. Varda does not enforce that, because where a
+      warehouse gets its keys is a decision with more behind it than a rule
+      here could see.
+    pattern: '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'

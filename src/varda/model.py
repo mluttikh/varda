@@ -32,7 +32,15 @@ if TYPE_CHECKING:
         SlotDefinition,
     )
 
+#: The vocabulary — annotations, enums, and the shapes of the structured
+#: ones. Read straight off disk by the registry. A domain model never
+#: imports it; see :data:`TYPES`.
 PROFILE = pathlib.Path(__file__).parent / "profile" / "varda.yaml"
+
+#: The schema a domain model imports, and all that `imports: - varda`
+#: resolves to. One type, because a range must resolve for a file to be a
+#: legal LinkML schema and LinkML has no `uuid`.
+TYPES = pathlib.Path(__file__).parent / "profile" / "types.yaml"
 
 _BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 

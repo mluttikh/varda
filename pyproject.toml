@@ -38,11 +38,15 @@ classifiers = [
     "Typing :: Typed",
 ]
 
-# Only linkml-runtime. The full `linkml` distribution pulls a large tree in
-# order to provide generators, and Varda's generators are hand-written against
-# the model layer rather than against LinkML's generator framework. A minimal
-# dependency set is most of what makes this installable inside somebody else's
-# pipeline without an argument.
+# Only linkml-runtime at runtime. The full `linkml` distribution pulls a large
+# tree in order to provide generators, and Varda's generators are hand-written
+# against the model layer rather than against LinkML's generator framework. A
+# minimal dependency set is most of what makes this installable inside
+# somebody else's pipeline without an argument.
+#
+# It is a dev dependency, though — see `dev` below. Not a contradiction: what
+# is expensive is shipping it to every consumer, and what is necessary is
+# running it here.
 dependencies = ["linkml-runtime>=1.9"]
 
 [project.optional-dependencies]
@@ -71,6 +75,21 @@ dev = [
     # the same mapping for a living, so the tables are compared against it
     # rather than against nothing. Pure Python, no engines.
     "sqlglot>=25",
+    # Runs the stock generators. The premise of the whole package is that a
+    # Varda-annotated model is an ordinary LinkML schema every other tool
+    # reads correctly, and for three releases that was false in the one
+    # configuration the documentation told people to write: `imports: - varda`
+    # pulled the profile's annotation classes into the model, so
+    # `gen-erdiagram` drew `TableAnnotations` as a table and `gen-owl` wrote
+    # an `owl:Class` for `Level`. Nothing noticed, because the claim was
+    # argued rather than executed.
+    #
+    # This is the same argument duckdb and sqlglot are here for, one layer
+    # out: an interop claim that is never run against the tool it names is a
+    # claim about intentions. 174 MB to install and about half a second to
+    # import, which is a real cost and a smaller one than being wrong about
+    # the premise.
+    "linkml>=1.8",
 ]
 docs = [
     "mkdocs-material>=9.5",

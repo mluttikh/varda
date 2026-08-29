@@ -18,7 +18,18 @@ keeps history. It then checks those claims and generates from them.
 
 A model annotated with Varda is still an ordinary LinkML schema. Every other
 LinkML tool — `gen-pydantic`, `gen-owl`, `gen-json-schema` — will read it
-happily and ignore what it does not understand.
+happily and ignore what it does not understand. The suite runs those four
+generators over the shipped examples and asserts that nothing of Varda's own
+appears in what they emit, because a claim like this one is worth what it is
+tested at.
+
+A model that names `uuid` writes `imports: - varda`, which resolves through a
+map Varda prints for the tool that needs it:
+
+```console
+$ varda importmap --json > im.json
+$ gen-erdiagram --importmap im.json mart.yaml
+```
 
 ```yaml
 FctSale:
