@@ -45,12 +45,13 @@ reason the core can stay small enough to be correct.
 | `rules.py` | ~1640 | `RuleSet`, `Finding`, and the 48 core rules. |
 | `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~170 | Markdown reference. |
+| `gen_sqlalchemy.py` | ~365 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
-| `generators.py` | ~35 | Varda's generators, registered through the public interface. |
+| `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~450 | Five commands. |
 
-**5,062 lines of source**: 2,683 of code, 1,198 of docstrings, 384 of
-comment, 797 blank. The prose share is deliberate and is house style —
+**5,436 lines of source**: 2,889 of code, 1,268 of docstrings, 438 of
+comment, 841 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -58,7 +59,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 305 tests in 4,788 lines.
+importable is kept to what is meant to be imported. And 324 tests in 5,205 lines.
 
 ### The four seams
 
@@ -194,6 +195,18 @@ schema declares generates instead of stopping the generator. Plus the two
 extension-discovery routes a third party actually uses, which had never been
 tested — and which broke the moment they were.
 
+**Unreleased — the model as objects, not only as a script.** A SQLAlchemy
+Core generator: a `MetaData` and one `sa.Table` per table, no ORM, and no
+database named anywhere in it — generic types throughout, so one module
+serves every engine while the DDL goes on naming one at a time. Worth more
+than a second rendering, because `info` carries the annotations to runtime —
+a consumer refuses to sum a semi-additive measure across the dimension it is
+not additive over, with no Varda installed — and `comment` reaches the
+database catalog, which the DDL's `--` comments do not. It is held to the DDL
+by execution: both are run against DuckDB at every constraint level and the
+catalogs compared, and where the generic types differ from the dialect tables
+a test pins each divergence rather than correcting it.
+
 **Unreleased — a model imports what it needs and nothing else.** The profile
 is split: the vocabulary stays where the registry reads it, and a new
 `types.yaml` carries the one type a model names. `imports: - varda` means
@@ -226,8 +239,16 @@ conformance kit: `varda ext --check NAME` runs a third-party extension against
 a fixture model twice, asserts identical findings and identical artifacts, and
 AST-scans for imports of anything outside `varda.ext`.
 
-**Generators on demand.** SQLAlchemy models and an ERD are the two most asked
-for. Both are mechanical against `model.py`.
+**Finish the SQLAlchemy generator.** The generator and its equivalence check
+have shipped; two things from `design/sqlalchemy-generator.md` have not.
+Document what `info` keys a consumer may rely on, so reading them is a
+contract rather than a guess. And decide on a constraint naming convention,
+which Alembic needs to alter or drop a constraint and which costs the
+byte-level agreement between the module and `sql/mart.sql` — then run Alembic
+autogenerate against a live database before any documentation says it works.
+
+**More generators on demand.** An ERD is the next most asked for, and is
+mechanical against `model.py`.
 
 **1.0 — freeze the vocabulary.**
 The commitment at 1.0 is that annotations and rule codes do not change

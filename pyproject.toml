@@ -90,6 +90,15 @@ dev = [
     # import, which is a real cost and a smaller one than being wrong about
     # the premise.
     "linkml>=1.8",
+    # Executes what the SQLAlchemy generator emits. The module and
+    # `sql/mart.sql` are two renderings of one model, and the suite asks a
+    # real database whether they agree — which is the only way to hold them
+    # together, since SQLAlchemy quotes only what needs quoting and spells
+    # `TIMESTAMP WITHOUT TIME ZONE` in full, so the two files never match as
+    # text. It also finds what reading cannot: SQLAlchemy renders an integer
+    # primary key as `SERIAL`, and `Date`, `Time` and `DateTime` all as
+    # `DATETIME` on SQL Server when no server version is known. 2.1 MB.
+    "sqlalchemy>=2",
 ]
 docs = [
     "mkdocs-material>=9.5",

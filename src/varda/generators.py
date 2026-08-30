@@ -7,7 +7,7 @@ would be a facade and nobody would find out until they tried to use it.
 
 from __future__ import annotations
 
-from . import gen_assertions, gen_docs, gen_sql
+from . import gen_assertions, gen_docs, gen_sql, gen_sqlalchemy
 from .ext import Generator
 
 BUILTIN: tuple[Generator, ...] = (
@@ -31,5 +31,14 @@ BUILTIN: tuple[Generator, ...] = (
         name="docs",
         artifacts=("docs/model.md",),
         run=gen_docs.run,
+    ),
+    # The same model as `sql`, rendered as objects a program holds rather
+    # than a script it runs. Registered beside it rather than behind a flag:
+    # the two are checked against each other, and a generator that only runs
+    # when asked is one nobody checks.
+    Generator(
+        name="sqlalchemy",
+        artifacts=("python/mart.py",),
+        run=gen_sqlalchemy.run,
     ),
 )
