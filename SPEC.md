@@ -43,23 +43,24 @@ reason the core can stay small enough to be correct.
 | `ext.py` | ~210 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
 | `registry.py` | ~770 | Discovery, validation, lookup. Where colliding extensions are refused. |
 | `rules.py` | ~1640 | `RuleSet`, `Finding`, and the 48 core rules. |
-| `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
+| `gen_sql.py` | ~615 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~170 | Markdown reference. |
-| `gen_sqlalchemy.py` | ~365 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
+| `gen_sqlalchemy.py` | ~380 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~450 | Five commands. |
 
-**5,436 lines of source**: 2,889 of code, 1,268 of docstrings, 438 of
-comment, 841 blank. The prose share is deliberate and is house style —
+**5,464 lines of source**: 2,894 of code, 1,270 of docstrings, 458 of
+comment, 842 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
 Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
-`profile/types.yaml` holds the one type a model may need to name, and is all
-that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 324 tests in 5,205 lines.
+`profile/types.yaml` holds the two types a model may need to name and LinkML
+cannot, and is all that `imports: - varda` resolves to; a LinkML import is a
+union, so what is importable is kept to what is meant to be imported. And 333
+tests in 5,362 lines.
 
 ### The four seams
 
@@ -209,12 +210,28 @@ a test pins each divergence rather than correcting it.
 
 **Unreleased — a model imports what it needs and nothing else.** The profile
 is split: the vocabulary stays where the registry reads it, and a new
-`types.yaml` carries the one type a model names. `imports: - varda` means
+`types.yaml` carries the types a model names. `imports: - varda` means
 what it always did and no model needs an edit; what changed is that four
 annotation classes and five enums stop arriving with it and stop appearing in
 every stock generator's output. `Extension.types` generalizes it, the import
 map is built from it alone, and `varda importmap --json` prints the map in
 the shape a generator's `--importmap` reads.
+
+**Unreleased — a datetime can say whether it is an instant.** Varda used to
+accept a timezone-aware declaration and silently discard it: a column ranged
+on a schema's own `timestamptz: {typeof: datetime}` passed `--strict` with
+nothing to report and generated a naive `TIMESTAMP`, because resolving
+through `typeof` fell past the near end of the chain to the base. That is
+right for a refinement — `money: {typeof: decimal}` should reach `NUMERIC` —
+and wrong for a variant, and nothing tells the two apart, so `timestamptz` is
+now Varda's own type in `types.yaml`: `TIMESTAMP WITH TIME ZONE` on the base
+table, `DATETIMEOFFSET` on SQL Server, `sa.DateTime(timezone=True)` in the
+module. A type and not an annotation, because a range is visible to every
+stock LinkML generator and an annotation is not — and the distinction a
+version period turns on is the last thing that should stop at Varda's edge.
+`examples/retail.yaml` now versions on it. Fractional precision was
+considered and declined, and a rule warning on a naive `VERSION_START` was
+too: both in `design/temporal-types.md`.
 
 **Unreleased — the operator chooses when the check runs.** A constraint is a
 claim about the data *and* an instruction to verify it on every write, and

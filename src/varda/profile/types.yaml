@@ -4,7 +4,7 @@
 # straight off disk — a model never imports it and never needs to. What a
 # model can need from Varda is a *type*, because a range has to resolve for
 # the file to be a legal LinkML schema at all. That is this file, and it
-# holds exactly one.
+# holds only what LinkML's own type set leaves a model no way to say.
 #
 # The split is not tidiness. A LinkML import is a transitive union: whatever
 # the imported schema declares becomes part of the importing schema, and
@@ -38,6 +38,27 @@ imports:
   - linkml:types
 
 types:
+
+  timestamptz:
+    typeof: datetime
+    uri: xsd:dateTimeStamp
+    description: >-
+      A datetime carrying a UTC offset, so that it names an instant rather
+      than a reading on somebody's clock. Emitted as the engine's own aware
+      type — `TIMESTAMP WITH TIME ZONE` on PostgreSQL, DuckDB and Snowflake,
+      `DATETIMEOFFSET` on SQL Server.
+
+      Where it earns its place is `VERSION_START` and `VERSION_END`. A
+      version period is closed at its start and open at its end, and that
+      convention is what stops consecutive versions overlapping at their
+      boundary — a claim about instants, which two loaders disagreeing about
+      the session zone falsify without any rule here being able to see it.
+      The same value is then also what `UNIQUE (natural key, VERSION_START)`
+      compares, so a zone that shifts under a reload moves a row's identity.
+
+      Varda does not require it. A warehouse that stores UTC in naive columns
+      throughout has made the decision properly, and a warning there would
+      fire on models that are already right.
 
   uuid:
     typeof: string

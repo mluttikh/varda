@@ -9,8 +9,9 @@ recommended `--strict`, under which its own example exited non-zero.
 Hand-verification does not survive contact with a changing rule set, so this
 runs the page's own model and compares. It is deliberately narrow — it does
 not diff whole transcripts, which would fail on cosmetic edits — and checks
-the two things that actually go wrong: the model still validates, and the
-counts quoted across the docs match what the tool reports.
+the three things that actually go wrong: the model still validates, the counts
+quoted across the docs match what the tool reports, and the generated reference
+still documents everything the profile declares.
 """
 
 from __future__ import annotations
@@ -132,6 +133,29 @@ def _range_faults(pages: list[Path], codes: list[str]) -> list[str]:
     return out
 
 
+def _undocumented_types() -> list[str]:
+    """Report a type the profile declares and the reference does not show.
+
+    Every type has to reach the page a reader is sent to for what a range may
+    name. The reference builds that section from a view, and when the profile
+    was split into vocabulary and types the view it read stopped holding any
+    — so the page went on generating and simply stopped documenting `uuid`,
+    with no section left to notice the absence of. Asked for by name, because
+    that is the failure: not a wrong number but a heading that is not there.
+    """
+    page = ROOT / "docs" / "reference" / "vocabulary.md"
+    view = registry.varda_extension().types_view
+    if view is None or not page.exists():
+        return []
+    text = page.read_text(encoding="utf-8")
+    return [
+        f"docs/reference/vocabulary.md: does not document the `{name}` "
+        f"type, which the profile declares"
+        for name in view.schema.types
+        if f"| `{name}` |" not in text
+    ]
+
+
 def main() -> int:
     """Check the docs against the tool, and report what disagrees."""
     failures: list[str] = []
@@ -208,6 +232,7 @@ def main() -> int:
                     )
 
     failures += _range_faults(pages, codes)
+    failures += _undocumented_types()
 
     # Console transcripts quote the version the tool prints in its summary
     # line, and every one of them went stale at 0.1.0 without a word.

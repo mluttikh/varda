@@ -15,7 +15,7 @@ default_prefix: retail
 default_range: string
 imports:
   - linkml:types
-  # For `uuid`, which LinkML's own type set does not carry.
+  # For `uuid` and `timestamptz`, absent from LinkML's own type set.
   - varda
 
 classes:
@@ -108,14 +108,18 @@ classes:
           varda:role: ATTRIBUTE
           varda:max_length: 2
       valid_from:
-        description: Start of this version's period, inclusive.
-        range: datetime
+        description: >-
+          Start of this version's period, inclusive. Aware rather than naive,
+          because the period is closed here and open at `valid_to`, and that
+          convention only keeps consecutive versions from overlapping if both
+          ends name the same instant to every reader.
+        range: timestamptz
         required: true
         annotations:
           varda:role: VERSION_START
       valid_to:
         description: End of this version's period, exclusive; open if null.
-        range: datetime
+        range: timestamptz
         annotations:
           varda:role: VERSION_END
       is_current:
