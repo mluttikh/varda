@@ -247,6 +247,18 @@ which Alembic needs to alter or drop a constraint and which costs the
 byte-level agreement between the module and `sql/mart.sql` — then run Alembic
 autogenerate against a live database before any documentation says it works.
 
+**Emit a data contract.** The field converged on the Open Data Contract
+Standard in December 2025 — the one real alternative deprecated itself in
+ODCS's favour — and ODCS has no vocabulary at all for grain, additivity,
+slowly-changing type, surrogate keys or hierarchies. Its only nod to grain is
+a free-text `dataGranularityDescription`, which is `varda:grain_statement`
+without the checkable half beside it. A `gen_odcs` generator makes a Varda
+model an upstream of that standard rather than a format nobody else reads,
+and makes the twenty-eight formats the Data Contract CLI already exports
+downstream of one for free. Fifteen of twenty-two mappings are one-to-one and
+the output validates against a published JSON Schema. Design note, the full
+mapping, and the three decisions it needs in `design/odcs-generator.md`.
+
 **More generators on demand.** An ERD is the next most asked for, and is
 mechanical against `model.py`.
 
