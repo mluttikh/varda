@@ -48,6 +48,11 @@ TYPES = {
     "boolean": "BOOLEAN",
     "date": "DATE",
     "datetime": "TIMESTAMP",
+    # The aware form, spelled in full as `DOUBLE PRECISION` is: `TIMESTAMPTZ`
+    # is PostgreSQL's own abbreviation for it, which DuckDB and Snowflake
+    # both take, and the standard spelling says which of the two a reader is
+    # looking at without their having to know that.
+    "timestamptz": "TIMESTAMP WITH TIME ZONE",
     "time": "TIME",
     "uuid": "UUID",
     "uri": "VARCHAR",
@@ -132,6 +137,12 @@ DIALECTS: dict[str, Dialect] = {
             # produces a type-2 dimension whose version period holds no
             # dates, and nothing anywhere reports it.
             "datetime": "DATETIME2",
+            # T-SQL has no `WITH TIME ZONE` on any type; the offset-bearing
+            # datetime is its own. Note that this is the one range where
+            # `gen_sqlalchemy`'s generic type needs no correction here:
+            # `sa.DateTime(timezone=True)` renders `DATETIMEOFFSET` of its
+            # own accord, where the naive `sa.DateTime()` renders `DATETIME`.
+            "timestamptz": "DATETIMEOFFSET",
             # There is no boolean type; `BIT` is what everyone uses.
             "boolean": "BIT",
             "float": "FLOAT",

@@ -23,8 +23,9 @@ generators over the shipped examples and asserts that nothing of Varda's own
 appears in what they emit, because a claim like this one is worth what it is
 tested at.
 
-A model that names `uuid` writes `imports: - varda`, which resolves through a
-map Varda prints for the tool that needs it:
+A model that names one of Varda's own types — `uuid`, `timestamptz` — writes
+`imports: - varda`, which resolves through a map Varda prints for the tool that
+needs it:
 
 ```console
 $ varda importmap --json > im.json

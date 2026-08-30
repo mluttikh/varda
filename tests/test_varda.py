@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import datetime
 import decimal
 import importlib
 import importlib.metadata
@@ -3525,6 +3526,7 @@ TYPE_ALIASES = {
     "DECIMAL": "NUMERIC",
     "TEXT": "VARCHAR",
     "DOUBLE": "DOUBLE PRECISION",
+    "TIMESTAMPTZ": "TIMESTAMP WITH TIME ZONE",
 }
 
 
@@ -3765,6 +3767,131 @@ def test_uuid_without_the_import_is_reported(tmp_path: pathlib.Path) -> None:
     found = [f for f in rules.check(model) if f.rule == "V804"]
     assert len(found) == 1
     assert "imports: - varda" in found[0].message
+
+
+# --- timestamptz -------------------------------------------------------------
+
+
+def _aware(
+    tmp_path: pathlib.Path, rng: str = "timestamptz"
+) -> DimensionalModel:
+    """Build a type-2 dimension whose version period is on the given range."""
+    table = versioned(
+        valid_from={
+            "range": rng,
+            "required": True,
+            "annotations": {"varda:role": "VERSION_START"},
+        },
+        valid_to=_col("VERSION_END", rng),
+        is_current=_col("IS_CURRENT", "boolean"),
+    )
+    table["attributes"]["d_id"]["annotations"]["varda:max_length"] = 20
+    return build(tmp_path, {"DimThing": table}, imports=["varda"])
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("postgres", "TIMESTAMP WITH TIME ZONE"),
+        ("duckdb", "TIMESTAMP WITH TIME ZONE"),
+        ("snowflake", "TIMESTAMP WITH TIME ZONE"),
+        ("sqlserver", "DATETIMEOFFSET"),
+    ],
+)
+def test_timestamptz_emits_the_engines_aware_type(
+    tmp_path: pathlib.Path, name: str, expected: str
+) -> None:
+    model = _aware(tmp_path)
+    assert f'"valid_from" {expected}' in generate_sql(model, dialect_name=name)
+
+
+def test_timestamptz_is_a_variant_and_not_a_refinement(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The finding this type closes, in the form it was found in.
+
+    A schema declaring `timestamptz: {typeof: datetime}` for itself passed
+    `check --strict` with nothing to report and generated a naive
+    `TIMESTAMP`: `sql_type` walks the chain, finds no entry for the near end
+    and falls through to the far one. That fallback is right for a
+    *refinement* — a `money: {typeof: decimal}` should reach `NUMERIC` rather
+    than stopping the generator — and wrong for a *variant*, which exists to
+    mark a difference from its parent. Nothing distinguishes the two, so the
+    variant has to be a type Varda declares and maps.
+    """
+    aware = _aware(tmp_path)
+    naive = _aware(tmp_path, rng="datetime")
+    column = aware.dimensions[0].column("valid_from")
+    assert column is not None
+    assert column.type_chain == ("timestamptz", "datetime")
+    assert '"valid_from" TIMESTAMP WITH TIME ZONE' in generate_sql(aware)
+    assert '"valid_from" TIMESTAMP NOT NULL' in generate_sql(naive)
+
+
+def test_timestamptz_is_the_profiles_and_not_the_generators(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Declared where every other LinkML tool can see it, as `uuid` is.
+
+    A `varda:` annotation would have been invisible to `gen-owl`,
+    `gen-json-schema` and `gen-pydantic`, which read ranges and nothing else
+    — so the one distinction a version period turns on would have been the
+    one thing that did not survive leaving this package.
+    """
+    model = _aware(tmp_path)
+    found = model.view.get_type("timestamptz")
+    assert found is not None
+    assert found.typeof == "datetime"
+    assert "V804" not in codes(model)
+
+
+def test_timestamptz_without_the_import_is_reported(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The silent downgrade is now a finding, before anything is generated."""
+    table = versioned(
+        valid_from={
+            "range": "timestamptz",
+            "required": True,
+            "annotations": {"varda:role": "VERSION_START"},
+        },
+        valid_to=_col("VERSION_END"),
+        is_current=_col("IS_CURRENT", "boolean"),
+    )
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in rules.check(model) if f.rule == "V804"]
+    assert len(found) == 1
+    assert "imports: - varda" in found[0].message
+
+
+def test_an_aware_column_names_one_instant_to_every_reader(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The hazard the type exists for, executed rather than argued.
+
+    The same stored value read under three session zones. A naive column
+    yields three different instants, which is what makes a version boundary
+    something two loaders can disagree about — and `UNIQUE (natural key,
+    VERSION_START)`, which Varda derives, then compares a number that moved.
+    """
+    conn = duckdb.connect()
+    conn.execute(generate_sql(_aware(tmp_path), dialect_name="duckdb"))
+    conn.execute(
+        "INSERT INTO mart.dim_thing (d_key, d_id, is_current, valid_from) "
+        "VALUES (1, 'a', true, TIMESTAMPTZ '2026-06-01 02:30:00+02')"
+    )
+    read = []
+    for zone in ("GMT0", "Etc/GMT-2", "Etc/GMT+5"):
+        conn.execute(f"SET TimeZone='{zone}'")
+        read.append(
+            conn.execute(
+                "SELECT typeof(valid_from), valid_from AT TIME ZONE 'UTC' "
+                "FROM mart.dim_thing"
+            ).fetchone()
+        )
+    stored = datetime.datetime(2026, 6, 1, 0, 30)
+    assert read[0] == ("TIMESTAMP WITH TIME ZONE", stored)
+    assert read.count(read[0]) == len(read)
 
 
 # --- V804 — a range that names nothing ---------------------------------------
@@ -4679,14 +4806,37 @@ def test_no_stock_generator_emits_varda_vocabulary(
     """The claim, executed against the four generators the README names.
 
     Both examples, because they differ in the way that matters: `retail.yaml`
-    imports the profile for `uuid` and `snowflake.yaml` does not, and the
-    polluted one was the one following the documentation.
+    imports the profile for `uuid` and `timestamptz` and `snowflake.yaml`
+    does not, and the polluted one was the one following the documentation.
     """
     module, _, name = generator.partition(".")
     imported = importlib.import_module(f"linkml.generators.{module}")
     out = _generated(getattr(imported, name), model)
     found = [word for word in VOCABULARY if word in out]
     assert not found, f"{generator} emitted {found} from {model.name}"
+
+
+def test_a_declared_type_survives_into_stock_generator_output() -> None:
+    """Why `timestamptz` is a type and not a `varda:` annotation.
+
+    `gen-owl`, `gen-json-schema` and `gen-pydantic` read ranges and none of
+    them read annotations, so an annotation would have left the distinction a
+    version period turns on as the one thing that did not survive leaving
+    this package. A range carries it: `xsd:dateTimeStamp` is XSD's name for a
+    dateTime whose offset is required, and it reaches the graph.
+
+    Through `type_objects=False`, which is what `gen-owl` on the command
+    line does — the class default is the older behavior the CLI turns off,
+    and under it every range becomes an object and no datatype is written.
+    """
+    owlgen = importlib.import_module("linkml.generators.owlgen")
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("ignore")
+        generator = owlgen.OwlSchemaGenerator(
+            str(RETAIL), importmap=registry.importmap(), type_objects=False
+        )
+        out = str(generator.serialize())
+    assert "dateTimeStamp" in out
 
 
 def test_a_generator_sees_exactly_the_tables_the_model_declares() -> None:
@@ -4705,11 +4855,17 @@ def test_the_types_schema_declares_only_types() -> None:
 
     A class or an enum here is not vocabulary a model gains. It is output a
     model did not ask for, in every generator that walks the class list.
+
+    And every type it does declare has to generate. A model importing this
+    file may range a column on anything in it, so a type here that no
+    dialect maps is a range Varda ships, blesses under `check`, and then
+    refuses to build from.
     """
     view = SchemaView(str(TYPES))
     assert not view.schema.classes
     assert not view.schema.enums
-    assert sorted(view.schema.types) == ["uuid"]
+    assert sorted(view.schema.types) == ["timestamptz", "uuid"]
+    assert set(view.schema.types) <= set(gen_sql.TYPES)
 
 
 def test_the_profile_is_not_importable_and_the_types_schema_is() -> None:
@@ -4950,8 +5106,9 @@ def test_every_range_renders_what_it_is_expected_to(dialect_name: str) -> None:
     sql = gen_sql.dialect(dialect_name)
     compiler = {"postgres": sa_postgresql, "sqlserver": sa_mssql}[dialect_name]
     for rng in gen_sql.TYPES:
+        args = gen_sqlalchemy.TYPE_ARGS.get(rng, "")
         built = eval(  # noqa: S307 - the table's own values, no input
-            gen_sqlalchemy.TYPES[rng] + "()",
+            f"{gen_sqlalchemy.TYPES[rng]}({args})",
             {"sa": sa},
         )
         rendered = built.compile(dialect=_sa_dialect(compiler))

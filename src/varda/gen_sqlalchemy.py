@@ -75,12 +75,26 @@ TYPES = {
     "boolean": "sa.Boolean",
     "date": "sa.Date",
     "datetime": "sa.DateTime",
+    "timestamptz": "sa.DateTime",
     "time": "sa.Time",
     "uuid": "sa.Uuid",
     "uri": "sa.String",
     "uriorcurie": "sa.String",
     "ncname": "sa.String",
 }
+
+#: Parameters a range carries by definition rather than by declaration,
+#: overriding the facets a column declares.
+#:
+#: `timestamptz` and `datetime` are one SQLAlchemy type told apart by a flag,
+#: and the flag is generic: `sa.DateTime(timezone=True)` renders `TIMESTAMP
+#: WITH TIME ZONE` on PostgreSQL and `DATETIMEOFFSET` on SQL Server without
+#: the module naming either. That is why the aware datetime is here and
+#: fractional precision is not — `sa.DateTime` takes no precision argument,
+#: so a column narrowed to milliseconds could only be said by pinning
+#: `postgresql.TIMESTAMP` or `mssql.DATETIME2` into the output, and a
+#: portability layer that names a database is not one.
+TYPE_ARGS = {"timestamptz": "timezone=True"}
 
 #: The width the emitted module is wrapped to, matching the house rule the
 #: rest of the generated output follows.
@@ -102,14 +116,16 @@ def sa_type(column: Column) -> str:
     Resolved through the range's own type chain, nearest first, exactly as
     :func:`varda.gen_sql.sql_type` resolves it — a declared
     ``money: {typeof: decimal}`` reaches `sa.Numeric` the same way it reaches
-    `NUMERIC`.
+    `NUMERIC`. Nearest first is also what tells `timestamptz` from the
+    `datetime` it is declared in terms of, which are one type and two
+    :data:`TYPE_ARGS`.
 
     No dialect is consulted and none can be. What each engine makes of a
     generic type is SQLAlchemy's to know, and the module is worth having
     because it is the one artifact here that does not pick an engine.
     """
-    base = next((TYPES[r] for r in column.type_chain if r in TYPES), None)
-    if base is None:
+    found = next((r for r in column.type_chain if r in TYPES), None)
+    if found is None:
         known = ", ".join(sorted(TYPES))
         tried = " -> ".join(column.type_chain)
         msg = (
@@ -117,7 +133,8 @@ def sa_type(column: Column) -> str:
             f"(tried {tried}). Known ranges: {known}"
         )
         raise GenerationError(msg)
-    return f"{base}({_args(column)})"
+    args = TYPE_ARGS.get(found) or _args(column)
+    return f"{TYPES[found]}({args})"
 
 
 def _args(column: Column) -> str:

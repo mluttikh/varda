@@ -62,8 +62,9 @@ is a one-line change. LinkML itself works this way.
 
 Varda ships two schemas. `varda.yaml` is the vocabulary — the annotation
 classes, the enumerations, the shapes of the structured annotations.
-`types.yaml` holds one type, `uuid`, and is what `imports: - varda` resolves
-to. A model imports the second and never the first.
+`types.yaml` holds the types LinkML's own set leaves a model no way to say —
+`uuid` and `timestamptz` — and is what `imports: - varda` resolves to. A model
+imports the second and never the first.
 
 The split exists because a LinkML import is a **union**. Everything the
 imported schema declares becomes part of the importing schema, and every
@@ -88,8 +89,8 @@ The two files are read by different parties for different reasons, and that
 is what makes the split natural rather than a workaround. The vocabulary is
 *read*: `varda check` opens it off disk, which is why a model never needed to
 import it to be validated. The type is *imported*: a range has to resolve for
-the file to be a legal LinkML schema at all, and LinkML has no `uuid` among
-its built-in types. Reading needs no import. Only naming does.
+the file to be a legal LinkML schema at all, and LinkML's built-in set has
+neither of the two. Reading needs no import. Only naming does.
 
 So `Extension` carries both, and `varda importmap` is built from `types`
 alone. An extension that declares only annotations — which is most of them —
@@ -111,7 +112,7 @@ $ varda importmap --json > im.json
 $ gen-erdiagram --importmap im.json mart.yaml
 ```
 
-A model that never names `uuid` needs no import and no map, which is the
+A model that never names either type needs no import and no map, which is the
 common case and is why `examples/snowflake.yaml` carries neither.
 
 ## Why annotations rather than a new format
@@ -347,6 +348,58 @@ carry a `precision`. Asking only the range dropped the facet and silenced
 `V707` at the same time, so a measure on a declared decimal type went
 unwidened and unwarned at once — the failure wearing both of its faces.
 
+## Why a timezone-aware datetime is a type Varda declares
+
+LinkML's `datetime` is naive. Every engine Varda emits for has an aware
+counterpart, and nothing in a naive column says which of the two a value was
+meant to be — so the same stored value names a different instant to every
+reader:
+
+```
+stored: 2026-06-01 02:30:00
+
+read as GMT0       -> 2026-06-01 02:30:00 UTC
+read as Etc/GMT-2  -> 2026-06-01 00:30:00 UTC
+read as Etc/GMT+5  -> 2026-06-01 07:30:00 UTC
+```
+
+That is a problem here rather than in general, because a type-2 dimension's
+version period is a claim about instants. The period is closed at its start
+and open at its end, and that convention is the whole of what stops
+consecutive versions overlapping at their boundary. Two loads disagreeing
+about the session zone produce overlaps or gaps the schema cannot rule out
+and no rule can see — and `UNIQUE (natural key, VERSION_START)`, which Varda
+derives for every type-2 dimension, is then comparing a value that moved.
+
+A model could declare `timestamptz: {typeof: datetime}` for itself, and one
+that did passed `check --strict` with nothing to report and generated a naive
+`TIMESTAMP`. Resolving through `typeof` found no mapping for the near end of
+the chain and fell through to the far one — which is right for a
+**refinement**, where `money: {typeof: decimal}` should reach `NUMERIC`
+rather than stopping the generator, and wrong for a **variant**, which exists
+precisely to mark a difference from its parent. Nothing distinguishes the
+two, which is why the variant is a type Varda declares and maps rather than
+one each model is left to declare and be silently downgraded.
+
+A type and not a `varda:` annotation, for the reason the whole profile is
+shaped around: a range is visible to every stock LinkML generator and an
+annotation is not. `gen-owl`, `gen-json-schema` and `gen-pydantic` all read
+ranges and none of them read annotations, so the one distinction a version
+period turns on would have been the one thing that did not survive leaving
+this package.
+
+Fractional precision is the other half of what a `datetime` cannot say, and
+is deliberately not here. The defaults are all fine-grained — `DATETIME2`
+keeps 100 ns, PostgreSQL and DuckDB microseconds, Snowflake nanoseconds — so
+a facet would be for deliberately *narrowing* a column rather than for fixing
+a bad default. And it is the half that has no generic spelling:
+`sa.DateTime` takes no precision argument, so `python/mart.py` could only say
+it by naming `postgresql.TIMESTAMP` or `mssql.DATETIME2`, and a portability
+layer that names a database is not one. The timezone flag has no such cost —
+`sa.DateTime(timezone=True)` renders `TIMESTAMP WITH TIME ZONE` on PostgreSQL
+and `DATETIMEOFFSET` on SQL Server on its own — which is why one is a type
+and the other is not a facet.
+
 ## Why there is a dialect, and why its default is named
 
 There is no neutral SQL to emit, and saying there was is how the wrong thing
@@ -368,6 +421,7 @@ varda generate mart.yaml --dialect sqlserver
 | | `postgres` · `duckdb` · `snowflake` | `sqlserver` |
 | --- | --- | --- |
 | `datetime` | `TIMESTAMP` | `DATETIME2` |
+| `timestamptz` | `TIMESTAMP WITH TIME ZONE` | `DATETIMEOFFSET` |
 | `boolean` | `BOOLEAN` | `BIT` |
 | `double` | `DOUBLE PRECISION` | `FLOAT` |
 | `uuid` | `UUID` | `UNIQUEIDENTIFIER` |

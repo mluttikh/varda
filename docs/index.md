@@ -57,10 +57,10 @@ A model annotated with Varda is an ordinary LinkML schema. `gen-pydantic`,
 ignore what they do not understand — and the test suite runs those four over
 the shipped examples to check it, rather than asserting it in prose.
 
-A model naming `uuid` imports Varda's type schema, which resolves through
-`varda importmap --json` and a generator's own `--importmap`. Nothing of the
-vocabulary comes with it — see [the design notes](design.md) for why the
-profile is split and which half a model imports.
+A model naming `uuid` or `timestamptz` imports Varda's type schema, which
+resolves through `varda importmap --json` and a generator's own `--importmap`.
+Nothing of the vocabulary comes with it — see [the design notes](design.md)
+for why the profile is split and which half a model imports.
 
 Varda adds no syntax, forks no metamodel, and requires no change to LinkML.
 That is the whole reason for choosing annotations over a new format.

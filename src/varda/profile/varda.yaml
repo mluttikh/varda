@@ -41,11 +41,11 @@ description: >-
 
   **A domain model does not import this file.** `varda check` reads it
   directly, so the vocabulary is available without any model asking for it.
-  What a model may need is the `uuid` type, and that lives in `types.yaml`,
-  which is what `imports: - varda` resolves to. The separation is what makes
-  the paragraph above true: a LinkML import is a union, so anything declared
-  here would otherwise appear in every generator's output as though it were
-  part of the model.
+  What a model may need is a *type* — `uuid`, `timestamptz` — and those live
+  in `types.yaml`, which is what `imports: - varda` resolves to. The
+  separation is what makes the paragraph above true: a LinkML import is a
+  union, so anything declared here would otherwise appear in every
+  generator's output as though it were part of the model.
 
   **Scope.** This is the deliberately small core: fifteen annotations that
   describe a standard star schema and nothing else. Anything specific to one
@@ -68,9 +68,10 @@ imports:
   - linkml:types
 
 # ---------------------------------------------------------------------------
-# Types are not here. LinkML has no `uuid` among its built-in types, so a
-# model with a UUID key has no legal way to say so, and Varda declares one —
-# in `types.yaml`, because that is the file a model imports. A type must be
+# Types are not here. LinkML's built-in set has no `uuid` and no aware
+# datetime, so a model with a UUID key or a version period that names an
+# instant has no legal way to say so, and Varda declares both — in
+# `types.yaml`, because that is the file a model imports. A type must be
 # imported to be usable as a range; everything below must be *read*, and
 # reading is what the registry does.
 #

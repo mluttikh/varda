@@ -249,7 +249,12 @@ def _extension_vocabulary(ext: Any, *, titled: bool) -> list[str]:
         for name in structured:
             out += _structure_section(view, name)
 
-    if view.schema.types:
+    # From the types schema and not the vocabulary. They were one file
+    # until the profile was split, and reading the vocabulary here went on
+    # working by finding nothing: the reference simply stopped documenting
+    # `uuid`, on the page a reader is sent to for what a range may name.
+    types = ext.types_view
+    if types is not None and types.schema.types:
         out += [
             "## Types",
             "",
@@ -262,7 +267,7 @@ def _extension_vocabulary(ext: Any, *, titled: bool) -> list[str]:
             "| Type | Based on | Meaning |",
             "| --- | --- | --- |",
         ]
-        for name, spec in view.schema.types.items():
+        for name, spec in sorted(types.schema.types.items()):
             described = _clean(spec.description)
             out.append(f"| `{name}` | `{spec.typeof}` | {described} |")
         out.append("")
