@@ -369,7 +369,7 @@ def cli_page() -> str:
         tail = [cmd] if cmd else []
         argv = [sys.executable, "-m", "varda", *tail, "--help"]
         result = subprocess.run(  # noqa: S603
-            argv, capture_output=True, text=True, check=False
+            argv, capture_output=True, encoding="utf-8", check=False
         )
         heading = f"`varda {cmd}`" if cmd else "`varda`"
         out += [

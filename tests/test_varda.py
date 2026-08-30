@@ -31,10 +31,12 @@ never a section in its own right.
     Constraints — how much the database is asked to police
     Interop — the claim that a Varda model is an ordinary LinkML schema
     SQLAlchemy — the same model as objects, checked against the DDL
+    Portability — what only breaks on somebody else's machine
 """
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import decimal
 import importlib
@@ -77,7 +79,8 @@ from varda.rules import RuleSet
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-EXAMPLES = pathlib.Path(__file__).parents[1] / "examples"
+ROOT = pathlib.Path(__file__).parents[1]
+EXAMPLES = ROOT / "examples"
 RETAIL = EXAMPLES / "retail.yaml"
 SNOWFLAKE = EXAMPLES / "snowflake.yaml"
 
@@ -4392,7 +4395,10 @@ def test_the_level_reaches_the_generator_from_the_flag(
     """The flag, the context field and the generator, end to end."""
     model_path = tmp_path / "m.yaml"
     _star(tmp_path)
-    model_path.write_text((tmp_path / "t.yaml").read_text())
+    model_path.write_text(
+        (tmp_path / "t.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     out = tmp_path / "out"
     code = cli.main(
         [
@@ -4406,7 +4412,7 @@ def test_the_level_reaches_the_generator_from_the_flag(
     )
     capsys.readouterr()
     assert code == 0
-    written = (out / "sql" / "mart.sql").read_text()
+    written = (out / "sql" / "mart.sql").read_text(encoding="utf-8")
     assert "-- Constraints: none" in written
     assert "FOREIGN KEY" not in written
 
@@ -4729,7 +4735,8 @@ def test_a_types_schema_declaring_a_class_is_refused(
                 "default_range": "string",
                 "classes": {"Leaks": {"attributes": {"x": {}}}},
             }
-        )
+        ),
+        encoding="utf-8",
     )
     ext = Extension(name="acme", prefix="acme", types=schema)
     with (
@@ -4764,7 +4771,8 @@ def test_an_extension_declaring_no_types_is_not_in_the_map(
                     }
                 },
             }
-        )
+        ),
+        encoding="utf-8",
     )
     ext = Extension(name="acme", prefix="acme", profile=profile)
     with registry.using(ext):
@@ -4783,8 +4791,8 @@ def test_the_import_map_is_json_a_generator_can_read(
     """
     assert cli.main(["importmap", "--json"]) == 0
     written = tmp_path / "im.json"
-    written.write_text(capsys.readouterr().out)
-    loaded = json.loads(written.read_text())
+    written.write_text(capsys.readouterr().out, encoding="utf-8")
+    loaded = json.loads(written.read_text(encoding="utf-8"))
     assert loaded == registry.importmap()
     imported = importlib.import_module("linkml.generators.erdiagramgen")
     out = imported.ERDiagramGenerator(str(RETAIL), importmap=loaded).serialize()
@@ -4815,7 +4823,7 @@ def test_uuid_still_resolves_through_the_import() -> None:
 def _module(source: str, tmp_path: pathlib.Path, name: str) -> Any:
     """Import a generated module, the way its reader would."""
     path = tmp_path / f"{name}.py"
-    path.write_text(source)
+    path.write_text(source, encoding="utf-8")
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None
     assert spec.loader is not None
@@ -5075,7 +5083,7 @@ def test_the_emitted_module_is_already_formatted(
     source = gen_sqlalchemy.generate(loaded)
     assert max(len(line) for line in source.splitlines()) <= 80
     written = tmp_path / "mart.py"
-    written.write_text(source)
+    written.write_text(source, encoding="utf-8")
     ruff = shutil.which("ruff")
     if ruff is None:
         pytest.skip("ruff is not on PATH")
@@ -5084,7 +5092,7 @@ def test_the_emitted_module_is_already_formatted(
     run = subprocess.run(  # noqa: S603
         [ruff, "format", "--check", "--line-length", "80", str(written)],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         check=False,
     )
     assert run.returncode == 0, run.stdout + run.stderr
@@ -5130,3 +5138,68 @@ def test_generation_is_deterministic() -> None:
     """Same model in, same bytes out — the property the whole tree rests on."""
     loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
     assert gen_sqlalchemy.generate(loaded) == gen_sqlalchemy.generate(loaded)
+
+
+# ---------------------------------------------------------------------------
+# Portability — what only breaks on somebody else's machine
+# ---------------------------------------------------------------------------
+
+#: Calls whose default is the *locale's* encoding rather than UTF-8, and
+#: which therefore do one thing here and another on Windows.
+TEXT_CALLS = frozenset({"open", "read_text", "write_text"})
+
+
+def _unencoded(path: pathlib.Path) -> list[int]:
+    """Give the lines in one file that read or write text without saying how.
+
+    A binary `open` is not a finding: it names no encoding because it
+    decodes nothing. The mode is only consulted for `open`, since the first
+    argument to `write_text` is the payload and a string holding a `b` is
+    not a mode.
+    """
+    found = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Call) or any(
+            k.arg == "encoding" for k in node.keywords
+        ):
+            continue
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", "")
+        mode = node.args[0] if node.args else None
+        binary = (
+            name == "open"
+            and isinstance(mode, ast.Constant)
+            and "b" in str(mode.value)
+        )
+        decodes = (name in TEXT_CALLS and not binary) or (
+            name == "run"
+            and any(
+                k.arg in {"text", "universal_newlines"} for k in node.keywords
+            )
+        )
+        if decodes:
+            found.append(node.lineno)
+    return found
+
+
+def test_every_text_call_names_its_encoding() -> None:
+    """`write_text` with no encoding writes cp1252 on Windows.
+
+    `Path.write_text` and `subprocess.run(text=True)` both default to the
+    locale's encoding, which is UTF-8 on the machines this was written on
+    and cp1252 on `windows-latest`. The emitted SQLAlchemy module's header
+    carries an em dash; written through the default it became byte 0x97,
+    and both the import machinery and `ruff format` read a `.py` file as
+    UTF-8. Eleven tests failed on Windows and nowhere else.
+
+    Walked rather than listed, for the reason
+    `test_every_cached_lookup_is_reset` is: the next such call gets written
+    by somebody who has never seen this failure, and a Windows runner is a
+    slow way to find out.
+    """
+    faults = {
+        str(path.relative_to(ROOT)): lines
+        for folder in ("src/varda", "tests", "scripts")
+        for path in sorted((ROOT / folder).glob("*.py"))
+        if (lines := _unencoded(path))
+    }
+    assert not faults

@@ -83,7 +83,7 @@ NUMBER_WORDS = _number_words()
 
 def _first_yaml_block(page: Path) -> str:
     pattern = re.escape(FENCE) + r"yaml[^\n]*\n(.*?)" + re.escape(FENCE)
-    blocks = re.findall(pattern, page.read_text(), re.DOTALL)
+    blocks = re.findall(pattern, page.read_text(encoding="utf-8"), re.DOTALL)
     if not blocks:
         sys.exit(f"{page.name}: no yaml block to check")
     return str(blocks[0])
@@ -98,7 +98,7 @@ def _rules() -> tuple[int, list[str]]:
     out = subprocess.run(
         [sys.executable, "-m", "varda", "rules"],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         check=True,
         cwd=ROOT,
     ).stdout
@@ -120,7 +120,8 @@ def _range_faults(pages: list[Path], codes: list[str]) -> list[str]:
     out: list[str] = []
     for page in pages:
         for low, high in re.findall(
-            r"`([A-Z]+\d{3})`[\u2013-]`([A-Z]+\d{3})`", page.read_text()
+            r"`([A-Z]+\d{3})`[\u2013-]`([A-Z]+\d{3})`",
+            page.read_text(encoding="utf-8"),
         ):
             family = [c for c in codes if c[:-2] == low[:-2]]
             where = f"{page.relative_to(ROOT)}: quotes {low}-{high}"
@@ -137,13 +138,13 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         model = Path(tmp) / "tutorial.yaml"
-        model.write_text(_first_yaml_block(TUTORIAL))
+        model.write_text(_first_yaml_block(TUTORIAL), encoding="utf-8")
         # S603: the arguments are this interpreter, literals, and a path
         # written a line above into a directory made a line before that.
         run = subprocess.run(  # noqa: S603
             [sys.executable, "-m", "varda", "check", "--strict", str(model)],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
             check=False,
             cwd=ROOT,
         )
@@ -169,7 +170,9 @@ def main() -> int:
     failures += [
         f"{page.relative_to(ROOT)}: quotes {quoted} rules, there are {count}"
         for page in pages
-        for quoted in re.findall(r"against (\d+) rules", page.read_text())
+        for quoted in re.findall(
+            r"against (\d+) rules", page.read_text(encoding="utf-8")
+        )
         if int(quoted) != count
     ]
 
@@ -194,7 +197,7 @@ def main() -> int:
         (r"([A-Za-z-]+) core rules", count),
     )
     for page in pages:
-        text = page.read_text()
+        text = page.read_text(encoding="utf-8")
         for pattern, actual in quoted_counts:
             for word in re.findall(pattern, text):
                 said = NUMBER_WORDS.get(word.lower())
@@ -217,7 +220,9 @@ def main() -> int:
         f"{page.relative_to(ROOT)}: a transcript says varda {quoted}, "
         f"this is {__version__}"
         for page in pages
-        for quoted in re.findall(r"varda (\d+\.\d+\.\d+)", page.read_text())
+        for quoted in re.findall(
+            r"varda (\d+\.\d+\.\d+)", page.read_text(encoding="utf-8")
+        )
         if quoted != __version__
     ]
 
@@ -225,13 +230,15 @@ def main() -> int:
     # drift-prone sentences in the repository — every one of them has gone
     # stale at least once — so each is checked against the thing it counts.
     spec = ROOT / "SPEC.md"
-    text = spec.read_text()
+    text = spec.read_text(encoding="utf-8")
     src_lines = sum(
-        len(f.read_text().splitlines())
+        len(f.read_text(encoding="utf-8").splitlines())
         for f in (ROOT / "src" / "varda").rglob("*.py")
     )
     test_lines = len(
-        (ROOT / "tests" / "test_varda.py").read_text().splitlines()
+        (ROOT / "tests" / "test_varda.py")
+        .read_text(encoding="utf-8")
+        .splitlines()
     )
     for label, pattern, actual in (
         ("lines of source", r"\*\*([\d,]+) lines of source\*\*", src_lines),
