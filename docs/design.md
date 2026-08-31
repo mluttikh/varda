@@ -167,14 +167,24 @@ when written, because the failure that matters is not a misspelling but
 `varda:ColumnAnnotations` on a class: a real name, in an active profile, and
 wrong.
 
-Where the mechanism does run out is worth stating plainly. A scalar
-annotation is fully conformant — validate a model as an instance of the
-metamodel and it reports nothing. A structured one is not: `varda:grain` is a
-list and `varda:hierarchies` is a list of mappings, and the metamodel's own
-validator rejects both, on both shipped examples. They work because
-`SchemaView` parses rather than validates. That is the argument for moving
-grain to LinkML's native `unique_keys`, which this package already reads, and
-it is why the profile keeps reaching for LinkML's vocabulary before its own.
+One measurement is worth recording, because the obvious reading of it is
+wrong. Because the metamodel is a LinkML schema, a model can be validated as
+an *instance* of it. Doing that accepts every scalar annotation and rejects
+`varda:grain` and `varda:hierarchies`, on both shipped examples.
+
+That is not this profile failing to conform. An annotation value is ranged on
+`linkml:Any`, and the JSON Schema derived from the metamodel renders it as
+`["null", "boolean", "object", "number", "string"]` — a nested object of any
+depth passes and a list does not, which is not a restriction anything named
+`AnyValue` is meant to carry. The same file renders the same union with
+`"array"` included a few hundred lines further down. Adding the word takes
+both examples to zero.
+
+So the structured annotations are conformant and the tool disagrees, which is
+an upstream bug rather than an argument for restructuring anything here. The
+profile reaches for LinkML's vocabulary before its own — `unique_keys` for
+uniqueness, `unit` for units — on the reasoning in *Why uniqueness is
+LinkML's and roles are Varda's*, not on this.
 
 ## Why the vocabulary is this small
 
