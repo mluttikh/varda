@@ -598,6 +598,30 @@ def declared_annotations(target: Target) -> frozenset[str]:
 
 
 @cache
+def governs(curie: str) -> Target | None:
+    """Name what an annotation class governs, or ``None`` if it names nothing.
+
+    The inverse of ``varda:applies_to``. A profile class says which kind of
+    object its attributes may annotate; a model element says which class
+    governs it, through LinkML's own ``instantiates``. This resolves the
+    second against the first, so the two halves of one relationship are
+    checked against each other rather than each being taken on trust.
+
+    ``curie`` is the prefixed name as written — ``varda:TableAnnotations``.
+    Unprefixed names resolve to nothing: an annotation class belongs to the
+    extension that declares it, and a bare name says nothing about whose.
+    """
+    prefix, sep, name = curie.partition(":")
+    if not sep:
+        return None
+    for target in TARGETS:
+        for ext, cls in _annotation_classes(target):
+            if ext.prefix == prefix and cls.name == name:
+                return target
+    return None
+
+
+@cache
 def annotation_enum(target: Target, tag: str) -> str | None:
     """Name the enum an annotation's values must come from, if any."""
     prefix, _, name = tag.partition(":")

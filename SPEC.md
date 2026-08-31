@@ -39,10 +39,10 @@ reason the core can stay small enough to be correct.
 | Module | Lines | Responsibility |
 | --- | --- | --- |
 | `anns.py` | ~150 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
-| `model.py` | ~800 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
+| `model.py` | ~830 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
 | `ext.py` | ~210 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
-| `registry.py` | ~770 | Discovery, validation, lookup. Where colliding extensions are refused. |
-| `rules.py` | ~1640 | `RuleSet`, `Finding`, and the 48 core rules. |
+| `registry.py` | ~800 | Discovery, validation, lookup. Where colliding extensions are refused. |
+| `rules.py` | ~1695 | `RuleSet`, `Finding`, and the 49 core rules. |
 | `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~170 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~365 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
@@ -50,8 +50,8 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~450 | Five commands. |
 
-**5,436 lines of source**: 2,889 of code, 1,268 of docstrings, 438 of
-comment, 841 blank. The prose share is deliberate and is house style —
+**5,531 lines of source**: 2,936 of code, 1,302 of docstrings, 438 of
+comment, 855 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -59,7 +59,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 324 tests in 5,205 lines.
+importable is kept to what is meant to be imported. And 330 tests in 5,287 lines.
 
 ### The four seams
 

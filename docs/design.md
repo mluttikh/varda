@@ -125,6 +125,57 @@ LinkML would read the fork, and every tool would have to be rewritten. The
 validation Varda gives up is recovered by `varda check`, which is a smaller
 thing to maintain than a parser.
 
+## Why annotations are not a bolt-on
+
+The obvious objection to the section above is that annotations are an escape
+hatch — an untyped bag the metamodel tolerates rather than a way of saying
+anything. That is not what LinkML means by them, and the difference has a
+name in the language.
+
+LinkML is self-describing: its metamodel is a LinkML schema, and every schema
+is an instance of it. `instantiates` is the metaslot for extending that
+metamodel. An element names a **metaclass**, and the metaclass's attributes
+are the annotation keys legal on that element — typed, with ranges, and
+required or not.
+
+Which is the mechanism this profile already is. `TableAnnotations` and
+`ColumnAnnotations` declare attributes with ranges and requiredness;
+`varda:applies_to` says which kind of object each governs; the registry reads
+them; `V001` refuses a tag they do not declare and `V004` refuses a shape
+they do not describe. Varda built the pattern the language sanctions, and for
+three releases did not write the line that says so:
+
+```yaml
+DimCustomer:
+  instantiates: [varda:TableAnnotations]
+  annotations:
+    varda:role: DIMENSION
+```
+
+It is optional, and the shipped examples do not use it — deliberately. Every
+annotated column is governed by the same class, so the declaration restates
+what the next line already implies, and a model carrying it on every column
+would be forty-two copies of one constant. Worse, an optional declaration
+demonstrated everywhere teaches that it is required: the examples are read to
+be copied.
+
+What it adds, where somebody wants it, is a standard name for a relationship
+that is otherwise knowledge held inside `registry.py` — legible to a reader,
+and to any LinkML tool that grows `instantiates` enforcement, which the
+language's own documentation describes as under development. `V005` checks it
+when written, because the failure that matters is not a misspelling but
+`varda:ColumnAnnotations` on a class: a real name, in an active profile, and
+wrong.
+
+Where the mechanism does run out is worth stating plainly. A scalar
+annotation is fully conformant — validate a model as an instance of the
+metamodel and it reports nothing. A structured one is not: `varda:grain` is a
+list and `varda:hierarchies` is a list of mappings, and the metamodel's own
+validator rejects both, on both shipped examples. They work because
+`SchemaView` parses rather than validates. That is the argument for moving
+grain to LinkML's native `unique_keys`, which this package already reads, and
+it is why the profile keeps reaching for LinkML's vocabulary before its own.
+
 ## Why the vocabulary is this small
 
 Fifteen annotations is not a first cut on the way to forty. It is the
@@ -626,7 +677,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of forty-eight rules disagrees with the code within two
+A hand-written table of forty-nine rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.
