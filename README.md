@@ -63,7 +63,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 48 rules (varda 0.3.0): 0 errors, 0 warnings
+8 tables checked against 49 rules (varda 0.3.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -89,12 +89,12 @@ on columns — `role`, `references`, `additivity`, `semi_additive_over`,
 vocabulary, and it is deliberately the whole core vocabulary. Units are
 LinkML's own `unit`, which Varda reads rather than restates.
 
-**Forty-eight rules** that catch the mistakes worth catching. A code names
+**Forty-nine rules** that catch the mistakes worth catching. A code names
 its concern, so the band tells you where to look:
 
 | | |
 | --- | --- |
-| `V001`–`V004` | the annotations themselves — typos, bad enum values, unknown prefixes, unknown fields |
+| `V001`–`V005` | the annotations themselves — typos, bad enum values, unknown prefixes, unknown fields |
 | `V101`–`V104` | roles — what a table is, what a column is, and where each role is legal |
 | `V201`–`V204` | grain — a fact with no grain, a grain naming a column that does not exist |
 | `V301`–`V307` | identity — a dimension with no natural key, a business key that repeats, two identities with nothing to tell them apart |

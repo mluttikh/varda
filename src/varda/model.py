@@ -281,6 +281,19 @@ class Column:
     table: Table
 
     @property
+    def instantiates(self) -> tuple[str, ...]:
+        """The profile classes this column declares as governing it.
+
+        LinkML's own metaslot, not a Varda annotation: a schema element names
+        a metaclass whose attributes are the annotation keys legal on it.
+        Optional, because every annotated column is governed by the same
+        class and the declaration adds no information Varda needs — what it
+        adds is a standard name for a relationship that would otherwise be
+        knowledge held only inside `registry.py`.
+        """
+        return tuple(str(x) for x in (self.slot.instantiates or []))
+
+    @property
     def role(self) -> str | None:
         return get(self.slot, "role")
 
@@ -426,6 +439,14 @@ class Table:
     name: str
     cls: ClassDefinition
     model: DimensionalModel
+
+    @property
+    def instantiates(self) -> tuple[str, ...]:
+        """The profile classes this table declares as governing it.
+
+        See :attr:`Column.instantiates`; the same metaslot, one level up.
+        """
+        return tuple(str(x) for x in (self.cls.instantiates or []))
 
     @property
     def role(self) -> str | None:

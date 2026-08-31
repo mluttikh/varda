@@ -391,6 +391,88 @@ def test_v003_is_not_an_error() -> None:
     assert severity == "warning"
 
 
+def _instantiating(
+    tmp_path: pathlib.Path, table: str | None = None, column: str | None = None
+) -> DimensionalModel:
+    """Build a dimension declaring the given `instantiates`, if any."""
+    cls = dimension()
+    if table is not None:
+        cls["instantiates"] = [table]
+    if column is not None:
+        cls["attributes"]["d_key"]["instantiates"] = [column]
+    return build(tmp_path, {"DimThing": cls})
+
+
+def test_v005_the_right_metaclass_passes(tmp_path: pathlib.Path) -> None:
+    """The declaration Varda's own examples carry.
+
+    `instantiates` is LinkML's metaslot for exactly the relationship the
+    profile already describes from the other side with `varda:applies_to`:
+    a class whose attributes are the annotation keys legal on an element.
+    Varda built that mechanism before declaring it; this is the declaration.
+    """
+    model = _instantiating(
+        tmp_path, "varda:TableAnnotations", "varda:ColumnAnnotations"
+    )
+    assert "V005" not in codes(model)
+
+
+def test_v005_is_optional(tmp_path: pathlib.Path) -> None:
+    """Silence is not a finding.
+
+    Every annotated column is governed by the same class, so the
+    declaration restates what the annotations imply and Varda needs none of
+    it. Requiring it would put a constant on forty-two columns of
+    `retail.yaml` to say something the next line already says.
+    """
+    assert "V005" not in codes(_instantiating(tmp_path))
+
+
+def test_v005_a_metaclass_for_the_other_kind(tmp_path: pathlib.Path) -> None:
+    """The failure worth catching: a declaration that reads correctly.
+
+    `varda:ColumnAnnotations` on a class is a real name, spelled right, in
+    an active profile — everything except true. Nothing else in the file
+    would report it.
+    """
+    model = _instantiating(
+        tmp_path, "varda:ColumnAnnotations", "varda:TableAnnotations"
+    )
+    found = [f for f in rules.check(model) if f.rule == "V005"]
+    assert len(found) == 2
+    assert "governs a column and this is a table" in found[0].message
+
+
+def test_v005_an_unknown_metaclass(tmp_path: pathlib.Path) -> None:
+    model = _instantiating(tmp_path, "varda:NoSuchThing")
+    found = [f for f in rules.check(model) if f.rule == "V005"]
+    assert len(found) == 1
+    assert "no active profile declares" in found[0].message
+
+
+def test_v005_a_bare_name_names_nothing(tmp_path: pathlib.Path) -> None:
+    """An annotation class belongs to the extension that declares it.
+
+    A bare `TableAnnotations` says nothing about whose, and resolving it
+    against the union of everybody's vocabulary is the collision V001
+    already refuses to make.
+    """
+    found = [
+        f
+        for f in rules.check(_instantiating(tmp_path, "TableAnnotations"))
+        if f.rule == "V005"
+    ]
+    assert len(found) == 1
+
+
+def test_governs_is_the_inverse_of_applies_to() -> None:
+    """One relationship, read from both ends, against the shipped profile."""
+    assert registry.governs("varda:TableAnnotations") == "table"
+    assert registry.governs("varda:ColumnAnnotations") == "column"
+    assert registry.governs("varda:Hierarchy") is None
+    assert registry.governs("TableAnnotations") is None
+
+
 def test_v101_table_without_role(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,

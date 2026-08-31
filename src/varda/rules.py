@@ -168,6 +168,23 @@ def _annotated(
                 yield str(column), "column", tag, value
 
 
+def _instantiated(
+    model: DimensionalModel,
+) -> Iterator[tuple[str, str, str]]:
+    """Walk every declared ``instantiates``, as ``(subject, target, curie)``.
+
+    Separate from :func:`_annotated` because this reads a LinkML metaslot
+    rather than an annotation, and an element may declare one without the
+    other.
+    """
+    for table in model.tables:
+        for curie in table.instantiates:
+            yield str(table), "table", curie
+        for column in table.columns:
+            for curie in column.instantiates:
+                yield str(column), "column", curie
+
+
 @RULES.rule("V001", "error", "Annotations are declared in a profile")
 def v001(model: DimensionalModel) -> Iterator[Finding]:
     known = registry.prefixes()
@@ -184,6 +201,39 @@ def v001(model: DimensionalModel) -> Iterator[Finding]:
             subject,
             f"unknown {target} annotation {tag!r}; "
             f"declare it in {where} or fix the typo",
+        )
+
+
+@RULES.rule("V005", "error", "A declared metaclass governs what declares it")
+def v005(model: DimensionalModel) -> Iterator[Finding]:
+    """LinkML's ``instantiates``, checked against the profile it names.
+
+    A model may say which profile class governs an element — the standard
+    way to state a relationship Varda otherwise keeps to itself. Optional,
+    because it restates what the annotations already imply. Checked when
+    written, because a declaration nobody verifies is worth less than none:
+    the two failures are naming a class no active extension declares, and
+    naming the wrong one, and the second is the one that reads correctly.
+    """
+    for subject, target, curie in _instantiated(model):
+        governs = registry.governs(curie)
+        if governs == target:
+            continue
+        if governs is None:
+            yield Finding(
+                "V005",
+                "error",
+                subject,
+                f"instantiates {curie!r}, which no active profile declares "
+                f"as an annotation class",
+            )
+            continue
+        yield Finding(
+            "V005",
+            "error",
+            subject,
+            f"instantiates {curie!r}, which governs a {governs} and this "
+            f"is a {target}",
         )
 
 
