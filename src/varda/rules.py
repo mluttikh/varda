@@ -30,14 +30,20 @@ covers everything tells a reader nothing.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from . import registry
 from .anns import anns, get
-from .ext import SEVERITIES, Severity
+
+# Re-exported, not defined here. `Finding` and `RuleSet` are interface —
+# every rule an extension writes yields one and registers in the other — so
+# they live in `ext`, the module a third party is told to import. They are
+# imported under their own names rather than through `ext.` so that this
+# file reads as it always did, and so `from varda.rules import Finding`
+# keeps working for anything written against the older arrangement.
+from .ext import Finding, RuleError, RuleSet, Severity
 from .model import (
     FACET_MINIMUM,
     FACETS,
@@ -46,85 +52,26 @@ from .model import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator
+    from collections.abc import Iterable, Iterator
 
+    from .ext import RuleFn
     from .model import Column, DimensionalModel, Level, Table
 
-
-@dataclass(frozen=True)
-class Finding:
-    """One rule violation, against one named subject."""
-
-    rule: str
-    severity: Severity
-    subject: str
-    message: str
-
-    def __str__(self) -> str:
-        """Render as a severity line followed by an indented message."""
-        mark = {"error": "ERROR", "warning": "WARN ", "info": "INFO "}[
-            self.severity
-        ]
-        return f"{mark} {self.rule}  {self.subject}\n        {self.message}"
-
-
-if TYPE_CHECKING:
-    # Every rule has this shape, and saying so once is what lets the type
-    # checker see through `@RULES.rule(...)` to the functions it decorates.
-    # An untyped decorator silently erases the types of everything below it.
-    RuleFn = Callable[[DimensionalModel], Iterator[Finding]]
-
-
-@dataclass
-class RuleSet:
-    """A registry of rules, so ``varda rules`` can list them unrun.
-
-    ``tag`` is the letters every code in this set begins with — ``V`` for
-    Varda, ``ACME`` for an extension whose prefix is ``acme``. It is checked
-    at registration rather than at load, because that is where the error can
-    name the offending rule.
-    """
-
-    tag: str = ""
-    rules: list[tuple[str, Severity, str, RuleFn]] = field(default_factory=list)
-
-    def rule(
-        self, code: str, severity: Severity, title: str
-    ) -> Callable[[RuleFn], RuleFn]:
-        """Register a rule function under a stable code and title."""
-        self._check(code, severity)
-
-        def decorate(fn: RuleFn) -> RuleFn:
-            self.rules.append((code, severity, title, fn))
-            return fn
-
-        return decorate
-
-    def _check(self, code: str, severity: Severity) -> None:
-        """Reject a code this set may not mint, or one already taken.
-
-        Both failures are unfixable once shipped rather than merely wrong. A
-        code outside the set's tag collides with somebody else's namespace,
-        and a rule code is a public identifier — it goes in commit messages
-        and exemption lists, so two meanings for one code is a suppression
-        that silently changes what it suppresses.
-        """
-        if severity not in SEVERITIES:
-            msg = (
-                f"{code}: severity {severity!r} is not one of "
-                f"{', '.join(sorted(SEVERITIES))}"
-            )
-            raise ValueError(msg)
-        pattern = rf"{re.escape(self.tag)}\d{{3}}"
-        if self.tag and not re.fullmatch(pattern, code):
-            msg = (
-                f"{code} does not belong to rule set {self.tag!r}; "
-                f"codes must look like {self.tag}001"
-            )
-            raise ValueError(msg)
-        if any(code == existing for existing, *_ in self.rules):
-            msg = f"{code} is already registered in rule set {self.tag!r}"
-            raise ValueError(msg)
+#: This module's interface, and the four names at the top of it are the
+#: compatibility half of that: they are declared in `ext` and listed here so
+#: `from varda.rules import Finding` keeps meaning what it did. Spelled out
+#: rather than left implicit because a re-export nobody declared is one a
+#: type checker refuses to see through, which makes it no re-export at all.
+__all__ = [
+    "RULES",
+    "Finding",
+    "RuleError",
+    "RuleSet",
+    "Severity",
+    "all_rules",
+    "check",
+    "unknown_codes",
+]
 
 
 RULES = RuleSet(tag="V")
@@ -1468,10 +1415,18 @@ def v801(model: DimensionalModel) -> Iterator[Finding]:
             continue
         who = " and ".join(_named_by(t.cls, t.name) for t in tables)
         what = _claim([t.physical for t in tables])
+        # Reported against a class this model declares, where one of them
+        # is. A collision with an imported table is the local model's to
+        # fix — it chose the name that clashed — and naming the imported
+        # class instead would file the fault under the schema that was
+        # there first, where `--skip-imported` would then hide it. Both are
+        # named in the message either way, and a model in one file names
+        # the same class it always did.
+        subject = next((t for t in tables if not t.is_imported), tables[0])
         yield Finding(
             "V801",
             "error",
-            str(tables[0]),
+            str(subject),
             f"{what} claimed by {who}; one name cannot be two tables",
         )
 
@@ -1660,22 +1615,95 @@ def all_rules() -> list[tuple[str, Severity, str, RuleFn]]:
 
 
 def check(
-    model: DimensionalModel, exemptions: Iterable[str] | None = None
+    model: DimensionalModel,
+    exemptions: Iterable[str] | None = None,
+    *,
+    skip_imported: bool = False,
 ) -> list[Finding]:
     """Run every rule and return the findings, in rule order.
 
     ``exemptions`` names rules to skip entirely. Severity overrides come from
     the registry, which has already refused any that two extensions disagree
     about.
+
+    ``skip_imported`` drops the findings whose subject was declared in
+    another file — not the tables, the findings. Every rule still sees every
+    table, which is the point: a physical name that collides with an
+    imported one, a foreign key naming a class that does not exist, a level
+    reaching through a key into another schema are all faults of *this*
+    model that only a rule seeing both can find. What the flag removes is
+    the report of a fault somebody else has to fix, which is the only part
+    an operator here can do nothing about.
+
+    A rule that raises stops the run with a :class:`varda.ext.RuleError`
+    naming it. This is the guard :func:`varda.cli._collect` puts around
+    generators, at the layer that runs on every pull request rather than the
+    one that writes files: without it a third party's rule reached the
+    operator as a traceback through a package they did not write, with no
+    code to exempt and no extension named. Reporting the surviving rules and
+    exiting zero was the other option, and it is worse — it is the tool
+    saying a model conforms when part of the question was never asked.
     """
     skip = set(exemptions or ())
     overrides = registry.severities()
+    imported = _imported_tables(model)
     out: list[Finding] = []
     for code, _, _, fn in all_rules():
         if code in skip:
             continue
-        out.extend(_at_severity(f, overrides) for f in fn(model))
+        try:
+            # Drained here rather than streamed into the caller. A rule is a
+            # generator, so its body does not run until something iterates
+            # it, and a `yield` inside the `try` is the only place the raise
+            # can be caught.
+            found = list(fn(model))
+        except Exception as exc:
+            msg = f"{code} ({_owner(code)}) failed: {type(exc).__name__}: {exc}"
+            raise RuleError(msg) from exc
+        for finding in found:
+            origin = imported.get(_subject_table(finding.subject), "")
+            if origin and skip_imported:
+                continue
+            at = _at_severity(finding, overrides)
+            out.append(at if not origin else replace(at, origin=origin))
     return out
+
+
+def _imported_tables(model: DimensionalModel) -> dict[str, str]:
+    """Map the name of every imported table to the file declaring it.
+
+    Only the imported ones. A model in one file produces an empty mapping,
+    every lookup below misses, and its output is byte for byte what it was.
+    """
+    return {t.name: t.origin for t in model.tables if t.is_imported}
+
+
+def _subject_table(subject: str) -> str:
+    """Read the table name out of a finding's subject.
+
+    Every subject a rule can state names its table first — a table is its
+    own name, and a column, a hierarchy and a unique key are all rendered
+    `Table.thing` by the ``__str__`` on each of them. That convention is
+    what makes one central answer to "which file is this in" possible
+    instead of sixty rules each passing it, and
+    `test_every_finding_names_a_table_that_exists` is what keeps it true.
+    """
+    return subject.split(".", 1)[0]
+
+
+def _owner(code: str) -> str:
+    """Name the extension that registered a rule code.
+
+    Looked up only when a rule has already raised, so the cost falls on the
+    failure path. The code carries the tag and the tag is usually the prefix
+    upper-cased, but "ACME102" and "acme 1.2.0" are not the same thing to
+    somebody deciding which package to file a bug against.
+    """
+    for extension in registry.extensions():
+        rules = extension.rules
+        if rules is not None and any(c == code for c, *_ in rules.rules):
+            return extension.name
+    return "no active extension"
 
 
 def _at_severity(finding: Finding, overrides: dict[str, Severity]) -> Finding:

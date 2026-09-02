@@ -39,19 +39,19 @@ reason the core can stay small enough to be correct.
 | Module | Lines | Responsibility |
 | --- | --- | --- |
 | `anns.py` | ~150 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
-| `model.py` | ~830 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
-| `ext.py` | ~210 | `Extension`, `Generator`, `Context`. **The only module a third party imports.** |
+| `model.py` | ~900 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
+| `ext.py` | ~340 | `Extension`, `Generator`, `Context`, `Finding`, `RuleSet`. **The module a third party imports** — everything an extension runs on is declared here. |
 | `registry.py` | ~800 | Discovery, validation, lookup. Where colliding extensions are refused. |
-| `rules.py` | ~1695 | `RuleSet`, `Finding`, and the 49 core rules. |
+| `rules.py` | ~1725 | The 49 core rules, and the engine that runs them. |
 | `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~170 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~365 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~450 | Five commands. |
+| `cli.py` | ~490 | Five commands. |
 
-**5,531 lines of source**: 2,936 of code, 1,302 of docstrings, 438 of
-comment, 855 blank. The prose share is deliberate and is house style —
+**5,818 lines of source**: 3,008 of code, 1,416 of docstrings, 502 of
+comment, 892 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -59,7 +59,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 330 tests in 5,287 lines.
+importable is kept to what is meant to be imported. And 344 tests in 5,720 lines.
 
 ### The four seams
 
@@ -104,6 +104,34 @@ collected before a single byte is written. A half-generated output tree is
 worse than none: it looks complete, and the stale parts are the ones nobody
 thinks to check. *`cli.cmd_generate`, `test_generate_fails_closed`,
 `test_generate_refuses_a_nonconforming_model`*
+
+**I11 — Somebody else's code failing is named, not re-raised.** A generator
+that raises is reported as `{name} failed: …`; so is a rule, as
+`{code} ({extension}) failed: …`. Both stop the run. The checking half of
+this was missing until 0.4: `rules.check` called each rule bare, so a
+third-party rule reached the operator as a traceback through a package they
+did not write, with no code to exempt and no extension named — on the
+command that runs on every pull request. Skipping the rule and reporting the
+rest was the alternative and is worse: a rule that cannot run is a check that
+is not happening, and exiting zero would be the tool saying a model conforms
+when part of the question was never asked. *`rules.check`, `cli.main`,
+`test_a_rule_that_raises_names_itself_and_the_extension_that_shipped_it`*
+
+**I12 — An extension imports one module.** Everything an extension runs on is
+declared in `varda.ext` — `Extension`, `Generator`, `Context`, `Finding`,
+`RuleSet`. This was stated in four places and false in all of them until
+0.4, because `Finding` and `RuleSet` lived in `varda.rules`: the
+documentation page making the claim broke it in the code block beneath it,
+and so did the fixture written to prove it satisfiable.
+`test_the_worked_example_imports_only_the_interface_module` reads the fixture
+rather than trusting its docstring, which is the narrow form of the
+conformance scan below.
+
+Not yet true of *types*: a rule annotated with the type of its argument names
+`DimensionalModel`, which `varda.ext`'s own signatures name too. Whether that
+read API — the sixty-odd properties every rule and generator walks — is
+public and versioned or internal and free to move is the one boundary
+question still open, and 1.0 is where it stops being possible to leave open.
 
 **I5 — Generated output is deterministic.** No timestamps, no hostnames, no
 environment, no dict-ordering dependence. Output that changes when the model
@@ -226,6 +254,19 @@ whatever the engine has for saying it, and the claims a weaker level drops
 move into `sql/assertions.sql` rather than disappearing. Design note and
 measurements in `design/constraint-enforcement.md`.
 
+**Unreleased — the boundary is where it says it is.** Three findings from an
+architecture review, and each is a discipline this codebase already holds
+stopping one step short of where it was aimed. `Finding` and `RuleSet` move
+to `varda.ext`, so the sentence four files repeat — an extension imports the
+interface module — is true for the first time; `varda.rules` re-exports both,
+so nothing written against the old import breaks. A rule that raises is now
+caught and named the way a generator that raises has been since 0.1, on the
+command that runs in everybody's CI rather than the one that writes files.
+And a class reached through `imports:` is reported as what it is: findings
+carry the file that declared them, `--skip-imported` drops another schema's
+findings without dropping its tables from any rule, and `V801` reports a
+physical-name collision against a class this model declares.
+
 ### Next, in the order it is worth doing
 
 **Make the output trustworthy.** Add `varda verify`: regenerate into a temp
@@ -237,7 +278,20 @@ is the highest-value remaining item and it is small.
 **Make extensions safe to depend on.** `requires_profile` pinning, plus the
 conformance kit: `varda ext --check NAME` runs a third-party extension against
 a fixture model twice, asserts identical findings and identical artifacts, and
-AST-scans for imports of anything outside `varda.ext`.
+AST-scans for imports of anything outside `varda.ext`. The scan exists in
+narrow form as `test_the_worked_example_imports_only_the_interface_module`,
+which is worth reading first — it is what settled I12, and it would have
+failed against the shipped fixture until the release that closed it.
+
+Settle the model layer before this ships, or the scan asserts an answer to a
+question nobody has decided: every rule takes a `DimensionalModel` and walks
+it, so either that read API is public and versioned, or `varda.ext` grows the
+`Protocol`s an extension is entitled to and the rest is free to move. The
+first is less work and closer to what is already true — `model.py` is
+documented and typed to the standard the rest of the package holds, and two
+of its properties (`Column.is_measure`, `Hierarchy.level_columns`) already
+carry no internal caller, which is what an unversioned public surface looks
+like from the inside.
 
 **Finish the SQLAlchemy generator.** The generator and its equivalence check
 have shipped; two things from `design/sqlalchemy-generator.md` have not.

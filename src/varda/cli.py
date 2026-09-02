@@ -15,9 +15,9 @@ import sys
 from typing import TYPE_CHECKING
 
 from . import gen_sql, registry
-from .ext import Context, ExtensionError
+from .ext import Context, ExtensionError, Finding, RuleError
 from .model import DimensionalModel
-from .rules import Finding, all_rules, check, unknown_codes
+from .rules import all_rules, check, unknown_codes
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -95,6 +95,19 @@ def _stale(exempt: Sequence[str], *, strict: bool) -> bool:
     return reported and strict
 
 
+def _scope(model: DimensionalModel, *, skipped: bool) -> str:
+    """Say how many of the checked tables came from another file.
+
+    Silent for a model in one file, which is most of them and every one the
+    documentation shows — a summary line that grows a clause nobody's model
+    produces is one nobody can match against what they are reading.
+    """
+    imported = sum(1 for t in model.tables if t.is_imported)
+    if not imported:
+        return ""
+    return f" ({imported} imported, not reported)" if skipped else ""
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Validate a model against every active extension's rules."""
     model = _load(args.model)
@@ -103,7 +116,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if _stale(exempt, strict=args.strict):
         return EXIT_FAIL
 
-    findings = check(model, exemptions=exempt)
+    findings = check(model, exemptions=exempt, skip_imported=args.skip_imported)
     for finding in findings:
         print(finding)
 
@@ -111,7 +124,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     warnings = sum(1 for f in findings if f.severity == "warning")
     tables = len(model.tables)
     print(
-        f"\n{tables} tables checked against {len(all_rules())} rules "
+        f"\n{tables} tables checked{_scope(model, skipped=args.skip_imported)}"
+        f" against {len(all_rules())} rules "
         f"({_extensions_line()}): {errors} errors, {warnings} warnings"
     )
     if errors or (args.strict and warnings):
@@ -143,12 +157,14 @@ def _blocking(
 ) -> list[Finding]:
     """Collect the findings that should stop a run, given its flags.
 
-    The same rules `check` runs and the same exemptions, so the two commands
-    cannot disagree about whether a model is fit to generate from.
+    The same rules `check` runs, the same exemptions and the same scope, so
+    the two commands cannot disagree about whether a model is fit to
+    generate from.
     """
     exempt = _exempt(args)
     stop = {"error", "warning"} if args.strict else {"error"}
-    return [f for f in check(model, exemptions=exempt) if f.severity in stop]
+    found = check(model, exemptions=exempt, skip_imported=args.skip_imported)
+    return [f for f in found if f.severity in stop]
 
 
 def _report(findings: list[Finding], *, forced: bool) -> None:
@@ -356,6 +372,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="fail on warnings and on exemptions that name no rule",
     )
+    p_check.add_argument(
+        "--skip-imported",
+        action="store_true",
+        help=(
+            "do not report findings against classes another schema declares; "
+            "every rule still sees them"
+        ),
+    )
     p_check.set_defaults(fn=cmd_check)
 
     p_gen = sub.add_parser("generate", help="write artifacts from a model")
@@ -407,6 +431,20 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="generate even though the model does not conform",
     )
+    # Here as well as on `check`, and it has to be: `_blocking` promises the
+    # two commands cannot disagree about whether a model is fit to generate
+    # from, and a flag on one of them is exactly how they would. It stops
+    # another schema's findings from blocking this run; it does not stop the
+    # imported tables being emitted, which they must be — a fact referencing
+    # a dimension the file never creates is DDL that does not run.
+    p_gen.add_argument(
+        "--skip-imported",
+        action="store_true",
+        help=(
+            "do not let findings against another schema's classes stop the "
+            "run; their tables are still emitted"
+        ),
+    )
     p_gen.set_defaults(fn=cmd_generate)
 
     p_rules = sub.add_parser("rules", help="list conformance rules")
@@ -435,6 +473,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         result: int = args.fn(args)
     except ExtensionError as exc:
         print(f"extension error: {exc}", file=sys.stderr)
+        return EXIT_FAIL
+    except RuleError as exc:
+        # Caught here rather than in `cmd_check`, so that `generate` gets it
+        # too: it validates before it writes, so a rule that raises stops it
+        # at the same point an error in the model would, with nothing
+        # written.
+        print(f"rule error: {exc}\nnothing was checked", file=sys.stderr)
         return EXIT_FAIL
     except FileNotFoundError as exc:
         print(f"no such file: {exc.filename}", file=sys.stderr)

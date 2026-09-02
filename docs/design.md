@@ -24,6 +24,15 @@ that is a defect in the mechanism.
 before any generator runs, and once they run, every result is collected
 before a byte is written.
 
+**Somebody else's code failing is reported, not re-raised.** A generator that
+raises is named; so is a rule. Either stops the run — a rule that cannot run
+is a check that is not happening, and reporting the rest would be the tool
+saying a model conforms when part of the question was never asked.
+
+**An extension imports one module.** Everything an extension runs on is in
+`varda.ext`: the extension, its generators, the context they are given, and
+the `Finding` and `RuleSet` its rules are written with.
+
 **Generated output is deterministic.** No timestamps, no hostnames, no
 environment, no dict-ordering dependence. Tables are sorted by name so that
 moving a class in the source does not reorder the output.
@@ -113,6 +122,44 @@ $ gen-erdiagram --importmap im.json mart.yaml
 
 A model that never names `uuid` needs no import and no map, which is the
 common case and is why `examples/snowflake.yaml` carries neither.
+
+## Why an imported class is checked, and reported as somebody else's
+
+A model is not always one file. A conformed dimension is declared once and
+imported by every mart that uses it — that is what `imports:` is for, and a
+dimensional tool should expect to meet it.
+
+Everything reachable through `imports:` is a table of this model, and stays
+one. The alternative is worse than it looks: an imported dimension is emitted
+into this model's DDL and referenced by its facts, so a check that skipped it
+would pass a model whose generated file creates a fact with a foreign key to
+a table the file never creates. The rules need to see it too — a physical
+name colliding with an imported one, a foreign key naming a class that does
+not exist, a level reaching through a key into another schema are all faults
+of *this* model that only a rule seeing both files can find.
+
+What was missing was whose fault a finding is. Another team's unfinished
+dimension failed every mart importing it, in a message naming a class that
+appears in none of the files the reader has open:
+
+```
+ERROR V302  DimStore  (imported from conformed.yaml)
+        no NATURAL_KEY column; nothing here says what makes two source
+        rows the same business entity
+```
+
+`--skip-imported` drops those reports — the findings, never the tables. Every
+rule still sees every class, so nothing a local model did wrong stops being
+caught; what goes away is the report of a fault somebody in another
+repository has to fix. It is on `generate` as well as `check`, because the
+two commands promise not to disagree about whether a model is fit to generate
+from, and the imported tables are emitted either way.
+
+One rule moved to make that safe. `V801` names the class a colliding physical
+name is reported against, and it named the first in sorted order — which for
+an imported class files the fault under the schema that was there first, and
+would let `--skip-imported` hide a name this model chose. It now names a class
+this model declares wherever one of them is, and the message still names both.
 
 ## Why annotations rather than a new format
 
