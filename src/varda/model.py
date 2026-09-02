@@ -449,6 +449,34 @@ class Table:
         return tuple(str(x) for x in (self.cls.instantiates or []))
 
     @property
+    def origin(self) -> str:
+        """The file this class was declared in.
+
+        A model is not always one file. `imports:` is how LinkML shares a
+        schema, and a conformed dimension used by three marts is exactly
+        what it is for — so a table here may have been written by another
+        team, in a repository this one does not contain.
+
+        Named by file rather than by the schema's IRI, because the IRI is
+        what a machine joins on and the file is what somebody opens.
+        """
+        return self.model.schema_file(str(self.cls.from_schema or ""))
+
+    @property
+    def is_imported(self) -> bool:
+        """Flag whether this table arrived through ``imports:``.
+
+        What it is *not* is a reason to ignore the table. An imported
+        dimension is emitted into this model's DDL and referenced by its
+        facts, so its faults are this model's faults too. What this answers
+        is whose faults they are — which is the half a finding could not
+        say, and the half that decides whether the person reading the
+        output can act on it.
+        """
+        declared = str(self.cls.from_schema or "")
+        return bool(declared) and declared != self.model.schema_id
+
+    @property
     def role(self) -> str | None:
         return get(self.cls, "role")
 
@@ -799,9 +827,53 @@ class DimensionalModel:
         view = SchemaView(str(source), importmap=importmap)
         return cls(view=view, source=source)
 
+    @property
+    def schema_id(self) -> str:
+        """The IRI of the schema this model was loaded from."""
+        return str(self.view.schema.id or "")
+
+    @cached_property
+    def _schema_files(self) -> dict[str, str]:
+        """Map every reachable schema's IRI to the file it was read from.
+
+        Built from the imports closure rather than from the top schema
+        alone, which is the only way to answer where an imported class came
+        from: ``from_schema`` gives an IRI, and an IRI is not something to
+        put in front of somebody looking for the file to edit.
+
+        The closure is walked explicitly because ``schema_map`` is empty
+        until something has walked it, and the first caller here may be a
+        rule reporting a finding rather than anything that touched the
+        classes.
+        """
+        self.view.imports_closure()
+        out: dict[str, str] = {}
+        for schema in (self.view.schema_map or {}).values():
+            source = getattr(schema, "source_file", None)
+            named = pathlib.Path(str(source)).name if source else schema.name
+            out[str(schema.id)] = str(named)
+        return out
+
+    def schema_file(self, iri: str) -> str:
+        """Name the file a schema IRI was read from, or the IRI itself.
+
+        The fallback matters for a schema resolved over the network or out
+        of an import map, where there is no local file to name. An IRI is a
+        worse answer than a filename and a much better one than nothing.
+        """
+        if not iri:
+            return self.source.name
+        return self._schema_files.get(iri, iri)
+
     @cached_property
     def tables(self) -> tuple[Table, ...]:
         """Every annotated class, sorted by name.
+
+        Includes classes reached through ``imports:``, and deliberately so:
+        they are emitted into this model's DDL and referenced by its facts,
+        so a check that skipped them would pass a model whose generated
+        output does not run. Which of them this model declared itself is
+        :attr:`Table.is_imported`, and it is reported rather than filtered.
 
         Sorted rather than in declaration order because this drives generated
         output, and output that reorders when someone moves a class in the

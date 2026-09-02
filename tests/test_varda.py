@@ -32,6 +32,9 @@ never a section in its own right.
     Interop — the claim that a Varda model is an ordinary LinkML schema
     SQLAlchemy — the same model as objects, checked against the DDL
     Portability — what only breaks on somebody else's machine
+    The public boundary — what an extension is entitled to import
+    Rules that raise — somebody else's code failing inside this one
+    Imports — when a model is more than one file
 """
 
 from __future__ import annotations
@@ -60,6 +63,7 @@ from sqlalchemy.dialects import postgresql as sa_postgresql
 from sqlalchemy.schema import CreateTable
 from sqlglot import expressions as sqlglot_exp
 
+import varda
 from varda import (
     __version__,
     cli,
@@ -68,7 +72,14 @@ from varda import (
     registry,
     rules,
 )
-from varda.ext import Context, Extension, ExtensionError, Generator
+from varda import ext as ext_module
+from varda.ext import (
+    Context,
+    Extension,
+    ExtensionError,
+    Generator,
+    RuleError,
+)
 from varda.gen_assertions import generate as generate_assertions
 from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
@@ -5285,3 +5296,425 @@ def test_every_text_call_names_its_encoding() -> None:
         if (lines := _unencoded(path))
     }
     assert not faults
+
+
+# ---------------------------------------------------------------------------
+# The public boundary — what an extension is entitled to import
+# ---------------------------------------------------------------------------
+
+
+def test_an_extension_needs_nothing_but_the_interface_module(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A rule can be written against `varda.ext` alone.
+
+    Four places said so — this module's own fixture among them — while
+    `Finding` and `RuleSet` lived in `varda.rules`, so the claim was false
+    in exactly the arrangement it was making a promise about. Written here
+    with the imports the documentation shows, so the page and the package
+    fail together or not at all.
+    """
+    rs = ext_module.RuleSet(tag="BND")
+    rs.rule("BND001", "error", "Everything a rule needs is in varda.ext")(
+        lambda m: iter(
+            [
+                ext_module.Finding("BND001", "error", str(t), "reported")
+                for t in m.tables
+            ]
+        )
+    )
+    model = build(tmp_path, {"DimThing": dimension()})
+    with registry.using(_bare("bnd", "bnd", rule_tag="BND", rules=rs)):
+        assert "BND001" in {f.rule for f in rules.check(model)}
+
+
+def test_the_older_import_path_still_reaches_the_same_class() -> None:
+    """`varda.rules` re-exports what moved, so a shipped extension survives.
+
+    An extension pinned against 0.3 imports these from `varda.rules`. The
+    move is a correction to where the boundary is drawn, not a reason to
+    break somebody who followed the documentation as it stood.
+    """
+    assert rules.Finding is ext_module.Finding
+    assert rules.RuleSet is ext_module.RuleSet
+    assert varda.Finding is ext_module.Finding
+
+
+def _runtime_varda_imports(path: pathlib.Path) -> set[str]:
+    """Name every `varda` module a file imports outside `TYPE_CHECKING`."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    guarded = {
+        id(sub)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and "TYPE_CHECKING" in ast.unparse(node.test)
+        for sub in ast.walk(node)
+    }
+    return {
+        str(node.module)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and id(node) not in guarded
+        and (node.module or "").startswith("varda")
+    }
+
+
+def test_the_worked_example_imports_only_the_interface_module() -> None:
+    """The fixture is held to the sentence it is there to demonstrate.
+
+    Read rather than asserted in prose, because prose is what failed: the
+    fixture's docstring claimed this while the line twelve below it
+    contradicted the claim, and nothing anywhere could tell. This is the
+    narrow form of the conformance scan `SPEC.md` puts on the roadmap, run
+    against the one extension this repository ships.
+
+    Type-only imports are excluded deliberately. A rule annotated with the
+    type of its argument names `DimensionalModel`, which `varda.ext` names
+    too; whether that read API is public is a separate and open question,
+    and this test would otherwise assert an answer to it.
+    """
+    fixture = ROOT / "tests" / "fixtures" / "acme_ext" / "__init__.py"
+    assert _runtime_varda_imports(fixture) == {"varda.ext"}
+
+
+# ---------------------------------------------------------------------------
+# Rules that raise — somebody else's code failing inside this one
+# ---------------------------------------------------------------------------
+
+
+def _exploding(tag: str = "BOOM") -> RuleSet:
+    """Build a rule set whose one rule raises when it is run."""
+
+    def boom(_model: DimensionalModel) -> Iterator[rules.Finding]:
+        msg = "an index this rule assumed"
+        raise IndexError(msg)
+        yield  # pragma: no cover — unreachable, and what makes this a rule
+
+    rs = RuleSet(tag=tag)
+    rs.rule(f"{tag}101", "error", "A rule with a bug in it")(boom)
+    return rs
+
+
+def test_a_rule_that_raises_names_itself_and_the_extension_that_shipped_it(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Flag a failing rule the way a failing generator is already flagged.
+
+    `_collect` has wrapped generators since 0.1 on the argument that the
+    CLI's job is to name the culprit rather than hand over a traceback
+    through somebody else's code. The checking path had no such guard, and
+    it is the path that runs on every pull request.
+    """
+    model_path = tmp_path / "t.yaml"
+    build(tmp_path, {"DimThing": dimension()})
+    with registry.using(
+        _bare("boom", "boom", rule_tag="BOOM", rules=_exploding())
+    ):
+        assert cli.main(["check", str(model_path)]) == 1
+    err = capsys.readouterr().err
+    assert "BOOM101" in err
+    assert "boom" in err
+    assert "IndexError" in err
+    assert "Traceback" not in err
+
+
+def test_a_rule_that_raises_stops_a_run_rather_than_reporting_less() -> None:
+    """The other option was to skip it, and it is worse.
+
+    A rule that cannot run is a check that is not happening. Reporting the
+    rules that survived and exiting zero is the tool saying a model
+    conforms when part of the question was never asked — which is the
+    failure `varda check` exists to prevent.
+    """
+    model = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    with (
+        registry.using(
+            _bare("boom", "boom", rule_tag="BOOM", rules=_exploding())
+        ),
+        pytest.raises(RuleError, match="BOOM101"),
+    ):
+        rules.check(model)
+
+
+def test_a_rule_that_raises_leaves_no_artifacts_behind(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Generation validates first, so the guard reaches it too.
+
+    The same property `test_generate_fails_closed` asserts for a generator
+    that raises, for the layer above it: nothing is written, because
+    nothing got as far as being generated.
+    """
+    out = tmp_path / "out"
+    with registry.using(
+        _bare("boom", "boom", rule_tag="BOOM", rules=_exploding())
+    ):
+        code = cli.main(["generate", str(RETAIL), "--out", str(out)])
+    assert code == 1
+    assert not out.exists()
+
+
+#: A model that breaks as much as one model can, so the walk below meets as
+#: many `Finding(...)` sites as possible. Not an example of anything.
+_EVERYTHING_WRONG: dict[str, Any] = {
+    "FctNoGrain": {
+        "annotations": {"varda:role": "FACT"},
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "Nowhere",
+                },
+            },
+            "amount": {
+                "range": "decimal",
+                "annotations": {"varda:role": "MEASURE"},
+            },
+            "orphan": {},
+        },
+    },
+    "DimBad": {
+        "annotations": {
+            "varda:role": "DIMENSION",
+            "varda:scd": "TYPE_2",
+            "varda:hierarchies": [
+                {"name": "h", "levels": ["missing_level"]},
+            ],
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {"varda:role": "SURROGATE_KEY"},
+            },
+            "valid_to": {
+                "range": "datetime",
+                "annotations": {"varda:role": "VERSION_END"},
+            },
+        },
+        "unique_keys": {"nothing": {"unique_key_slots": ["not_a_column"]}},
+    },
+    "Dim_Bad": {
+        "annotations": {"varda:role": "DIMENSION"},
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {"varda:role": "SURROGATE_KEY"},
+            },
+            "nk": {"required": True, "annotations": {"varda:role": "NAT_KEY"}},
+        },
+    },
+}
+
+
+def test_every_finding_names_a_table_the_model_has(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The convention that lets one place answer "which file is this in".
+
+    Every subject a rule states begins with a table name — a table is its
+    own name, and a column, a hierarchy and a unique key are all rendered
+    `Table.thing`. `rules._subject_table` reads the origin of a finding out
+    of that, so a rule inventing a subject of another shape would silently
+    stop being attributed to any file. Provoked against a model that fails
+    widely, so the sixty-odd `Finding(...)` sites are covered by what they
+    emit rather than by being listed here.
+    """
+    model = build(tmp_path, _EVERYTHING_WRONG)
+    found = rules.check(model)
+    names = {t.name for t in model.tables}
+    unattributed = sorted(
+        f"{f.rule}: {f.subject}"
+        for f in found
+        if rules._subject_table(f.subject) not in names
+    )
+    assert not unattributed
+    # A lower bound, so the model above cannot quietly stop provoking
+    # anything and leave the walk with nothing to walk.
+    assert len({f.rule for f in found}) >= 15
+
+
+# ---------------------------------------------------------------------------
+# Imports — when a model is more than one file
+# ---------------------------------------------------------------------------
+
+
+def _schema(name: str, classes: dict[str, Any], imports: list[str]) -> str:
+    return str(
+        yaml.safe_dump(
+            {
+                "id": f"https://example.org/{name}",
+                "name": name,
+                "prefixes": {
+                    "linkml": "https://w3id.org/linkml/",
+                    "varda": "https://w3id.org/varda/",
+                },
+                "default_prefix": name,
+                "default_range": "string",
+                "imports": ["linkml:types", *imports],
+                "classes": classes,
+            }
+        )
+    )
+
+
+def two_files(
+    tmp_path: pathlib.Path,
+    local: dict[str, Any],
+    shared: dict[str, Any],
+) -> pathlib.Path:
+    """Write a mart that imports a second schema, and return the mart's path.
+
+    Two files because that is the whole subject. A conformed dimension is
+    declared once and imported by every mart that uses it, which is what
+    `imports:` is for and what a dimensional tool should expect to meet.
+    """
+    (tmp_path / "shared.yaml").write_text(
+        _schema("shared", shared, []), encoding="utf-8"
+    )
+    path = tmp_path / "mart.yaml"
+    path.write_text(_schema("mart", local, ["shared"]), encoding="utf-8")
+    return path
+
+
+def _loaded(path: pathlib.Path) -> DimensionalModel:
+    return DimensionalModel.load(path, importmap=registry.importmap())
+
+
+def test_an_imported_class_is_a_table_of_this_model(
+    tmp_path: pathlib.Path,
+) -> None:
+    """It is emitted into this model's DDL, so it is checked as one.
+
+    The alternative — skipping what another schema declares — passes a
+    model whose generated file creates a fact with a foreign key to a table
+    the file never creates.
+    """
+    path = two_files(
+        tmp_path, {"DimLocal": dimension()}, {"DimShared": dimension()}
+    )
+    model = _loaded(path)
+    assert [t.name for t in model.tables] == ["DimLocal", "DimShared"]
+    assert model.table("DimShared") is not None
+
+
+def test_a_finding_says_which_file_declared_the_subject(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Flag whose fault a finding is, which the output could not say.
+
+    A shared schema's error failed every mart importing it, in a message
+    naming a class that appears in none of the files the reader has open.
+    """
+    broken = dimension()
+    del broken["attributes"]["d_id"]  # V302: no natural key
+    path = two_files(tmp_path, {"DimLocal": dimension()}, {"DimShared": broken})
+    found = [f for f in rules.check(_loaded(path)) if f.rule == "V302"]
+    assert [f.subject for f in found] == ["DimShared"]
+    assert found[0].origin == "shared.yaml"
+    assert "imported from shared.yaml" in str(found[0])
+
+
+def test_a_finding_against_this_file_carries_no_origin(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A model in one file reads exactly as it did.
+
+    The common case, every transcript in the documentation, and the reason
+    the origin is empty rather than always stated.
+    """
+    broken = dimension()
+    del broken["attributes"]["d_id"]
+    model = build(tmp_path, {"DimThing": broken})
+    found = [f for f in rules.check(model) if f.rule == "V302"]
+    assert found
+    assert all(f.origin == "" for f in found)
+    assert "imported from" not in str(found[0])
+
+
+def test_skipping_imported_findings_keeps_every_rule_looking_at_them(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The flag drops reports, never tables.
+
+    The distinction is the whole design. A physical name colliding with an
+    imported table, a foreign key naming a class that does not exist and a
+    level reaching through a key into another schema are all faults of
+    *this* model that only a rule seeing both files can find.
+    """
+    broken = dimension()
+    del broken["attributes"]["d_id"]
+    path = two_files(tmp_path, {"DimLocal": dimension()}, {"DimShared": broken})
+    model = _loaded(path)
+
+    assert "V302" in {f.rule for f in rules.check(model)}
+    assert not rules.check(model, skip_imported=True)
+    # Still two tables, and the generator still emits both.
+    assert len(model.tables) == 2
+
+
+def test_a_collision_with_an_imported_table_is_reported_against_this_one(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The one rule whose subject had to move.
+
+    V801 named the first colliding class in sorted order, which for an
+    imported one is a fault filed under the schema that was there first —
+    and `--skip-imported` would then hide a name this model chose. The
+    message still names both.
+    """
+    path = two_files(
+        tmp_path,
+        {"Dim_Shared": dimension()},  # derives dim_shared, same as DimShared
+        {"DimShared": dimension()},
+    )
+    model = _loaded(path)
+    found = [f for f in rules.check(model) if f.rule == "V801"]
+    assert [f.subject for f in found] == ["Dim_Shared"]
+    assert "DimShared" in found[0].message
+    assert found[0].origin == ""
+    assert "V801" in {f.rule for f in rules.check(model, skip_imported=True)}
+
+
+def test_the_summary_counts_what_it_did_not_report(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A silent skip is a check that quietly stopped applying.
+
+    Said only when something was skipped, so a model in one file prints the
+    line the documentation quotes.
+    """
+    broken = dimension()
+    del broken["attributes"]["d_id"]
+    path = two_files(tmp_path, {"DimLocal": dimension()}, {"DimShared": broken})
+
+    assert cli.main(["check", str(path)]) == 1
+    assert cli.main(["check", str(path), "--skip-imported"]) == 0
+    out = capsys.readouterr().out
+    assert "2 tables checked (1 imported, not reported)" in out
+
+
+def test_generate_takes_the_same_scope_as_check(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`_blocking` promises the two commands cannot disagree.
+
+    A flag on one of them is exactly how they would, so it is on both — and
+    the imported tables are emitted either way, because a fact referencing
+    a dimension the file never creates is DDL that does not run.
+    """
+    broken = dimension()
+    del broken["attributes"]["d_id"]
+    path = two_files(tmp_path, {"DimLocal": dimension()}, {"DimShared": broken})
+    out = tmp_path / "out"
+
+    assert cli.main(["generate", str(path), "--out", str(out)]) == 1
+    assert not out.exists()
+
+    assert (
+        cli.main(["generate", str(path), "--out", str(out), "--skip-imported"])
+        == 0
+    )
+    emitted = (out / "sql" / "mart.sql").read_text(encoding="utf-8")
+    assert "dim_shared" in emitted
+    assert "dim_local" in emitted

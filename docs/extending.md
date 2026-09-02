@@ -76,13 +76,14 @@ convention in a wiki.
 
 ## Adding rules
 
-An extension with code behind it imports `varda.ext` and nothing else.
+An extension with code behind it imports `varda.ext`. Everything it needs to
+run is there: `Extension`, `Generator`, `Context`, `Finding`, `RuleSet` and
+the reader for its own namespace.
 
 ```python title="acme_ext/__init__.py"
 import pathlib
 
-from varda.ext import Extension
-from varda.rules import Finding, RuleSet
+from varda.ext import Extension, Finding, RuleSet
 
 HERE = pathlib.Path(__file__).parent
 RULES = RuleSet(tag="ACME")
@@ -117,6 +118,18 @@ Ship it as a package advertising the entry point:
 [project.entry-points."varda.extensions"]
 acme = "acme_ext:EXTENSION"
 ```
+
+!!! note "`Finding` and `RuleSet` moved"
+    Both used to live in `varda.rules`, which meant an extension with rules
+    in it could not honour the sentence above this code block. They are
+    declared in `varda.ext` now and re-exported from `varda.rules`, so an
+    extension written against the older import keeps working.
+
+    One import is not covered: a rule annotated with the type of its argument
+    names `DimensionalModel`, which lives in `varda.model`. It is type-only —
+    nothing an extension *runs* comes from there — but whether that read API
+    is public and versioned has not been settled, so an extension that
+    annotates its rules depends on a module Varda still calls internal.
 
 Every rule code must begin with the extension's tag, which defaults to the
 prefix upper-cased. That is checked at registration, where the error can name

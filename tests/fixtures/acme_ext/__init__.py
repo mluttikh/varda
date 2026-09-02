@@ -4,10 +4,19 @@ This is the fixture the test suite uses, and it is deliberately written the
 way a real organization would write one: a profile declaring the vocabulary,
 a rule set under its own tag, and one `Extension` exported as `EXTENSION`.
 
-Note what it does *not* do. It never imports from anywhere in `varda` except
-`varda.ext`, it never adds a value to a Varda enum, and its rule codes all
-begin with its own tag. Those three constraints are what the registry checks,
-and this fixture exists partly to prove they are satisfiable.
+Note what it does *not* do. Everything it runs on comes from `varda.ext`, it
+never adds a value to a Varda enum, and its rule codes all begin with its own
+tag. Those three constraints are what the registry checks, and this fixture
+exists partly to prove they are satisfiable — it did not, for three releases,
+because `Finding` and `RuleSet` lived in `varda.rules` and this file said
+otherwise twelve lines below the claim.
+
+The one remaining import is `DimensionalModel`, and it is type-only. A rule's
+signature names the model — `varda.ext` names it too, in `Context.model` and
+in the type of a rule function — so an extension writing a typed rule cannot
+avoid it. Whether that whole read API is public and versioned or internal and
+free to move is still undecided; until it is, this import is the honest
+statement of what an extension depends on.
 """
 
 from __future__ import annotations
@@ -15,8 +24,7 @@ from __future__ import annotations
 import pathlib
 from typing import TYPE_CHECKING
 
-from varda.ext import Extension
-from varda.rules import Finding, RuleSet
+from varda.ext import Extension, Finding, RuleSet
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
