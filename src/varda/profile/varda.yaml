@@ -57,11 +57,25 @@ license: https://creativecommons.org/publicdomain/zero/1.0/
 prefixes:
   linkml: https://w3id.org/linkml/
   varda: https://w3id.org/varda/
-  # OWL-Time, for the `meaning:` mappings on the versioning column
-  # roles. A version's period is a temporal interval, and saying so in
-  # the vocabulary is what lets a model built on this profile join a
-  # knowledge graph instead of only a warehouse.
+  # The vocabularies the `meaning:` mappings below point at. A role is a
+  # word this profile made up; a `meaning:` says which already-standard
+  # concept the word denotes, so a reader coming from a knowledge graph can
+  # tell what a Varda term is without being told.
+  #
+  # Where these land is worth knowing. `meaning:` binds a permissible value
+  # to a term *in this schema*, and a domain model does not import this
+  # schema — it writes `varda:role: MEASURE` as an annotation, and the
+  # string is what reaches `gen-owl`. So these are published vocabulary and
+  # generated reference, not something a model's RDF carries. Emitting a
+  # real cube from a model is a generator, and there is not one.
+  #
+  # OWL-Time: a version's period is a temporal interval.
   time: http://www.w3.org/2006/time#
+  # The RDF Data Cube vocabulary, W3C Recommendation, and QB4OLAP, which
+  # adds the multidimensional concepts QB left out. Between them they are
+  # the standard reading of what a star schema means.
+  qb: http://purl.org/linked-data/cube#
+  qb4o: http://purl.org/qb4olap/cubes#
 default_prefix: varda
 default_range: string
 imports:
@@ -85,6 +99,25 @@ imports:
 # Varda may widen its own enums in a later minor version — that is backward
 # compatible, because no existing model breaks when a new value becomes
 # legal. So a value missing here is a request to file, not a reason to fork.
+#
+# Six values carry a `meaning:` and the rest deliberately do not. A mapping
+# is an assertion that two terms denote the same concept, and the obvious
+# ones here are false:
+#
+#   ATTRIBUTE  is not qb:AttributeProperty. QB defines that as "attributes
+#              of observations in the cube, e.g. unit of measurement" — a
+#              qualifier on a fact row, not a descriptive column on a
+#              dimension. The concept wanted is qb4o:LevelAttribute.
+#   DIMENSION  is not qb:DimensionProperty. That is a component of the cube;
+#              this is a table holding the members it draws on.
+#   FOREIGN_KEY is qb:DimensionProperty on a fact and a level-to-level link
+#              in a snowflake, so the role alone cannot say which.
+#   Additivity has no counterpart. qb4o:aggregateFunction names Sum and Avg
+#              — which function to apply, not whether summing is valid.
+#
+# Leaving a value unmapped costs a reader nothing. Mapping it wrongly puts a
+# false statement into every graph built from the vocabulary, and the reader
+# who finds it has no way to know it was a guess.
 # ---------------------------------------------------------------------------
 
 enums:
@@ -99,6 +132,7 @@ enums:
           A measurement event table. Has a declared grain, foreign keys to
           dimensions, and zero or more measures. Never the target of another
           table's foreign key.
+        meaning: qb:DataSet
       DIMENSION:
         description: >-
           Descriptive context. Has one surrogate key, one or more natural key
@@ -143,15 +177,17 @@ enums:
         description: >-
           A numeric quantity that is aggregated. Must declare
           `varda:additivity`. Lives on a fact or a bridge, never a dimension.
+        meaning: qb:MeasureProperty
       ATTRIBUTE:
         description: >-
           Descriptive context, grouped and filtered on but not summed. The
           default role for a dimension column.
+        meaning: qb4o:LevelAttribute
       DEGENERATE_DIMENSION:
         description: >-
           An identifier that lives on the fact with no dimension table of its
           own — an order number, a ticket reference. Fact tables only.
-
+        meaning: qb:DimensionProperty
       VERSION_START:
         description: >-
           The instant from which this version of the row is the one in force.
