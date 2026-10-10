@@ -44,14 +44,14 @@ reason the core can stay small enough to be correct.
 | `registry.py` | ~800 | Discovery, validation, lookup. Where colliding extensions are refused. |
 | `rules.py` | ~1725 | The 49 core rules, and the engine that runs them. |
 | `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
-| `gen_docs.py` | ~170 | Markdown reference. |
-| `gen_sqlalchemy.py` | ~365 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
+| `gen_docs.py` | ~185 | Markdown reference. |
+| `gen_sqlalchemy.py` | ~415 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~490 | Five commands. |
 
-**5,818 lines of source**: 3,008 of code, 1,416 of docstrings, 502 of
-comment, 892 blank. The prose share is deliberate and is house style —
+**5,884 lines of source**: 3,041 of code, 1,436 of docstrings, 505 of
+comment, 902 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -59,7 +59,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 344 tests in 5,720 lines.
+importable is kept to what is meant to be imported. And 346 tests in 5,782 lines.
 
 ### The four seams
 
