@@ -76,28 +76,27 @@ convention in a wiki.
 
 ## Adding rules
 
-An extension with code behind it imports `varda.ext`. Everything it needs to
-run is there: `Extension`, `Generator`, `Context`, `Finding`, `RuleSet` and
-the reader for its own namespace.
+An extension with code behind it imports `varda.ext` and nothing else. Every
+type it runs on is there, including the ones its rules are annotated with:
+`Extension`, `RuleSet`, `Finding`, `Generator`, `Context`, the `Model` a
+rule walks and everything under it, and `analysis`.
 
 ```python title="acme_ext/__init__.py"
 import pathlib
+from collections.abc import Iterator
 
-from varda.ext import Extension, Finding, RuleSet
+from varda.ext import Extension, Finding, Model, RuleSet
 
 HERE = pathlib.Path(__file__).parent
 RULES = RuleSet(tag="ACME")
-A = Extension.reader("acme")
 
 
 @RULES.rule("ACME101", "error", "Every table names a cost center")
-def acme101(model):
+def acme101(model: Model) -> Iterator[Finding]:
     for table in model.tables:
-        if not A.get(table.cls, "cost_center"):
+        if not table.annotations.of("acme").get("cost_center"):
             yield Finding(
-                "ACME101",
-                "error",
-                str(table),
+                table,
                 "no acme:cost_center; storage has to be billed to someone",
             )
 
@@ -112,6 +111,11 @@ EXTENSION = Extension(
 )
 ```
 
+A rule yields what is wrong and with what: the table, column, hierarchy or
+unique key, and a message. The code and severity are the decorator's, and
+the engine adds them — along with the file the subject was declared in, when
+it arrived through `imports:`.
+
 Ship it as a package advertising the entry point:
 
 ```toml title="pyproject.toml"
@@ -119,23 +123,50 @@ Ship it as a package advertising the entry point:
 acme = "acme_ext:EXTENSION"
 ```
 
-!!! note "`Finding` and `RuleSet` moved"
-    Both used to live in `varda.rules`, which meant an extension with rules
-    in it could not honour the sentence above this code block. They are
-    declared in `varda.ext` now and re-exported from `varda.rules`, so an
-    extension written against the older import keeps working.
-
-    One import is not covered: a rule annotated with the type of its argument
-    names `DimensionalModel`, which lives in `varda.model`. It is type-only —
-    nothing an extension *runs* comes from there — but whether that read API
-    is public and versioned has not been settled, so an extension that
-    annotates its rules depends on a module Varda still calls internal.
-
 Every rule code must begin with the extension's tag, which defaults to the
 prefix upper-cased. That is checked at registration, where the error can name
 the offending rule — because a rule code is a public identifier that ends up
 in commit messages and exemption lists, and two meanings for one code is a
 suppression that silently changes what it suppresses.
+
+## Reading the model
+
+A rule and a generator both walk a `Model`: frozen data, read once, holding
+nothing from LinkML. `model.tables` are sorted by name, each table's
+`columns` are in declaration order with inherited ones included, and the
+selections a rule usually wants are already there — `model.facts`,
+`table.foreign_keys`, `table.measures`, `table.versioning`.
+
+Every element carries its annotations as written, across every prefix.
+An extension reads its own with `annotations.of`, which strips the prefix
+and sees nothing outside it:
+
+```python
+table.annotations.of("acme").get("cost_center")
+column.annotations.of("acme").get("sensitivity")
+```
+
+A name the model wrote that should resolve to something — a foreign key's
+target, a grain column, a hierarchy level's key — is a `Ref`: the name, and
+the element it resolved to, or `None`. A model that fails `varda check` is
+still read, so a rule can report what is wrong with it.
+
+What Varda *concludes* from a model is `analysis`, not the model itself:
+
+```python
+from varda.ext import analysis
+
+analysis.unique_claims(table)  # what the DDL makes UNIQUE
+analysis.reference(column)  # the table and key a foreign key lands on
+analysis.creation_order(model)  # every reference target before its referrer
+analysis.identities(hierarchy)  # what identifies a member of each level
+```
+
+The two carry different promises. The model's fields change only when the
+vocabulary does. An answer from `analysis` may become stricter in a minor
+release — a derived key that declines to guess in one more case — while
+its signature holds. An extension that needs the model's literal statement
+reads the model.
 
 ## Adding generators
 
@@ -169,13 +200,34 @@ imports it, which is why `types` refuses a class or an enum at load. An
 extension adding annotations only — most of them — declares no types schema
 and is not importable at all.
 
-`ctx` is a closed record — the model, its source path, and the three things
-the invocation chose: `ctx.schema`, `ctx.dialect`, and `ctx.constraints`, one
-of `enforced`, `asserted` or `none`. All three are plain strings rather than
-resolved objects, so a generator emitting something other than SQL can ignore
-them and one emitting SQL for an engine the core has never heard of is not
-limited to the core's table. Every field is defaulted, so a generator written
-against an earlier version keeps working when a new one is added.
+`ctx` is a closed record — the model, and the `Options` the invocation chose:
+`ctx.options.schema`, `ctx.options.dialect`, and `ctx.options.constraints`,
+one of `enforced`, `asserted` or `none`. All three are plain strings rather
+than resolved objects, so a generator emitting something other than SQL can
+ignore them and one emitting SQL for an engine the core has never heard of is
+not limited to the core's table. Every field is defaulted, so a generator
+written against an earlier version keeps working when a new one is added.
+
+## Using Varda as a library
+
+The command line is a thin layer over `varda.api`, so anything it does is
+available without it — to a pre-commit hook, a dbt integration or a
+notebook — with the same refusals:
+
+```python
+from varda import api
+
+model = api.load("mart.yaml")  # extensions found from the model's directory
+report = api.check(model)  # report.errors, report.warnings
+generation = api.generate(model)  # raises api.NonconformingError on errors
+api.write(generation, "out")
+```
+
+`api.load` discovers the extension set the way `varda check` does: installed
+entry points, and the nearest `varda.toml` above the model. To decide it
+yourself, pass a `Registry` — `Registry.of(EXTENSION)` is Varda plus exactly
+that extension and nothing installed, which is what a test of an extension
+wants.
 
 ## Severity
 
@@ -244,6 +296,27 @@ startup warnings.
     Varda may widen its **own** enums in a minor release. That is backward
     compatible — no existing model breaks when a new value becomes legal.
 
+## Migrating an extension written for 0.3
+
+The interface changed once, deliberately, before any extension outside this
+repository depended on it. What moved:
+
+| 0.3 | Now |
+| --- | --- |
+| `from varda.rules import Finding, RuleSet` | `from varda.ext import Finding, RuleSet` |
+| `from varda.model import DimensionalModel` | `from varda.ext import Model` |
+| `Finding("ACME101", "error", str(table), msg)` | `Finding(table, msg)` |
+| `Extension.reader("acme").get(table.cls, "cost_center")` | `table.annotations.of("acme").get("cost_center")` |
+| `column.references` — a string | `column.references` — a `Ref`; `.name` is the string, `.target` the table |
+| `table.unique_claims`, `level.identity` | `analysis.unique_claims(table)`, `analysis.identities(hierarchy)` |
+| `hierarchy.resolved`, `hierarchy.levels` | `hierarchy.levels` (the `Level`s), `hierarchy.specs` (as written) |
+| `ctx.schema`, `ctx.dialect`, `ctx.constraints` | `ctx.options.schema`, `ctx.options.dialect`, `ctx.options.constraints` |
+| `registry.using(EXTENSION)` in a test | `api.load(path, Registry.of(EXTENSION))` |
+
+Roles, additivity, slowly-changing types and fact types are `StrEnum`s now.
+A member compares equal to its string, so `column.role == "MEASURE"` keeps
+working; formatting one with `!r` shows the enum rather than the string.
+
 ## Seeing what is active
 
 ```console
@@ -251,10 +324,10 @@ $ varda ext
 varda 0.3.0  [varda:]
     origin      built in
     rule tag    V
-    rules       29
+    rules       49
     table       varda:fact_type, varda:grain, varda:grain_statement, ...
     column      varda:additivity, varda:physical_name, varda:references, ...
-    generators  sql, docs
+    generators  sql, assertions, docs, sqlalchemy
 
 acme 1.2.0  [acme:]
     origin      varda.toml (/srv/mart/varda.toml)

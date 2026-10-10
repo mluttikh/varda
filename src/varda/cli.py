@@ -1,9 +1,10 @@
 """The command line.
 
-Five commands, each doing one thing. Exit codes are part of the contract
-because these run in CI: ``0`` success, ``1`` the model or the run failed,
-``2`` the invocation was wrong. A tool that returns ``0`` for "I could not
-tell" is one that turns a red build green.
+Five commands, each doing one thing, each a call into :mod:`varda.api` and
+the printing around it. Exit codes are part of the contract because these
+run in CI: ``0`` success, ``1`` the model or the run failed, ``2`` the
+invocation was wrong. A tool that returns ``0`` for "I could not tell" is one
+that turns a red build green.
 """
 
 from __future__ import annotations
@@ -14,15 +15,16 @@ import pathlib
 import sys
 from typing import TYPE_CHECKING
 
-from . import gen_sql, registry
-from .ext import Context, ExtensionError, Finding, RuleError
-from .model import DimensionalModel
-from .rules import all_rules, check, unknown_codes
+from . import api, gen_sql
+from .ext import ExtensionError, Options, RuleError
+from .registry import Registry
+from .vocabulary import TARGETS
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from .ext import Generator
+    from .ext import Issue, Report
+    from .snapshot import Model
 
 EXIT_OK = 0
 EXIT_FAIL = 1
@@ -39,17 +41,50 @@ def _levels() -> str:
     return ", ".join(gen_sql.LEVELS)
 
 
-def _load(path: str) -> DimensionalModel:
-    """Load a model, resolving symbolic profile imports."""
-    return DimensionalModel.load(path, importmap=registry.importmap())
+def _registry(
+    args: argparse.Namespace, start: pathlib.Path | None = None
+) -> Registry:
+    """Settle the extension set for this run.
+
+    The one handed to :func:`main`, if any; otherwise discovered from
+    ``start`` — the model's directory, for a command that reads a model.
+    """
+    given: Registry | None = args.registry
+    if given is not None:
+        return given
+    return Registry.discover(start, config=args.config)
 
 
-def _extensions_line() -> str:
+def _load(args: argparse.Namespace) -> Model:
+    """Load the model a command names, under its extension set."""
+    path = pathlib.Path(args.model)
+    return api.load(path, _registry(args, path.parent))
+
+
+def _extensions_line(registry: Registry) -> str:
     """Name the active extensions, for the header of a run."""
-    names = [
-        f"{active.name} {active.version}" for active in registry.extensions()
-    ]
-    return ", ".join(names)
+    return ", ".join(f"{e.name} {e.version}" for e in registry.extensions)
+
+
+def _stale(report: Report) -> bool:
+    """Warn about every configured code no active extension registers.
+
+    Exemptions and severity overrides together, because both name a rule
+    and both go on meaning nothing the moment that rule is retired. Returns
+    whether anything was reported; whether that stops the run is the
+    caller's question, and the answer is yes under ``--strict`` only.
+    """
+    found = (
+        ("exemption", report.stale_exemptions),
+        ("severity override", report.stale_overrides),
+    )
+    for what, codes in found:
+        if codes:
+            print(
+                f"warning: {what} names no registered rule: {'; '.join(codes)}",
+                file=sys.stderr,
+            )
+    return report.stale
 
 
 # ---------------------------------------------------------------------------
@@ -57,50 +92,10 @@ def _extensions_line() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _exempt(args: argparse.Namespace) -> list[str]:
-    """List the rules this run skips: the config file's, then the flag's."""
-    return [*registry.exemptions(), *(args.exempt or [])]
-
-
-def _stale(exempt: Sequence[str], *, strict: bool) -> bool:
-    """Warn about every configured code no active extension registers.
-
-    Exemptions and severity overrides together, because both name a rule and
-    both go on meaning nothing the moment that rule is retired — a
-    suppression nobody has noticed has stopped applying, which is the whole
-    reason :func:`varda.rules.unknown_codes` exists.
-
-    Shared by both commands rather than sitting in `check` alone. The one
-    that writes files was the one that said nothing, and `_blocking` already
-    promises the two cannot disagree about whether a model is fit to
-    generate from.
-
-    Returns whether the run should stop, which is under ``--strict`` only: a
-    stale code is a maintenance finding about the configuration and not a
-    statement about the model.
-    """
-    found = (
-        ("exemption", unknown_codes(exempt)),
-        ("severity override", unknown_codes(registry.severities())),
-    )
-    reported = False
-    for what, codes in found:
-        if not codes:
-            continue
-        print(
-            f"warning: {what} names no registered rule: {'; '.join(codes)}",
-            file=sys.stderr,
-        )
-        reported = True
-    return reported and strict
-
-
-def _scope(model: DimensionalModel, *, skipped: bool) -> str:
+def _scope(model: Model, *, skipped: bool) -> str:
     """Say how many of the checked tables came from another file.
 
-    Silent for a model in one file, which is most of them and every one the
-    documentation shows — a summary line that grows a clause nobody's model
-    produces is one nobody can match against what they are reading.
+    Silent for a model in one file, which is most of them.
     """
     imported = sum(1 for t in model.tables if t.is_imported)
     if not imported:
@@ -110,23 +105,23 @@ def _scope(model: DimensionalModel, *, skipped: bool) -> str:
 
 def cmd_check(args: argparse.Namespace) -> int:
     """Validate a model against every active extension's rules."""
-    model = _load(args.model)
-    exempt = _exempt(args)
-
-    if _stale(exempt, strict=args.strict):
+    model = _load(args)
+    report = api.check(
+        model, exempt=args.exempt or (), skip_imported=args.skip_imported
+    )
+    if _stale(report) and args.strict:
         return EXIT_FAIL
 
-    findings = check(model, exemptions=exempt, skip_imported=args.skip_imported)
-    for finding in findings:
-        print(finding)
+    for issue in report.issues:
+        print(issue)
 
-    errors = sum(1 for f in findings if f.severity == "error")
-    warnings = sum(1 for f in findings if f.severity == "warning")
-    tables = len(model.tables)
+    errors, warnings = len(report.errors), len(report.warnings)
     print(
-        f"\n{tables} tables checked{_scope(model, skipped=args.skip_imported)}"
-        f" against {len(all_rules())} rules "
-        f"({_extensions_line()}): {errors} errors, {warnings} warnings"
+        f"\n{len(model.tables)} tables checked"
+        f"{_scope(model, skipped=args.skip_imported)}"
+        f" against {len(model.registry.rules)} rules "
+        f"({_extensions_line(model.registry)}): "
+        f"{errors} errors, {warnings} warnings"
     )
     if errors or (args.strict and warnings):
         return EXIT_FAIL
@@ -138,41 +133,12 @@ def cmd_check(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _selected(only: Sequence[str] | None) -> list[Generator]:
-    """Pick the generators to run, or raise on a name nobody registers."""
-    available = registry.generators()
-    if not only:
-        return list(available)
-    by_name = {g.name: g for g in available}
-    missing = [n for n in only if n not in by_name]
-    if missing:
-        known = ", ".join(sorted(by_name)) or "none"
-        msg = f"unknown generator(s): {', '.join(missing)}. Known: {known}"
-        raise KeyError(msg)
-    return [by_name[n] for n in only]
-
-
-def _blocking(
-    model: DimensionalModel, args: argparse.Namespace
-) -> list[Finding]:
-    """Collect the findings that should stop a run, given its flags.
-
-    The same rules `check` runs, the same exemptions and the same scope, so
-    the two commands cannot disagree about whether a model is fit to
-    generate from.
-    """
-    exempt = _exempt(args)
-    stop = {"error", "warning"} if args.strict else {"error"}
-    found = check(model, exemptions=exempt, skip_imported=args.skip_imported)
-    return [f for f in found if f.severity in stop]
-
-
-def _report(findings: list[Finding], *, forced: bool) -> None:
+def _report(issues: Sequence[Issue], *, forced: bool) -> None:
     """Print what is wrong, and what it means for this run."""
-    for finding in findings:
-        print(finding, file=sys.stderr)
+    for issue in issues:
+        print(issue, file=sys.stderr)
     counts = {
-        severity: sum(1 for f in findings if f.severity == severity)
+        severity: sum(1 for i in issues if i.severity == severity)
         for severity in ("error", "warning")
     }
     found = ", ".join(
@@ -186,95 +152,54 @@ def _report(findings: list[Finding], *, forced: bool) -> None:
     print(f"\n{found}; {tail}", file=sys.stderr)
 
 
-class _RunError(Exception):
-    """A generator raised, or produced a path it never declared."""
-
-
-def _collect(chosen: list[Generator], ctx: Context) -> dict[str, str]:
-    """Run every generator and gather what it produced, writing nothing.
-
-    Separated from :func:`cmd_generate` so that the two-phase guarantee is
-    visible in the shape of the code: this function cannot write, so a
-    failure anywhere in it cannot leave a partial output tree behind.
-    """
-    collected: dict[str, str] = {}
-    for gen in chosen:
-        try:
-            produced = gen.run(ctx)
-        except Exception as exc:
-            # Deliberately broad. A third-party generator may raise anything,
-            # and the CLI's job at this point is to fail closed with a legible
-            # message naming the culprit, rather than to hand the operator a
-            # traceback through somebody else's code. Nothing has been written
-            # yet, which is the whole reason for collecting before writing.
-            msg = f"{gen.name} failed: {type(exc).__name__}: {exc}"
-            raise _RunError(msg) from exc
-        undeclared = sorted(set(produced) - set(gen.artifacts))
-        if undeclared:
-            msg = (
-                f"{gen.name} wrote undeclared path(s): {', '.join(undeclared)}"
-            )
-            raise _RunError(msg)
-        collected.update(produced)
-    return collected
-
-
 def cmd_generate(args: argparse.Namespace) -> int:
     """Run generators and write their output.
 
-    The model is validated first, and errors stop the run. Generating from a
-    model that does not conform produces artifacts that look finished and are
-    not: a grain naming a column that does not exist emits a table with no
-    uniqueness at all, and two classes sharing a physical name emit one table
-    where the model says two. `--force` generates regardless, for somebody
-    mid-refactor who wants to see the output; `--strict` stops on warnings
-    too, matching `check`.
-
-    Then two phases. Every generator runs and every result is collected
-    before a single file is written, so a generator that raises half way
-    through leaves no partial output tree behind. A half-generated estate is
-    worse than none: it looks complete, and the parts that are stale are the
-    parts nobody thinks to check.
+    :func:`varda.api.generate` checks the model and refuses one that does
+    not conform, then runs every generator and collects every result before
+    anything is written. This prints what it said, and writes.
     """
-    model = _load(args.model)
-    try:
-        chosen = _selected(args.only)
-    except KeyError as exc:
-        print(str(exc).strip("'\""), file=sys.stderr)
-        return EXIT_USAGE
-    if not chosen:
+    model = _load(args)
+    if not model.registry.generators:
         print("no generators registered", file=sys.stderr)
         return EXIT_USAGE
-
-    if _stale(_exempt(args), strict=args.strict):
-        return EXIT_FAIL
-
-    blocking = _blocking(model, args)
-    if blocking:
-        _report(blocking, forced=args.force)
-        if not args.force:
-            return EXIT_FAIL
-
-    ctx = Context(
-        model=model,
-        source=model.source,
+    options = Options(
         schema=args.schema,
         dialect=args.dialect,
         constraints=args.constraints,
     )
     try:
-        collected = _collect(chosen, ctx)
-    except _RunError as exc:
+        generation = api.generate(
+            model,
+            options,
+            only=args.only,
+            exempt=args.exempt or (),
+            skip_imported=args.skip_imported,
+            strict=args.strict,
+            force=args.force,
+        )
+    except api.UnknownGeneratorError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
+    except api.NonconformingError as exc:
+        _stale(exc.report)
+        if exc.blocking:
+            _report(exc.blocking, forced=False)
+        return EXIT_FAIL
+    except api.GeneratorFailedError as exc:
         print(f"{exc}\nnothing was written", file=sys.stderr)
         return EXIT_FAIL
 
-    out = pathlib.Path(args.out)
-    for rel, content in sorted(collected.items()):
-        target = out / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+    _stale(generation.report)
+    if generation.forced_past:
+        _report(generation.forced_past, forced=True)
+    written = api.write(generation, args.out)
+    for target in written:
         print(f"wrote {target}")
-    print(f"\n{len(collected)} artifacts from {len(chosen)} generators")
+    print(
+        f"\n{len(written)} artifacts from "
+        f"{len(generation.generators)} generators"
+    )
     return EXIT_OK
 
 
@@ -285,22 +210,24 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
 def cmd_rules(args: argparse.Namespace) -> int:
     """List every registered rule."""
-    overrides = registry.severities()
-    for code, severity, title, fn in all_rules():
-        effective = overrides.get(code, severity)
-        mark = "*" if effective != severity else " "
-        print(f"{code}  {effective:<7}{mark} {title}")
-        if args.verbose and fn.__doc__:
-            for line in fn.__doc__.strip().splitlines():
+    registry = _registry(args)
+    overrides = registry.severities
+    for rule in registry.rules:
+        effective = overrides.get(rule.code, rule.severity)
+        mark = "*" if effective != rule.severity else " "
+        print(f"{rule.code}  {effective:<7}{mark} {rule.title}")
+        if args.verbose and rule.doc:
+            for line in rule.doc.strip().splitlines():
                 print(f"          {line.strip()}")
             print()
-    print(f"\n{len(all_rules())} rules ({_extensions_line()})")
+    print(f"\n{len(registry.rules)} rules ({_extensions_line(registry)})")
     return EXIT_OK
 
 
 def cmd_ext(args: argparse.Namespace) -> int:
     """Describe the active extensions."""
-    for active in registry.extensions():
+    registry = _registry(args)
+    for active in registry.extensions:
         if args.name and active.name != args.name:
             continue
         print(f"{active.name} {active.version}  [{active.prefix}:]")
@@ -310,10 +237,10 @@ def cmd_ext(args: argparse.Namespace) -> int:
         print(f"    rules       {n_rules}")
         if active.profile:
             print(f"    profile     {active.profile}")
-            for target in registry.TARGETS:
+            for target in TARGETS:
                 tags = sorted(
                     t
-                    for t in registry.declared_annotations(target)
+                    for t in registry.vocabulary.declared(target)
                     if t.startswith(f"{active.prefix}:")
                 )
                 if tags:
@@ -337,7 +264,7 @@ def cmd_importmap(args: argparse.Namespace) -> int:
 
     The default stays one line per prefix, for reading.
     """
-    found = registry.importmap()
+    found = _registry(args).importmap
     if args.json:
         print(json.dumps(found, indent=2, sort_keys=True))
         return EXIT_OK
@@ -356,6 +283,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="varda",
         description="Dimensional modeling for LinkML.",
+    )
+    parser.add_argument(
+        "--config",
+        type=pathlib.Path,
+        metavar="PATH",
+        help=(
+            "read this varda.toml instead of searching upward from the "
+            "model's directory"
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -396,10 +332,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help=f"which database the DDL is for ({_dialects()})",
     )
-    # Not `choices`, for the reason above and one more: the levels are
-    # Varda's vocabulary but the string reaches a generator, and an
-    # extension's SQL generator may resolve it against engines the core does
-    # not name. `gen_sql.enforcement` raises, listing what it knows.
+    # Not `choices`, for the reason above: the levels are Varda's vocabulary
+    # but the string reaches a generator, and an extension's SQL generator
+    # may resolve it against engines the core does not name.
     p_gen.add_argument(
         "--constraints",
         default=gen_sql.DEFAULT_LEVEL,
@@ -431,12 +366,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="generate even though the model does not conform",
     )
-    # Here as well as on `check`, and it has to be: `_blocking` promises the
-    # two commands cannot disagree about whether a model is fit to generate
-    # from, and a flag on one of them is exactly how they would. It stops
-    # another schema's findings from blocking this run; it does not stop the
-    # imported tables being emitted, which they must be — a fact referencing
-    # a dimension the file never creates is DDL that does not run.
+    # Here as well as on `check`, so the two commands cannot disagree about
+    # whether a model is fit to generate from. It stops another schema's
+    # findings from blocking this run; it does not stop the imported tables
+    # being emitted, which they must be — a fact referencing a dimension the
+    # file never creates is DDL that does not run.
     p_gen.add_argument(
         "--skip-imported",
         action="store_true",
@@ -466,9 +400,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point."""
+def main(
+    argv: Sequence[str] | None = None, *, registry: Registry | None = None
+) -> int:
+    """Entry point.
+
+    ``registry`` replaces discovery outright, for a caller that has already
+    decided what is active — a test, or a tool embedding this one.
+    """
     args = build_parser().parse_args(argv)
+    args.registry = registry
+    if args.config is not None and not args.config.is_file():
+        print(f"no such file: {args.config}", file=sys.stderr)
+        return EXIT_USAGE
     try:
         result: int = args.fn(args)
     except ExtensionError as exc:

@@ -38,20 +38,23 @@ reason the core can stay small enough to be correct.
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
-| `anns.py` | ~150 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
-| `model.py` | ~900 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
-| `ext.py` | ~340 | `Extension`, `Generator`, `Context`, `Finding`, `RuleSet`. **The module a third party imports** — everything an extension runs on is declared here. |
-| `registry.py` | ~800 | Discovery, validation, lookup. Where colliding extensions are refused. |
-| `rules.py` | ~1725 | The 49 core rules, and the engine that runs them. |
-| `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
-| `gen_docs.py` | ~185 | Markdown reference. |
-| `gen_sqlalchemy.py` | ~415 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
+| `snapshot.py` | ~520 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, and the closed vocabularies as `StrEnum`s. **The public read API.** |
+| `analysis.py` | ~260 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, creation order, level identity. Public, on a weaker promise. |
+| `_linkml.py` | ~465 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
+| `ext.py` | ~425 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
+| `vocabulary.py` | ~145 | What the active profiles declare, read once. |
+| `registry.py` | ~630 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions are refused. |
+| `api.py` | ~280 | Varda as a library: `load`, `check`, `generate`, `write`. The rule engine and fail-closed generation live here. |
+| `rules.py` | ~1500 | The 49 core rules. |
+| `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
+| `gen_docs.py` | ~190 | Markdown reference. |
+| `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~490 | Five commands. |
+| `cli.py` | ~435 | Five commands, each a call into `api` and the printing around it. |
 
-**5,884 lines of source**: 3,041 of code, 1,436 of docstrings, 505 of
-comment, 902 blank. The prose share is deliberate and is house style —
+**6,100 lines of source**: 3,321 of code, 1,315 of docstrings, 488 of
+comment, 976 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -59,17 +62,17 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 346 tests in 5,782 lines.
+importable is kept to what is meant to be imported. And 358 tests in 5,965 lines.
 
 ### The four seams
 
 An extension plugs in at exactly four places. Everything else is internal.
 
 1. **Vocabulary** — a LinkML schema declaring annotations under the
-   extension's prefix. Read by `registry.declared_annotations`, enforced by
-   rules `V001` and `V002`.
+   extension's prefix. Read into `Vocabulary`, enforced by rules `V001` and
+   `V002`.
 2. **Rules** — a `RuleSet` whose codes all begin with the extension's tag.
-   Merged into `rules.all_rules()`.
+   Merged into `Registry.rules`.
 3. **Generators** — `Generator(name, artifacts, run)`. Paths declared up
    front so collisions are caught at load.
 4. **Distribution** — a `varda.extensions` entry point, or a `varda.toml`
@@ -102,36 +105,36 @@ is reached, because artifacts built from a model that does not conform look
 finished and are not. Past that, every generator runs and every result is
 collected before a single byte is written. A half-generated output tree is
 worse than none: it looks complete, and the stale parts are the ones nobody
-thinks to check. *`cli.cmd_generate`, `test_generate_fails_closed`,
+thinks to check. *`api.generate`, `test_generate_fails_closed`,
 `test_generate_refuses_a_nonconforming_model`*
 
 **I11 — Somebody else's code failing is named, not re-raised.** A generator
 that raises is reported as `{name} failed: …`; so is a rule, as
 `{code} ({extension}) failed: …`. Both stop the run. The checking half of
-this was missing until 0.4: `rules.check` called each rule bare, so a
+this was missing until 0.4: the engine called each rule bare, so a
 third-party rule reached the operator as a traceback through a package they
 did not write, with no code to exempt and no extension named — on the
 command that runs on every pull request. Skipping the rule and reporting the
 rest was the alternative and is worse: a rule that cannot run is a check that
 is not happening, and exiting zero would be the tool saying a model conforms
-when part of the question was never asked. *`rules.check`, `cli.main`,
+when part of the question was never asked. *`api.check`, `cli.main`,
 `test_a_rule_that_raises_names_itself_and_the_extension_that_shipped_it`*
 
 **I12 — An extension imports one module.** Everything an extension runs on is
-declared in `varda.ext` — `Extension`, `Generator`, `Context`, `Finding`,
-`RuleSet`. This was stated in four places and false in all of them until
-0.4, because `Finding` and `RuleSet` lived in `varda.rules`: the
-documentation page making the claim broke it in the code block beneath it,
-and so did the fixture written to prove it satisfiable.
-`test_the_worked_example_imports_only_the_interface_module` reads the fixture
-rather than trusting its docstring, which is the narrow form of the
-conformance scan below.
+reachable from `varda.ext` — `Extension`, `RuleSet`, `Finding`, `Generator`,
+`Context`, the `Model` a rule walks and every element under it, and
+`analysis` — types included. This was stated in four places and false in all
+of them until 0.4: `Finding` and `RuleSet` lived in `varda.rules`, and a rule
+annotated with its argument's type named `DimensionalModel` in `varda.model`.
+`test_the_worked_example_imports_only_the_interface_module` reads the
+fixture, type-only imports included, rather than trusting its docstring,
+which is the narrow form of the conformance scan below.
 
-Not yet true of *types*: a rule annotated with the type of its argument names
-`DimensionalModel`, which `varda.ext`'s own signatures name too. Whether that
-read API — the sixty-odd properties every rule and generator walks — is
-public and versioned or internal and free to move is the one boundary
-question still open, and 1.0 is where it stops being possible to leave open.
+The model an extension reads is `varda.snapshot`, public and versioned: a
+field is added in a minor release and removed or retyped only in a major
+one. `varda.analysis` is public on a weaker promise — an answer may become
+stricter in a minor release while its signature holds. The reasoning is in
+`docs/design.md`, under *Why an extension reads a snapshot*.
 
 **I5 — Generated output is deterministic.** No timestamps, no hostnames, no
 environment, no dict-ordering dependence. Output that changes when the model
@@ -170,10 +173,13 @@ lapse or be sold, and a lapsed domain baked into published schemas is
 unrecoverable. Redirects live in `w3id/.htaccess`; changing where the IRI
 points needs no change to the package. *`test_profile_namespace_is_pinned`*
 
-**I9 — The typed boundary holds.** `model.py` is the wall along the untyped
-LinkML runtime; everything it returns is a concrete type. `mypy --strict`
-passes, and `warn_return_any` is the rule doing the work. Do not switch it
-off to make a stubborn line pass.
+**I9 — The typed boundary holds.** `_linkml.py` is the wall along the
+untyped LinkML runtime and the only module that reads it; what it builds is
+a snapshot of frozen, concrete types holding nothing LinkML made — not a
+`SlotDefinition`, and not the `extended_str` an annotation value arrives as.
+`mypy --strict` passes, and `warn_return_any` is the rule doing the work. Do
+not switch it off to make a stubborn line pass.
+*`test_a_snapshot_holds_nothing_linkml_made`*
 
 ## 4. Deliberately not in 0.1
 
@@ -267,6 +273,15 @@ carry the file that declared them, `--skip-imported` drops another schema's
 findings without dropping its tables from any rule, and `V801` reports a
 physical-name collision against a class this model declares.
 
+**Unreleased — the extension interface, settled.** Breaking, once. The
+model a rule walks is `varda.snapshot`, frozen data holding nothing from
+LinkML, and what Varda concludes from it is `varda.analysis`; a rule yields
+`Finding(subject, message)` and the engine adds the rest; the registry is an
+object, found from the model's directory; and `varda.api` is the library the
+CLI is built on. Every output tree is byte-identical but one ordering, which
+now agrees across the three SQL artifacts. Reasoning in `docs/design.md`;
+migration in `docs/extending.md`.
+
 ### Next, in the order it is worth doing
 
 **Make the output trustworthy.** Add `varda verify`: regenerate into a temp
@@ -280,18 +295,17 @@ conformance kit: `varda ext --check NAME` runs a third-party extension against
 a fixture model twice, asserts identical findings and identical artifacts, and
 AST-scans for imports of anything outside `varda.ext`. The scan exists in
 narrow form as `test_the_worked_example_imports_only_the_interface_module`,
-which is worth reading first — it is what settled I12, and it would have
-failed against the shipped fixture until the release that closed it.
+which is worth reading first — it is what settled I12. The question it would
+otherwise have had to assume an answer to, whether the model's read API is
+public, is settled: it is `varda.snapshot`.
 
-Settle the model layer before this ships, or the scan asserts an answer to a
-question nobody has decided: every rule takes a `DimensionalModel` and walks
-it, so either that read API is public and versioned, or `varda.ext` grows the
-`Protocol`s an extension is entitled to and the rest is free to move. The
-first is less work and closer to what is already true — `model.py` is
-documented and typed to the standard the rest of the package holds, and two
-of its properties (`Column.is_measure`, `Hierarchy.level_columns`) already
-carry no internal caller, which is what an unversioned public surface looks
-like from the inside.
+**What the settled interface makes small.** Each follows from it and was
+kept out of it so the interface broke once: `varda check --format
+json|sarif`, now a formatter over `Report` rather than a parser; exemptions
+for one table or column rather than a whole rule; validating annotations
+against the profile's own `required`, `range` and `multivalued`, which today
+are declared and never enforced; and dialects an extension registers rather
+than names.
 
 **Finish the SQLAlchemy generator.** The generator and its equivalence check
 have shipped; two things from `design/sqlalchemy-generator.md` have not.
@@ -302,7 +316,10 @@ byte-level agreement between the module and `sql/mart.sql` — then run Alembic
 autogenerate against a live database before any documentation says it works.
 
 **More generators on demand.** An ERD is the next most asked for, and is
-mechanical against `model.py`.
+mechanical against `snapshot.py` — and it is where the relationships go that
+writing foreign keys as LinkML references would have put in front of
+`gen-erdiagram` with the wrong cardinality; see `docs/design.md`, *Why a
+foreign key is an annotation and not a LinkML reference*.
 
 **1.0 — freeze the vocabulary.**
 The commitment at 1.0 is that annotations and rule codes do not change

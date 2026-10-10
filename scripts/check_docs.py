@@ -21,8 +21,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from varda import __version__, registry
-from varda.model import PROFILE
+from varda import __version__
+from varda.registry import PROFILE, Registry
 
 ROOT = Path(__file__).resolve().parents[1]
 FENCE = "`" * 3
@@ -179,8 +179,8 @@ def main() -> int:
     # The size of the vocabulary is quoted in prose as an argument about
     # restraint, so it is written as a word rather than a digit and is easy
     # to leave behind when an annotation comes or goes.
-    table_anns = len(registry.declared_annotations("table"))
-    column_anns = len(registry.declared_annotations("column"))
+    table_anns = len(Registry.of().vocabulary.declared("table"))
+    column_anns = len(Registry.of().vocabulary.declared("column"))
     # Any number word before "annotations", wherever it appears — bolded in
     # a heading, mid-sentence, or trailing a link. A word that is not a
     # number falls out of NUMBER_WORDS and is skipped, so "these
@@ -246,8 +246,8 @@ def main() -> int:
         (
             "annotations",
             r"— (\d+) annotations,",
-            len(registry.declared_annotations("table"))
-            + len(registry.declared_annotations("column")),
+            len(Registry.of().vocabulary.declared("table"))
+            + len(Registry.of().vocabulary.declared("column")),
         ),
         ("test file lines", r"tests in\s+([\d,]+) lines", test_lines),
     ):

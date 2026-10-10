@@ -31,48 +31,22 @@ covers everything tells a reader nothing.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from . import registry
-from .anns import anns, get
-
-# Re-exported, not defined here. `Finding` and `RuleSet` are interface —
-# every rule an extension writes yields one and registers in the other — so
-# they live in `ext`, the module a third party is told to import. They are
-# imported under their own names rather than through `ext.` so that this
-# file reads as it always did, and so `from varda.rules import Finding`
-# keeps working for anything written against the older arrangement.
-from .ext import Finding, RuleError, RuleSet, Severity
-from .model import (
+from .analysis import ONE_IDENTITY
+from .ext import Finding, RuleSet
+from .snapshot import (
     FACET_MINIMUM,
     FACETS,
-    ONE_IDENTITY,
     VERSIONING_ROLES,
+    ColumnRole,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Iterator
 
-    from .ext import RuleFn
-    from .model import Column, DimensionalModel, Level, Table
-
-#: This module's interface, and the four names at the top of it are the
-#: compatibility half of that: they are declared in `ext` and listed here so
-#: `from varda.rules import Finding` keeps meaning what it did. Spelled out
-#: rather than left implicit because a re-export nobody declared is one a
-#: type checker refuses to see through, which makes it no re-export at all.
-__all__ = [
-    "RULES",
-    "Finding",
-    "RuleError",
-    "RuleSet",
-    "Severity",
-    "all_rules",
-    "check",
-    "unknown_codes",
-]
-
+    from .snapshot import Column, Element, Level, Model, Table
+    from .vocabulary import Target, Vocabulary
 
 RULES = RuleSet(tag="V")
 
@@ -99,8 +73,8 @@ COLLIDING = 2
 
 
 def _annotated(
-    model: DimensionalModel,
-) -> Iterator[tuple[str, str, str, Any]]:
+    model: Model,
+) -> Iterator[tuple[Element, Target, str, Any]]:
     """Walk every annotation in the model once.
 
     Yields ``(subject, target, tag, value)``. One shared walk rather than one
@@ -108,16 +82,32 @@ def _annotated(
     three copies of it is three places to forget a new kind of object.
     """
     for table in model.tables:
-        for tag, value in anns(table.cls).items():
-            yield str(table), "table", tag, value
+        for tag, value in table.annotations.items():
+            yield table, "table", tag, value
         for column in table.columns:
-            for tag, value in anns(column.slot).items():
-                yield str(column), "column", tag, value
+            for tag, value in column.annotations.items():
+                yield column, "column", tag, value
+
+
+def _shown(value: str | None) -> str:
+    """Quote a value from a closed vocabulary the way a message shows it."""
+    return "None" if value is None else repr(str(value))
+
+
+def _declares(element: Table | Column, name: str) -> bool:
+    """Flag whether an element declares one Varda annotation at all.
+
+    Asked of the annotation rather than the typed field. A value outside its
+    enum leaves the field ``None``, and V002 reports it as the wrong value;
+    a rule asking whether the annotation is missing must not report it a
+    second time as absent.
+    """
+    return f"varda:{name}" in element.annotations
 
 
 def _instantiated(
-    model: DimensionalModel,
-) -> Iterator[tuple[str, str, str]]:
+    model: Model,
+) -> Iterator[tuple[Element, Target, str]]:
     """Walk every declared ``instantiates``, as ``(subject, target, curie)``.
 
     Separate from :func:`_annotated` because this reads a LinkML metaslot
@@ -126,25 +116,24 @@ def _instantiated(
     """
     for table in model.tables:
         for curie in table.instantiates:
-            yield str(table), "table", curie
+            yield table, "table", curie
         for column in table.columns:
             for curie in column.instantiates:
-                yield str(column), "column", curie
+                yield column, "column", curie
 
 
 @RULES.rule("V001", "error", "Annotations are declared in a profile")
-def v001(model: DimensionalModel) -> Iterator[Finding]:
-    known = registry.prefixes()
+def v001(model: Model) -> Iterator[Finding]:
+    vocabulary = model.vocabulary
+    known = vocabulary.prefixes
     for subject, target, tag, _ in _annotated(model):
         prefix = tag.split(":", 1)[0] if ":" in tag else ""
         if prefix not in known:
             continue  # V003's business, not this rule's
-        if tag in registry.declared_annotations(target):
+        if tag in vocabulary.declared(target):
             continue
-        where = registry.profile_filename(prefix)
+        where = vocabulary.profile_filename(prefix)
         yield Finding(
-            "V001",
-            "error",
             subject,
             f"unknown {target} annotation {tag!r}; "
             f"declare it in {where} or fix the typo",
@@ -152,7 +141,7 @@ def v001(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V005", "error", "A declared metaclass governs what declares it")
-def v005(model: DimensionalModel) -> Iterator[Finding]:
+def v005(model: Model) -> Iterator[Finding]:
     """LinkML's ``instantiates``, checked against the profile it names.
 
     A model may say which profile class governs an element — the standard
@@ -163,21 +152,17 @@ def v005(model: DimensionalModel) -> Iterator[Finding]:
     naming the wrong one, and the second is the one that reads correctly.
     """
     for subject, target, curie in _instantiated(model):
-        governs = registry.governs(curie)
+        governs = model.vocabulary.governs(curie)
         if governs == target:
             continue
         if governs is None:
             yield Finding(
-                "V005",
-                "error",
                 subject,
                 f"instantiates {curie!r}, which no active profile declares "
                 f"as an annotation class",
             )
             continue
         yield Finding(
-            "V005",
-            "error",
             subject,
             f"instantiates {curie!r}, which governs a {governs} and this "
             f"is a {target}",
@@ -185,17 +170,15 @@ def v005(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V002", "error", "Annotation values come from the declared enum")
-def v002(model: DimensionalModel) -> Iterator[Finding]:
+def v002(model: Model) -> Iterator[Finding]:
     for subject, target, tag, value in _annotated(model):
-        enum = registry.annotation_enum(target, tag)
+        enum = model.vocabulary.enum_of(target, tag)
         if enum is None:
             continue
-        allowed = registry.permitted(enum)
+        allowed = model.vocabulary.permitted(enum)
         if str(value) in allowed:
             continue
         yield Finding(
-            "V002",
-            "error",
             subject,
             f"{tag} is {str(value)!r}, which is not a value of {enum}; "
             f"expected one of {', '.join(allowed)}",
@@ -203,7 +186,7 @@ def v002(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V003", "warning", "Annotation prefixes belong to something")
-def v003(model: DimensionalModel) -> Iterator[Finding]:
+def v003(model: Model) -> Iterator[Finding]:
     """Flag an annotation whose prefix names no active extension.
 
     A warning rather than an error, and the distinction is the whole point of
@@ -212,8 +195,8 @@ def v003(model: DimensionalModel) -> Iterator[Finding]:
     cannot interpret part of it. Erroring would make models unportable; saying
     nothing would let a typo'd prefix hide a constraint that never applies.
     """
-    known = registry.prefixes()
-    declared = set(model.view.schema.prefixes or {})
+    known = model.vocabulary.prefixes
+    declared = model.declared_prefixes
     seen: set[str] = set()
     for subject, _, tag, _ in _annotated(model):
         if ":" not in tag:
@@ -223,8 +206,6 @@ def v003(model: DimensionalModel) -> Iterator[Finding]:
             continue
         seen.add(prefix)
         yield Finding(
-            "V003",
-            "warning",
             subject,
             f"prefix {prefix!r} names no installed extension; "
             f"annotations under it are not being checked",
@@ -232,7 +213,7 @@ def v003(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V004", "error", "Structured annotations use declared fields")
-def v004(model: DimensionalModel) -> Iterator[Finding]:
+def v004(model: Model) -> Iterator[Finding]:
     """Flag a field name inside a structured annotation that is not declared.
 
     V001 catches a misspelled annotation *name*, and stops there. One level
@@ -246,14 +227,14 @@ def v004(model: DimensionalModel) -> Iterator[Finding]:
     `varda:hierarchies`.
     """
     for subject, target, tag, value in _annotated(model):
-        shape = registry.annotation_shape(target, tag)
+        shape = model.vocabulary.shape_of(target, tag)
         if shape is None:
             continue  # a scalar or an enum; V002's business if anything
         prefix = tag.split(":", 1)[0]
-        for path, unknown, expected in _stray_fields(value, shape, prefix):
+        for path, unknown, expected in _stray_fields(
+            model.vocabulary, value, shape, prefix
+        ):
             yield Finding(
-                "V004",
-                "error",
                 subject,
                 f"{tag}{path} has no field {unknown!r}; "
                 f"expected one of {', '.join(expected)}",
@@ -261,7 +242,11 @@ def v004(model: DimensionalModel) -> Iterator[Finding]:
 
 
 def _stray_fields(
-    value: Any, shape: dict[str, str], prefix: str, path: str = ""
+    vocabulary: Vocabulary,
+    value: Any,
+    shape: dict[str, str],
+    prefix: str,
+    path: str = "",
 ) -> Iterator[tuple[str, str, list[str]]]:
     """Walk a structured value, yielding every field its range does not name.
 
@@ -277,10 +262,10 @@ def _stray_fields(
             if name not in shape:
                 yield path, name, sorted(shape)
                 continue
-            deeper = registry.structured_shape(prefix, shape[name])
+            deeper = vocabulary.shape(prefix, shape[name])
             if deeper:
                 yield from _stray_fields(
-                    nested, deeper, prefix, f"{path}.{name}"
+                    vocabulary, nested, deeper, prefix, f"{path}.{name}"
                 )
 
 
@@ -293,35 +278,31 @@ def _stray_fields(
 
 
 @RULES.rule("V101", "error", "Every table declares a role")
-def v101(model: DimensionalModel) -> Iterator[Finding]:
+def v101(model: Model) -> Iterator[Finding]:
     for table in model.tables:
-        if table.role is None:
+        if not _declares(table, "role"):
             yield Finding(
-                "V101",
-                "error",
-                str(table),
+                table,
                 "no varda:role; every annotated class must declare "
                 "FACT, DIMENSION or BRIDGE",
             )
 
 
 @RULES.rule("V102", "error", "Every column declares a role")
-def v102(model: DimensionalModel) -> Iterator[Finding]:
+def v102(model: Model) -> Iterator[Finding]:
     for table in model.tables:
         for column in table.columns:
-            if column.role is None:
+            if not _declares(column, "role"):
                 yield Finding(
-                    "V102",
-                    "error",
-                    str(column),
+                    column,
                     "no varda:role; a column with no declared role is one "
                     "no generator can place",
                 )
 
 
 @RULES.rule("V103", "error", "Roles sit on the right kind of table")
-def v103(model: DimensionalModel) -> Iterator[Finding]:
-    misplaced = {
+def v103(model: Model) -> Iterator[Finding]:
+    misplaced: dict[str, tuple[str, ...]] = {
         "SURROGATE_KEY": ("DIMENSION",),
         "NATURAL_KEY": ("DIMENSION",),
         "DEGENERATE_DIMENSION": ("FACT",),
@@ -339,17 +320,15 @@ def v103(model: DimensionalModel) -> Iterator[Finding]:
             if allowed is None or table.role in allowed:
                 continue
             yield Finding(
-                "V103",
-                "error",
-                str(column),
-                f"role {column.role!r} is only legal on a "
+                column,
+                f"role {str(column.role)!r} is only legal on a "
                 f"{' or '.join(allowed)}, and {table.name} is a "
                 f"{table.role}",
             )
 
 
 @RULES.rule("V104", "error", "Table annotations sit on the right role")
-def v104(model: DimensionalModel) -> Iterator[Finding]:
+def v104(model: Model) -> Iterator[Finding]:
     """Flag a table annotation on a kind of table it does not describe.
 
     `varda:fact_type` is the temporal shape of a fact; `varda:scd` is how a
@@ -365,12 +344,10 @@ def v104(model: DimensionalModel) -> Iterator[Finding]:
         if table.role is None:
             continue  # V101 already said so
         for key, allowed in sorted(misplaced.items()):
-            if getattr(table, key) is None or table.role in allowed:
+            if not _declares(table, key) or table.role in allowed:
                 continue
             yield Finding(
-                "V104",
-                "error",
-                str(table),
+                table,
                 f"varda:{key} describes a {' or '.join(allowed)}, and "
                 f"{table.name} is a {table.role}",
             )
@@ -385,7 +362,7 @@ def v104(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V201", "error", "Every fact declares its grain")
-def v201(model: DimensionalModel) -> Iterator[Finding]:
+def v201(model: Model) -> Iterator[Finding]:
     """Flag a fact whose row identity is undeclared.
 
     An error rather than a warning, on the same reasoning that makes
@@ -396,15 +373,13 @@ def v201(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.facts:
         if not table.grain:
             yield Finding(
-                "V201",
-                "error",
-                str(table),
+                table,
                 "no varda:grain; name the columns at which rows are unique",
             )
 
 
 @RULES.rule("V202", "warning", "Grain is stated as a sentence")
-def v202(model: DimensionalModel) -> Iterator[Finding]:
+def v202(model: Model) -> Iterator[Finding]:
     """Flag a missing or too-short grain sentence.
 
     The length threshold is crude on purpose. It cannot tell a good sentence
@@ -417,24 +392,20 @@ def v202(model: DimensionalModel) -> Iterator[Finding]:
         statement = (table.grain_statement or "").strip()
         if not statement:
             yield Finding(
-                "V202",
-                "warning",
-                str(table),
+                table,
                 "no varda:grain_statement; say what one row is, "
                 'conventionally "one row per ..."',
             )
         elif len(statement.split()) < GRAIN_MIN_WORDS:
             yield Finding(
-                "V202",
-                "warning",
-                str(table),
+                table,
                 f"grain statement {statement!r} is a phrase, not a "
                 f'sentence; conventionally "one row per ..."',
             )
 
 
 @RULES.rule("V203", "error", "Grain columns are real and distinct")
-def v203(model: DimensionalModel) -> Iterator[Finding]:
+def v203(model: Model) -> Iterator[Finding]:
     """Flag a grain naming a column the table lacks, or naming one twice.
 
     Both failures are silent by construction, in the same way V703's is. An
@@ -456,20 +427,16 @@ def v203(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.tables:
         have = {c.name for c in table.columns}
         seen: set[str] = set()
-        for name in table.grain:
+        for name in (ref.name for ref in table.grain):
             if name not in have:
                 yield Finding(
-                    "V203",
-                    "error",
-                    str(table),
+                    table,
                     f"varda:grain names {name!r}, which is not a column "
                     f"of this table",
                 )
             elif name in seen:
                 yield Finding(
-                    "V203",
-                    "error",
-                    str(table),
+                    table,
                     f"varda:grain names {name!r} twice; a column can only "
                     f"identify a row once",
                 )
@@ -477,7 +444,7 @@ def v203(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V204", "error", "Grain columns locate a row")
-def v204(model: DimensionalModel) -> Iterator[Finding]:
+def v204(model: Model) -> Iterator[Finding]:
     """Flag a grain built from columns that cannot identify a row.
 
     A grain is what a row *is*, not what it records. Only foreign keys and
@@ -492,10 +459,8 @@ def v204(model: DimensionalModel) -> Iterator[Finding]:
         for column in table.grain_columns:
             if column.role not in allowed:
                 yield Finding(
-                    "V204",
-                    "error",
-                    f"{table}.{column.name}",
-                    f"role {column.role!r} cannot be part of a grain; "
+                    column,
+                    f"role {_shown(column.role)} cannot be part of a grain; "
                     f"a grain is composed of foreign keys and degenerate "
                     f"dimensions",
                 )
@@ -511,23 +476,21 @@ def v204(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V301", "error", "Every dimension has exactly one surrogate key")
-def v301(model: DimensionalModel) -> Iterator[Finding]:
+def v301(model: Model) -> Iterator[Finding]:
     for table in model.dimensions:
         keys = table.surrogate_keys
         if len(keys) == 1:
             continue
         found = ", ".join(c.name for c in keys) or "none"
         yield Finding(
-            "V301",
-            "error",
-            str(table),
+            table,
             f"a dimension needs exactly one SURROGATE_KEY column; "
             f"found {len(keys)} ({found})",
         )
 
 
 @RULES.rule("V302", "error", "Every dimension has a natural key")
-def v302(model: DimensionalModel) -> Iterator[Finding]:
+def v302(model: Model) -> Iterator[Finding]:
     """Flag a dimension with no business identity.
 
     Without a natural key there is nothing for a loader to match on, so every
@@ -537,16 +500,14 @@ def v302(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.dimensions:
         if not table.natural_keys:
             yield Finding(
-                "V302",
-                "error",
-                str(table),
+                table,
                 "no NATURAL_KEY column; nothing here says what makes two "
                 "source rows the same business entity",
             )
 
 
 @RULES.rule("V303", "error", "Unique keys name real columns")
-def v303(model: DimensionalModel) -> Iterator[Finding]:
+def v303(model: Model) -> Iterator[Finding]:
     """Flag a ``unique_keys`` entry naming a column the table does not have.
 
     LinkML accepts one without complaint — a key over a misspelled slot
@@ -556,20 +517,18 @@ def v303(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.tables:
         for unique in table.unique_keys:
             have = {c.name for c in unique.columns}
-            for name in unique.declared:
+            for name in (ref.name for ref in unique.declared):
                 if name in have:
                     continue
                 yield Finding(
-                    "V303",
-                    "error",
-                    str(unique),
+                    unique,
                     f"unique key names {name!r}, which is not a column of "
                     f"{table.name}",
                 )
 
 
 @RULES.rule("V304", "error", "A type-2 business key includes its version")
-def v304(model: DimensionalModel) -> Iterator[Finding]:
+def v304(model: Model) -> Iterator[Finding]:
     """Flag a business unique key on a type-2 dimension with no version.
 
     A type-2 dimension keeps a row per change, so its business key repeats
@@ -592,16 +551,14 @@ def v304(model: DimensionalModel) -> Iterator[Finding]:
             if columns & marks:
                 continue
             yield Finding(
-                "V304",
-                "error",
-                str(unique),
+                unique,
                 "a business key on a type-2 dimension repeats once per "
                 "version; add the column that marks versions apart",
             )
 
 
 @RULES.rule("V305", "warning", "Natural keys are covered by a unique key")
-def v305(model: DimensionalModel) -> Iterator[Finding]:
+def v305(model: Model) -> Iterator[Finding]:
     """Flag a natural key no declared unique key covers.
 
     Only where a table declares its own ``unique_keys``, because a declared
@@ -619,9 +576,7 @@ def v305(model: DimensionalModel) -> Iterator[Finding]:
             if column in covered:
                 continue
             yield Finding(
-                "V305",
-                "warning",
-                str(column),
+                column,
                 "a natural key in none of this table's unique keys; the "
                 "identity a loader matches on is not enforced",
             )
@@ -630,7 +585,7 @@ def v305(model: DimensionalModel) -> Iterator[Finding]:
 @RULES.rule(
     "V306", "error", "A dimension with several natural keys declares them"
 )
-def v306(model: DimensionalModel) -> Iterator[Finding]:
+def v306(model: Model) -> Iterator[Finding]:
     """Flag several natural keys with no ``unique_keys`` to disambiguate them.
 
     Two columns marked NATURAL_KEY mean one of two things, and a role cannot
@@ -661,9 +616,7 @@ def v306(model: DimensionalModel) -> Iterator[Finding]:
             continue
         named = ", ".join(c.name for c in keys)
         yield Finding(
-            "V306",
-            "error",
-            str(table),
+            table,
             f"{len(keys)} natural keys ({named}) and no unique_keys; one "
             f"compound identity and several alternative ones need different "
             f"constraints, and a role cannot tell them apart",
@@ -671,7 +624,7 @@ def v306(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V307", "warning", "A lone natural key is required")
-def v307(model: DimensionalModel) -> Iterator[Finding]:
+def v307(model: Model) -> Iterator[Finding]:
     """Flag a dimension whose only business identity may be absent.
 
     SQL counts NULLs as distinct, so `UNIQUE (gtin)` over a nullable column
@@ -693,9 +646,7 @@ def v307(model: DimensionalModel) -> Iterator[Finding]:
         if keys[0].required:
             continue
         yield Finding(
-            "V307",
-            "warning",
-            str(keys[0]),
+            keys[0],
             "the only natural key here, and not required; SQL counts NULLs "
             "as distinct, so the uniqueness over it does not hold for a row "
             "that has none",
@@ -711,49 +662,44 @@ def v307(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V401", "error", "Every fact has at least one foreign key")
-def v401(model: DimensionalModel) -> Iterator[Finding]:
+def v401(model: Model) -> Iterator[Finding]:
     for table in model.facts:
         if not table.foreign_keys:
             yield Finding(
-                "V401",
-                "error",
-                str(table),
+                table,
                 "no FOREIGN_KEY column; a fact with no dimensions cannot "
                 "be sliced by anything",
             )
 
 
 @RULES.rule("V402", "error", "Every foreign key names its target")
-def v402(model: DimensionalModel) -> Iterator[Finding]:
+def v402(model: Model) -> Iterator[Finding]:
     for table in model.tables:
         for column in table.foreign_keys:
-            if not (column.references or "").strip():
+            if column.references is None or not column.references.name:
                 yield Finding(
-                    "V402",
-                    "error",
-                    str(column),
+                    column,
                     "FOREIGN_KEY with no varda:references; name the class "
                     "it points at",
                 )
 
 
 @RULES.rule("V403", "error", "Foreign key targets exist")
-def v403(model: DimensionalModel) -> Iterator[Finding]:
+def v403(model: Model) -> Iterator[Finding]:
     for table in model.tables:
         for column in table.foreign_keys:
-            target = (column.references or "").strip()
-            if not target or model.table(target) is not None:
+            ref = column.references
+            if ref is None or not ref.name or ref.target is not None:
                 continue
+            target = ref.name
             yield Finding(
-                "V403",
-                "error",
-                str(column),
+                column,
                 f"references {target!r}, which is not a table in this model",
             )
 
 
 @RULES.rule("V404", "error", "Foreign keys point at dimensions or bridges")
-def v404(model: DimensionalModel) -> Iterator[Finding]:
+def v404(model: Model) -> Iterator[Finding]:
     """Flag a foreign key aimed at a fact.
 
     A fact referenced by another fact is the most common way a star quietly
@@ -762,20 +708,19 @@ def v404(model: DimensionalModel) -> Iterator[Finding]:
     """
     for table in model.tables:
         for column in table.foreign_keys:
-            target = model.table((column.references or "").strip())
+            ref = column.references
+            target = ref.target if ref is not None else None
             if target is None or not target.is_fact:
                 continue
             yield Finding(
-                "V404",
-                "error",
-                str(column),
+                column,
                 f"references {target.name!r}, which is a fact; foreign keys "
                 f"point at dimensions or bridges",
             )
 
 
 @RULES.rule("V405", "error", "A bridge references something")
-def v405(model: DimensionalModel) -> Iterator[Finding]:
+def v405(model: Model) -> Iterator[Finding]:
     """Flag a bridge with no foreign key.
 
     A bridge exists to resolve a many-to-many. One referencing nothing
@@ -792,9 +737,7 @@ def v405(model: DimensionalModel) -> Iterator[Finding]:
         if table.foreign_keys:
             continue
         yield Finding(
-            "V405",
-            "error",
-            str(table),
+            table,
             "no FOREIGN_KEY column; a bridge resolves a many-to-many, and "
             "one that references nothing resolves nothing",
         )
@@ -809,20 +752,18 @@ def v405(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V501", "warning", "Every fact declares its temporal shape")
-def v501(model: DimensionalModel) -> Iterator[Finding]:
+def v501(model: Model) -> Iterator[Finding]:
     for table in model.facts:
-        if table.fact_type is None:
+        if not _declares(table, "fact_type"):
             yield Finding(
-                "V501",
-                "warning",
-                str(table),
+                table,
                 "no varda:fact_type; loaders and generators cannot tell an "
                 "insert-only table from one updated in place",
             )
 
 
 @RULES.rule("V502", "warning", "Slowly-changing type is declared")
-def v502(model: DimensionalModel) -> Iterator[Finding]:
+def v502(model: Model) -> Iterator[Finding]:
     """Flag a dimension that does not say what happens when a value changes.
 
     A warning rather than an error because a great many dimensions are
@@ -831,17 +772,15 @@ def v502(model: DimensionalModel) -> Iterator[Finding]:
     the model and cost very differently two years later.
     """
     for table in model.dimensions:
-        if table.scd is None:
+        if not _declares(table, "scd"):
             yield Finding(
-                "V502",
-                "warning",
-                str(table),
+                table,
                 "no varda:scd; nothing here says whether history is kept",
             )
 
 
 @RULES.rule("V503", "error", "Versioning columns belong to a type-2 dimension")
-def v503(model: DimensionalModel) -> Iterator[Finding]:
+def v503(model: Model) -> Iterator[Finding]:
     """Flag a version period on a dimension that keeps no versions.
 
     Type 0 retains the original value and type 1 overwrites it. Neither
@@ -854,16 +793,14 @@ def v503(model: DimensionalModel) -> Iterator[Finding]:
             continue  # V502 handles the missing case
         for column in table.versioning:
             yield Finding(
-                "V503",
-                "error",
-                str(column),
-                f"role {column.role!r} versions a row, but {table.name} is "
-                f"{table.scd}, which keeps no versions",
+                column,
+                f"role {str(column.role)!r} versions a row, but "
+                f"{table.name} is {table.scd}, which keeps no versions",
             )
 
 
 @RULES.rule("V504", "error", "A version period that ends also starts")
-def v504(model: DimensionalModel) -> Iterator[Finding]:
+def v504(model: Model) -> Iterator[Finding]:
     """Flag a version end with no corresponding start.
 
     An end alone bounds nothing. The reverse is not a finding: storing only
@@ -873,16 +810,14 @@ def v504(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.dimensions:
         if table.version_ends and not table.version_starts:
             yield Finding(
-                "V504",
-                "error",
-                str(table),
+                table,
                 "varda:role: VERSION_END with no VERSION_START; an end "
                 "bounds nothing on its own",
             )
 
 
 @RULES.rule("V505", "error", "At most one column per versioning role")
-def v505(model: DimensionalModel) -> Iterator[Finding]:
+def v505(model: Model) -> Iterator[Finding]:
     """Flag a repeated versioning role on one table.
 
     Two starts is two answers to when a version began, and every consumer
@@ -892,20 +827,18 @@ def v505(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.dimensions:
         seen: dict[str, list[str]] = {}
         for column in table.versioning:
-            seen.setdefault(column.role or "", []).append(column.name)
+            seen.setdefault(str(column.role or ""), []).append(column.name)
         for role, names in sorted(seen.items()):
             if len(names) > 1:
                 yield Finding(
-                    "V505",
-                    "error",
-                    str(table),
+                    table,
                     f"{len(names)} columns claim role {role!r} "
                     f"({', '.join(sorted(names))}); at most one may",
                 )
 
 
 @RULES.rule("V506", "warning", "A type-2 dimension says how it versions")
-def v506(model: DimensionalModel) -> Iterator[Finding]:
+def v506(model: Model) -> Iterator[Finding]:
     """Flag a type-2 dimension nothing can tell the versions of apart.
 
     Type 2 keeps a row per change, so something must distinguish those rows.
@@ -924,9 +857,7 @@ def v506(model: DimensionalModel) -> Iterator[Finding]:
         marks = (*table.version_starts, *table.version_numbers)
         if table.scd == "TYPE_2" and not marks:
             yield Finding(
-                "V506",
-                "warning",
-                str(table),
+                table,
                 "TYPE_2 but no VERSION_START or VERSION_NUMBER; nothing "
                 "tells one version from another, so no uniqueness can be "
                 "generated (IS_CURRENT alone cannot: it marks one row)",
@@ -957,7 +888,7 @@ _NOT_A_LEVEL = (
 
 
 @RULES.rule("V601", "error", "Hierarchy levels name real columns")
-def v601(model: DimensionalModel) -> Iterator[Finding]:
+def v601(model: Model) -> Iterator[Finding]:
     """Flag a level naming a column that does not exist.
 
     The same check V203 makes of the grain, extended to the reference form.
@@ -970,11 +901,11 @@ def v601(model: DimensionalModel) -> Iterator[Finding]:
     """
     for table in model.tables:
         for hierarchy in table.hierarchies:
-            for level in hierarchy.resolved:
+            for level in hierarchy.levels:
                 message = _level_fault(table, level)
                 if message is None:
                     continue
-                yield Finding("V601", "error", str(hierarchy), message)
+                yield Finding(hierarchy, message)
 
 
 def _level_fault(table: Table, level: Level) -> str | None:
@@ -1000,7 +931,7 @@ def _reference_fault(table: Table, level: Level) -> str | None:
             f"{level.via.role or 'column with no role'}; only a FOREIGN_KEY "
             "leads to another table"
         )
-    if not level.via.references:
+    if level.via.references is None or not level.via.references.name:
         return (
             f"level {level.spec!r} reaches through {near!r}, which names no "
             "target; see V402"
@@ -1014,7 +945,7 @@ def _reference_fault(table: Table, level: Level) -> str | None:
 
 
 @RULES.rule("V602", "error", "Hierarchy levels are distinct")
-def v602(model: DimensionalModel) -> Iterator[Finding]:
+def v602(model: Model) -> Iterator[Finding]:
     """Flag a column appearing twice in one hierarchy.
 
     A level that is its own ancestor is not a drill path. Usually a copy and
@@ -1023,19 +954,17 @@ def v602(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.tables:
         for hierarchy in table.hierarchies:
             seen: set[str] = set()
-            for level in hierarchy.levels:
+            for level in hierarchy.specs:
                 if level in seen:
                     yield Finding(
-                        "V602",
-                        "error",
-                        str(hierarchy),
+                        hierarchy,
                         f"level {level!r} appears more than once",
                     )
                 seen.add(level)
 
 
 @RULES.rule("V603", "error", "A hierarchy has at least two levels")
-def v603(model: DimensionalModel) -> Iterator[Finding]:
+def v603(model: Model) -> Iterator[Finding]:
     """Flag a hierarchy of one level, or none.
 
     One level is a column, not a path. Nothing rolls up into anything, so
@@ -1046,16 +975,14 @@ def v603(model: DimensionalModel) -> Iterator[Finding]:
             if len(hierarchy.levels) >= HIERARCHY_MIN_LEVELS:
                 continue
             yield Finding(
-                "V603",
-                "error",
-                str(hierarchy),
+                hierarchy,
                 f"{len(hierarchy.levels)} level(s); a hierarchy needs at "
                 "least two, coarsest first",
             )
 
 
 @RULES.rule("V604", "error", "Hierarchy names are unique within a table")
-def v604(model: DimensionalModel) -> Iterator[Finding]:
+def v604(model: Model) -> Iterator[Finding]:
     """Flag two hierarchies on one table sharing a name.
 
     A dimension carrying several paths is the normal case — a date dimension
@@ -1068,17 +995,13 @@ def v604(model: DimensionalModel) -> Iterator[Finding]:
         for hierarchy in table.hierarchies:
             if not hierarchy.name:
                 yield Finding(
-                    "V604",
-                    "error",
-                    str(table),
+                    table,
                     "a hierarchy with no name; every path needs one",
                 )
                 continue
             if hierarchy.name in seen:
                 yield Finding(
-                    "V604",
-                    "error",
-                    str(table),
+                    table,
                     f"two hierarchies named {hierarchy.name!r}",
                 )
             seen.add(hierarchy.name)
@@ -1087,7 +1010,7 @@ def v604(model: DimensionalModel) -> Iterator[Finding]:
 @RULES.rule(
     "V605", "error", "Hierarchy levels are the kind of column a level can be"
 )
-def v605(model: DimensionalModel) -> Iterator[Finding]:
+def v605(model: Model) -> Iterator[Finding]:
     """Flag a level named by a column a reader cannot drill.
 
     A bare foreign key gets its own message, because it is the near-miss a
@@ -1097,12 +1020,20 @@ def v605(model: DimensionalModel) -> Iterator[Finding]:
     """
     for table in model.tables:
         for hierarchy in table.hierarchies:
-            for level in hierarchy.resolved:
+            for level in hierarchy.levels:
                 column = level.column
                 if column is None or column.role not in _NOT_A_LEVEL:
                     continue
-                if column.role == "FOREIGN_KEY" and not level.is_reference:
-                    target = column.references or "the dimension it points at"
+                if (
+                    column.role == ColumnRole.FOREIGN_KEY
+                    and not level.is_reference
+                ):
+                    ref = column.references
+                    target = (
+                        ref.name
+                        if ref is not None and ref.name
+                        else "the dimension it points at"
+                    )
                     message = (
                         f"level {level.spec!r} is a foreign key, which reads "
                         f"as an integer; name what it points at instead — "
@@ -1114,11 +1045,11 @@ def v605(model: DimensionalModel) -> Iterator[Finding]:
                         "which a reader cannot drill; a level is an "
                         "ATTRIBUTE or a NATURAL_KEY"
                     )
-                yield Finding("V605", "error", str(hierarchy), message)
+                yield Finding(hierarchy, message)
 
 
 @RULES.rule("V606", "error", "Hierarchies belong to dimensions")
-def v606(model: DimensionalModel) -> Iterator[Finding]:
+def v606(model: Model) -> Iterator[Finding]:
     """Flag a hierarchy on a fact or a bridge.
 
     A drill path describes descriptive context, which is what a dimension
@@ -1133,9 +1064,7 @@ def v606(model: DimensionalModel) -> Iterator[Finding]:
         if not table.hierarchies:
             continue
         yield Finding(
-            "V606",
-            "error",
-            str(table),
+            table,
             f"varda:hierarchies describes a DIMENSION, and {table.name} "
             f"is a {table.role}",
         )
@@ -1157,13 +1086,14 @@ def _key_owner(table: Table, level: Level) -> str:
     identified by DimCountry, and reporting DimCity would send a reader to
     look for the key where it was never meant to be.
     """
-    if level.is_reference and level.via is not None and level.via.references:
-        return level.via.references
+    via = level.via
+    if level.is_reference and via is not None and via.references is not None:
+        return via.references.name or table.name
     return table.name
 
 
 @RULES.rule("V607", "error", "A declared level key identifies")
-def v607(model: DimensionalModel) -> Iterator[Finding]:
+def v607(model: Model) -> Iterator[Finding]:
     """Flag a level key naming a column that cannot identify one.
 
     The key answers "which member", where the level's column answers "what
@@ -1179,24 +1109,20 @@ def v607(model: DimensionalModel) -> Iterator[Finding]:
     """
     for table in model.tables:
         for hierarchy in table.hierarchies:
-            for level in hierarchy.resolved:
-                name = level.declared_key
-                if not name:
+            for level in hierarchy.levels:
+                if level.key is None:
                     continue
-                column = level.key
+                name = level.key.name
+                column = level.key.target
                 if column is None:
                     yield Finding(
-                        "V607",
-                        "error",
-                        str(hierarchy),
+                        hierarchy,
                         f"level {level.spec!r} is keyed on {name!r}, "
                         f"which is not a column of {_key_owner(table, level)}",
                     )
                 elif column.role in _NOT_A_KEY:
                     yield Finding(
-                        "V607",
-                        "error",
-                        str(hierarchy),
+                        hierarchy,
                         f"level {level.spec!r} is keyed on {name!r}, "
                         f"which is a {column.role} and identifies no member",
                     )
@@ -1214,38 +1140,35 @@ def v607(model: DimensionalModel) -> Iterator[Finding]:
 
 
 @RULES.rule("V701", "error", "Every measure declares its additivity")
-def v701(model: DimensionalModel) -> Iterator[Finding]:
+def v701(model: Model) -> Iterator[Finding]:
     for table in model.tables:
         for column in table.measures:
-            if column.additivity is None:
+            if not _declares(column, "additivity"):
                 yield Finding(
-                    "V701",
-                    "error",
-                    str(column),
+                    column,
                     "no varda:additivity; a measure nobody has classified "
                     "will be summed by someone",
                 )
 
 
 @RULES.rule("V702", "error", "Semi-additive measures name their exception")
-def v702(model: DimensionalModel) -> Iterator[Finding]:
+def v702(model: Model) -> Iterator[Finding]:
     for table in model.tables:
         for column in table.measures:
             if column.additivity != "SEMI_ADDITIVE":
                 continue
-            if (column.semi_additive_over or "").strip():
+            over = column.semi_additive_over
+            if over is not None and over.name:
                 continue
             yield Finding(
-                "V702",
-                "error",
-                str(column),
+                column,
                 "SEMI_ADDITIVE with no varda:semi_additive_over; name the "
                 "foreign key it may not be summed across",
             )
 
 
 @RULES.rule("V703", "error", "The semi-additive exception is a real key")
-def v703(model: DimensionalModel) -> Iterator[Finding]:
+def v703(model: Model) -> Iterator[Finding]:
     """Flag a semi-additive exception naming a column the fact does not have.
 
     The failure this catches is silent by construction: a constraint that
@@ -1255,21 +1178,20 @@ def v703(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.tables:
         keys = {c.name for c in table.foreign_keys}
         for column in table.measures:
-            over = (column.semi_additive_over or "").strip()
+            ref = column.semi_additive_over
+            over = ref.name if ref is not None else ""
             if not over or over in keys:
                 continue
             found = ", ".join(sorted(keys)) or "none"
             yield Finding(
-                "V703",
-                "error",
-                str(column),
+                column,
                 f"semi_additive_over names {over!r}, which is not a foreign "
                 f"key of {table.name} (has: {found})",
             )
 
 
 @RULES.rule("V704", "error", "Measures live on facts and bridges")
-def v704(model: DimensionalModel) -> Iterator[Finding]:
+def v704(model: Model) -> Iterator[Finding]:
     """Flag a measure on a dimension.
 
     A numeric column on a dimension is usually an attribute — a size, a band,
@@ -1279,16 +1201,14 @@ def v704(model: DimensionalModel) -> Iterator[Finding]:
     for table in model.dimensions:
         for column in table.measures:
             yield Finding(
-                "V704",
-                "error",
-                str(column),
+                column,
                 "a measure on a dimension; give it role ATTRIBUTE, or move "
                 "it to a fact at the grain it is measured at",
             )
 
 
 @RULES.rule("V705", "warning", "Every measure declares its unit")
-def v705(model: DimensionalModel) -> Iterator[Finding]:
+def v705(model: Model) -> Iterator[Finding]:
     """Flag a measure with no unit.
 
     Units are LinkML's own ``unit``, so this rule reads a native rather than
@@ -1299,30 +1219,26 @@ def v705(model: DimensionalModel) -> Iterator[Finding]:
         for column in table.measures:
             if not (column.unit or "").strip():
                 yield Finding(
-                    "V705",
-                    "warning",
-                    str(column),
+                    column,
                     "no unit; two measures in different currencies "
                     "add up cleanly and wrongly",
                 )
 
 
 @RULES.rule("V706", "warning", "A fact carries measures, or says it does not")
-def v706(model: DimensionalModel) -> Iterator[Finding]:
+def v706(model: Model) -> Iterator[Finding]:
     for table in model.facts:
         if table.measures or table.fact_type == "FACTLESS":
             continue
         yield Finding(
-            "V706",
-            "warning",
-            str(table),
+            table,
             "no measures; if that is deliberate, declare "
             "varda:fact_type: FACTLESS",
         )
 
 
 @RULES.rule("V707", "warning", "Decimal measures declare precision and scale")
-def v707(model: DimensionalModel) -> Iterator[Finding]:
+def v707(model: Model) -> Iterator[Finding]:
     """Flag a decimal measure that does not say what it keeps.
 
     A warning, and scoped to measures on purpose. Every string column in a
@@ -1339,14 +1255,12 @@ def v707(model: DimensionalModel) -> Iterator[Finding]:
             missing = [
                 f"varda:{name}"
                 for name in ("precision", "scale")
-                if get(column.slot, name) is None
+                if column.annotations.text(f"varda:{name}") is None
             ]
             if not missing:
                 continue
             yield Finding(
-                "V707",
-                "warning",
-                str(column),
+                column,
                 f"no {' or '.join(missing)}; a bare NUMERIC is unconstrained "
                 f"on PostgreSQL and DECIMAL(18, 3) on DuckDB, so what this "
                 f"measure keeps depends on where it lands",
@@ -1381,21 +1295,21 @@ def _claim(names: list[str]) -> str:
     )
 
 
-def _named_by(obj: Any, logical: str) -> str:
-    """Say where an object's physical name came from.
+def _named_by(element: Table | Column) -> str:
+    """Say where an element's physical name came from.
 
     The realistic collision is not two identical `varda:physical_name`
     declarations — it is one declared name meeting one derived from a class
     or slot name. A message that only says "duplicate" sends a reader looking
     for an annotation that is not there.
     """
-    if get(obj, "physical_name"):
-        return f"{logical} (varda:physical_name)"
-    return f"{logical} (derived)"
+    if element.physical_declared:
+        return f"{element.name} (varda:physical_name)"
+    return f"{element.name} (derived)"
 
 
 @RULES.rule("V801", "error", "Physical table names are unique")
-def v801(model: DimensionalModel) -> Iterator[Finding]:
+def v801(model: Model) -> Iterator[Finding]:
     """Flag two classes that emit one table.
 
     Everything is generated into one schema, so a physical name identifies a
@@ -1413,7 +1327,7 @@ def v801(model: DimensionalModel) -> Iterator[Finding]:
     for _, tables in sorted(claimed.items()):
         if len(tables) < COLLIDING:
             continue
-        who = " and ".join(_named_by(t.cls, t.name) for t in tables)
+        who = " and ".join(_named_by(t) for t in tables)
         what = _claim([t.physical for t in tables])
         # Reported against a class this model declares, where one of them
         # is. A collision with an imported table is the local model's to
@@ -1424,15 +1338,13 @@ def v801(model: DimensionalModel) -> Iterator[Finding]:
         # the same class it always did.
         subject = next((t for t in tables if not t.is_imported), tables[0])
         yield Finding(
-            "V801",
-            "error",
-            str(subject),
+            subject,
             f"{what} claimed by {who}; one name cannot be two tables",
         )
 
 
 @RULES.rule("V802", "error", "Physical column names are unique in a table")
-def v802(model: DimensionalModel) -> Iterator[Finding]:
+def v802(model: Model) -> Iterator[Finding]:
     """Flag two columns of one table that emit one column.
 
     The same mistake a level down, and the same silence: the emitted
@@ -1449,19 +1361,17 @@ def v802(model: DimensionalModel) -> Iterator[Finding]:
         for _, columns in sorted(claimed.items()):
             if len(columns) < COLLIDING:
                 continue
-            who = " and ".join(_named_by(c.slot, c.name) for c in columns)
+            who = " and ".join(_named_by(c) for c in columns)
             what = _claim([c.physical for c in columns])
             yield Finding(
-                "V802",
-                "error",
-                str(table),
+                table,
                 f"{what} claimed by columns {who}; "
                 f"one name cannot be two columns",
             )
 
 
 @RULES.rule("V803", "error", "Type facets are well formed")
-def v803(model: DimensionalModel) -> Iterator[Finding]:
+def v803(model: Model) -> Iterator[Finding]:
     """Flag a type facet that cannot be emitted as written.
 
     A facet parameterizes the SQL type — the 80 in `VARCHAR(80)`, the 18 and
@@ -1481,16 +1391,14 @@ def _facet_faults(column: Column) -> Iterator[Finding]:
     declared = {
         name: value
         for name in FACETS
-        if (value := get(column.slot, name)) is not None
+        if (value := column.annotations.text(f"varda:{name}")) is not None
     }
     for name, value in declared.items():
         yield from _one_facet(column, name, value)
 
     if "scale" in declared and "precision" not in declared:
         yield Finding(
-            "V803",
-            "error",
-            str(column),
+            column,
             "varda:scale with no varda:precision; there is no NUMERIC(, 2) "
             "to emit, and the missing half would have to be invented",
         )
@@ -1499,9 +1407,7 @@ def _facet_faults(column: Column) -> Iterator[Finding]:
     precision, scale = column.precision, column.scale
     if precision is not None and scale is not None and scale > precision:
         yield Finding(
-            "V803",
-            "error",
-            str(column),
+            column,
             f"varda:scale {scale} is larger than varda:precision "
             f"{precision}; a column cannot keep more digits after the "
             f"decimal point than it keeps in total",
@@ -1524,26 +1430,27 @@ def _one_facet(column: Column, name: str, value: str) -> Iterator[Finding]:
             else f"a {column.range} column ({resolved})"
         )
         yield Finding(
-            "V803",
-            "error",
-            str(column),
+            column,
             f"varda:{name} on {where}, where it "
             f"parameterizes nothing; legal on: {legal}",
         )
         return
-    if column.facet(name) is None:
+    parsed = {
+        "max_length": column.max_length,
+        "precision": column.precision,
+        "scale": column.scale,
+    }
+    if parsed[name] is None:
         least = FACET_MINIMUM[name]
         yield Finding(
-            "V803",
-            "error",
-            str(column),
+            column,
             f"varda:{name} is {value!r}; expected a whole number "
             f"of {least} or more",
         )
 
 
 @RULES.rule("V804", "error", "Every range names a type the schema knows")
-def v804(model: DimensionalModel) -> Iterator[Finding]:
+def v804(model: Model) -> Iterator[Finding]:
     """Flag a range that is not a type this schema can resolve.
 
     LinkML does not object to a range naming nothing, and neither did
@@ -1560,24 +1467,21 @@ def v804(model: DimensionalModel) -> Iterator[Finding]:
     other than DDL may well handle it. A range naming nothing is wrong for
     everybody.
     """
-    view = model.view
-    types = set(view.all_types())
-    classes = set(view.all_classes())
-    enums = set(view.all_enums())
+    types = model.declared_types
+    classes = model.declared_classes
+    enums = model.declared_enums
     for table in model.tables:
         for column in table.columns:
             rng = column.range
             if rng in types:
                 continue
             yield Finding(
-                "V804",
-                "error",
-                str(column),
+                column,
                 f"range {rng!r} {_range_is(rng, classes, enums)}",
             )
 
 
-def _range_is(rng: str, classes: set[str], enums: set[str]) -> str:
+def _range_is(rng: str, classes: frozenset[str], enums: frozenset[str]) -> str:
     """Say what a range turned out to be, and what to do about it."""
     if rng in classes:
         return (
@@ -1593,132 +1497,3 @@ def _range_is(rng: str, classes: set[str], enums: set[str]) -> str:
         "names no type in this schema. `uuid` is Varda's and needs "
         "`imports: - varda`; anything else is a typo or a type to declare"
     )
-
-
-# ---------------------------------------------------------------------------
-# Running them
-# ---------------------------------------------------------------------------
-
-
-def all_rules() -> list[tuple[str, Severity, str, RuleFn]]:
-    """Every registered rule, from every active extension, sorted by code.
-
-    Sorted by code alone rather than by extension, because a reader looking
-    for V703 wants it where V702 was, and an operator reading a run wants the
-    same ordering every time regardless of what is installed.
-    """
-    out: list[tuple[str, Severity, str, RuleFn]] = []
-    for extension in registry.extensions():
-        if extension.rules is not None:
-            out.extend(extension.rules.rules)
-    return sorted(out, key=lambda r: r[0])
-
-
-def check(
-    model: DimensionalModel,
-    exemptions: Iterable[str] | None = None,
-    *,
-    skip_imported: bool = False,
-) -> list[Finding]:
-    """Run every rule and return the findings, in rule order.
-
-    ``exemptions`` names rules to skip entirely. Severity overrides come from
-    the registry, which has already refused any that two extensions disagree
-    about.
-
-    ``skip_imported`` drops the findings whose subject was declared in
-    another file — not the tables, the findings. Every rule still sees every
-    table, which is the point: a physical name that collides with an
-    imported one, a foreign key naming a class that does not exist, a level
-    reaching through a key into another schema are all faults of *this*
-    model that only a rule seeing both can find. What the flag removes is
-    the report of a fault somebody else has to fix, which is the only part
-    an operator here can do nothing about.
-
-    A rule that raises stops the run with a :class:`varda.ext.RuleError`
-    naming it. This is the guard :func:`varda.cli._collect` puts around
-    generators, at the layer that runs on every pull request rather than the
-    one that writes files: without it a third party's rule reached the
-    operator as a traceback through a package they did not write, with no
-    code to exempt and no extension named. Reporting the surviving rules and
-    exiting zero was the other option, and it is worse — it is the tool
-    saying a model conforms when part of the question was never asked.
-    """
-    skip = set(exemptions or ())
-    overrides = registry.severities()
-    imported = _imported_tables(model)
-    out: list[Finding] = []
-    for code, _, _, fn in all_rules():
-        if code in skip:
-            continue
-        try:
-            # Drained here rather than streamed into the caller. A rule is a
-            # generator, so its body does not run until something iterates
-            # it, and a `yield` inside the `try` is the only place the raise
-            # can be caught.
-            found = list(fn(model))
-        except Exception as exc:
-            msg = f"{code} ({_owner(code)}) failed: {type(exc).__name__}: {exc}"
-            raise RuleError(msg) from exc
-        for finding in found:
-            origin = imported.get(_subject_table(finding.subject), "")
-            if origin and skip_imported:
-                continue
-            at = _at_severity(finding, overrides)
-            out.append(at if not origin else replace(at, origin=origin))
-    return out
-
-
-def _imported_tables(model: DimensionalModel) -> dict[str, str]:
-    """Map the name of every imported table to the file declaring it.
-
-    Only the imported ones. A model in one file produces an empty mapping,
-    every lookup below misses, and its output is byte for byte what it was.
-    """
-    return {t.name: t.origin for t in model.tables if t.is_imported}
-
-
-def _subject_table(subject: str) -> str:
-    """Read the table name out of a finding's subject.
-
-    Every subject a rule can state names its table first — a table is its
-    own name, and a column, a hierarchy and a unique key are all rendered
-    `Table.thing` by the ``__str__`` on each of them. That convention is
-    what makes one central answer to "which file is this in" possible
-    instead of sixty rules each passing it, and
-    `test_every_finding_names_a_table_that_exists` is what keeps it true.
-    """
-    return subject.split(".", 1)[0]
-
-
-def _owner(code: str) -> str:
-    """Name the extension that registered a rule code.
-
-    Looked up only when a rule has already raised, so the cost falls on the
-    failure path. The code carries the tag and the tag is usually the prefix
-    upper-cased, but "ACME102" and "acme 1.2.0" are not the same thing to
-    somebody deciding which package to file a bug against.
-    """
-    for extension in registry.extensions():
-        rules = extension.rules
-        if rules is not None and any(c == code for c, *_ in rules.rules):
-            return extension.name
-    return "no active extension"
-
-
-def _at_severity(finding: Finding, overrides: dict[str, Severity]) -> Finding:
-    """Apply a configured severity override to one finding."""
-    wanted = overrides.get(finding.rule)
-    if wanted is None or wanted == finding.severity:
-        return finding
-    return replace(finding, severity=wanted)
-
-
-def unknown_codes(names: Iterable[str]) -> list[str]:
-    """Name the given codes that no active extension registers.
-
-    Used to catch an exemption that has outlived the rule it suppressed —
-    a suppression nobody notices has stopped applying.
-    """
-    known = {code for code, *_ in all_rules()}
-    return sorted(set(names) - known)

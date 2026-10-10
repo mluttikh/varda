@@ -24,8 +24,9 @@ import subprocess
 import sys
 from typing import Any
 
-from varda import registry, rules
-from varda.ext import Extension
+from varda import _linkml
+from varda.registry import Registry
+from varda.vocabulary import TARGETS
 
 OUT = pathlib.Path(__file__).resolve().parents[1] / "docs" / "reference"
 
@@ -134,12 +135,11 @@ def _structured(ext: Any) -> list[str]:
     by a hard-coded list, so an extension defining its own structured range
     is documented on the same terms as the core's.
     """
-    view = ext.profile_view
-    reader = Extension.reader(ext.prefix)
+    view = _linkml.schema(ext.profile)
     return [
         str(name)
         for name, cls in view.schema.classes.items()
-        if reader.get(cls, "applies_to") is None
+        if _linkml.text(cls, f"{ext.prefix}:applies_to") is None
     ]
 
 
@@ -170,15 +170,11 @@ def _structure_section(view: Any, name: str) -> list[str]:
 
 def _annotation_rows(ext: Any, target: str) -> list[str]:
     """Render one table's worth of annotation rows for a target."""
-    view = ext.profile_view
-    # The same public entry point a third-party extension uses to read
-    # its own annotations. Reaching into `registry` would document a
-    # private path as though it were supported.
-    reader = Extension.reader(ext.prefix)
+    view = _linkml.schema(ext.profile)
     structured = _structured(ext)
     rows: list[str] = []
     for cls in view.schema.classes.values():
-        if reader.get(cls, "applies_to") != target:
+        if _linkml.text(cls, f"{ext.prefix}:applies_to") != target:
             continue
         for name, attr in (cls.attributes or {}).items():
             rng = _range_link(str(attr.range or "string"), view, structured)
@@ -218,12 +214,12 @@ def _enum_section(view: Any, name: str) -> list[str]:
 
 def _extension_vocabulary(ext: Any, *, titled: bool) -> list[str]:
     """Render one extension's annotations and enumerations."""
-    view = ext.profile_view
+    view = _linkml.schema(ext.profile)
     out: list[str] = []
     if titled:
         out += [f"## {ext.name} — `{ext.prefix}:`", ""]
 
-    for target in registry.TARGETS:
+    for target in TARGETS:
         rows = _annotation_rows(ext, target)
         if rows:
             out += [
@@ -285,7 +281,7 @@ def _extension_vocabulary(ext: Any, *, titled: bool) -> list[str]:
 
 def vocabulary() -> str:
     """Build the annotation and enumeration reference."""
-    active = [e for e in registry.extensions() if e.profile_view is not None]
+    active = [e for e in Registry.discover().extensions if e.profile]
     out = [
         "# Vocabulary",
         "",
@@ -303,8 +299,9 @@ def vocabulary() -> str:
 
 def rules_page() -> str:
     """Build the conformance-rule reference."""
-    registered = rules.all_rules()
-    overrides = registry.severities()
+    found = Registry.discover()
+    registered = found.rules
+    overrides = found.severities
     out = [
         "# Rules",
         "",
@@ -321,12 +318,13 @@ def rules_page() -> str:
         "",
     ]
     for prefix, title, blurb in FAMILIES:
-        group = [r for r in registered if r[0].startswith(prefix)]
+        group = [r for r in registered if r.code.startswith(prefix)]
         if not group:
             continue
         out += [f"## {title}", "", blurb, ""]
-        for code, severity, rule_title, fn in group:
-            effective = overrides.get(code, severity)
+        for rule in group:
+            code, rule_title = rule.code, rule.title
+            effective = overrides.get(code, rule.severity)
             icon = SEVERITY_ICON.get(effective, "")
             out += [
                 f"### `{code}` {{ #{code.lower()} }}",
@@ -334,7 +332,7 @@ def rules_page() -> str:
                 f"{icon} **{effective}** — {rule_title}",
                 "",
             ]
-            if fn.__doc__:
+            if rule.doc:
                 # `inspect.cleandoc`, not `textwrap.dedent`. A docstring's
                 # first line is flush against the opening quotes while the
                 # rest is indented, so the *common* prefix dedent looks for
@@ -342,7 +340,7 @@ def rules_page() -> str:
                 # every continuation line, which Markdown renders as a code
                 # block. The reasoning then arrives as monospace with a copy
                 # button instead of as prose.
-                out += [inspect.cleandoc(fn.__doc__), ""]
+                out += [inspect.cleandoc(rule.doc), ""]
     return "\n".join(out)
 
 
