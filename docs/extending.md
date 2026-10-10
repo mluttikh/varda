@@ -323,7 +323,7 @@ working; formatting one with `!r` shows the enum rather than the string.
 
 ```console
 $ varda ext
-varda 0.3.0  [varda:]
+varda 0.4.0  [varda:]
     origin      built in
     rule tag    V
     rules       49
