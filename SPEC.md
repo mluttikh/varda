@@ -1,6 +1,6 @@
 # Varda — implementation specification
 
-**Version 0.3.0 · status: reference implementation complete, ready to hand
+**Version 0.4.0 · status: reference implementation complete, ready to hand
 over. The vocabulary it implements is experimental and will change; 1.0 is
 where that stops.**
 
@@ -190,7 +190,7 @@ add early.
 | Deferred | Why | Rough size |
 | --- | --- | --- |
 | **Analytical functions** — `FunctionAnnotations`, parameters, implementation bindings | 17 further annotations for a feature most models never touch. Adding it early doubles the vocabulary a newcomer must read. | ~400 lines |
-| **Drift gate** (`varda verify`) | Genuinely valuable and genuinely cheap; cut only because it is worth nothing until generated output is being committed. Added after 0.3. | ~150 lines |
+| **Drift gate** (`varda verify`) | Genuinely valuable and genuinely cheap; cut only because it is worth nothing until generated output is being committed. Added in 0.4. | ~150 lines |
 | **Model diffing / evolution** | Needs a stable vocabulary to diff against. Building it before 1.0 means rebuilding it. | ~360 lines |
 | **Lineage and catalog export** | Every organization's catalog is different; this is extension territory until a second real consumer exists. | ~280 lines |
 | **Extension conformance kit** | A test harness proving a third-party extension is deterministic and stays inside the public API. Worth nothing until third-party extensions exist. | ~230 lines |
@@ -229,7 +229,7 @@ schema declares generates instead of stopping the generator. Plus the two
 extension-discovery routes a third party actually uses, which had never been
 tested — and which broke the moment they were.
 
-**Unreleased — the model as objects, not only as a script.** A SQLAlchemy
+**0.4 — the model as objects, not only as a script.** A SQLAlchemy
 Core generator: a `MetaData` and one `sa.Table` per table, no ORM, and no
 database named anywhere in it — generic types throughout, so one module
 serves every engine while the DDL goes on naming one at a time. Worth more
@@ -241,7 +241,7 @@ by execution: both are run against DuckDB at every constraint level and the
 catalogs compared, and where the generic types differ from the dialect tables
 a test pins each divergence rather than correcting it.
 
-**Unreleased — a model imports what it needs and nothing else.** The profile
+**0.4 — a model imports what it needs and nothing else.** The profile
 is split: the vocabulary stays where the registry reads it, and a new
 `types.yaml` carries the one type a model names. `imports: - varda` means
 what it always did and no model needs an edit; what changed is that four
@@ -250,7 +250,7 @@ every stock generator's output. `Extension.types` generalizes it, the import
 map is built from it alone, and `varda importmap --json` prints the map in
 the shape a generator's `--importmap` reads.
 
-**Unreleased — the operator chooses when the check runs.** A constraint is a
+**0.4 — the operator chooses when the check runs.** A constraint is a
 claim about the data *and* an instruction to verify it on every write, and
 Varda emitted the two together because SQL spells them with one word.
 Checking is twenty-three times the cost of a bulk load on the engines that
@@ -260,7 +260,7 @@ whatever the engine has for saying it, and the claims a weaker level drops
 move into `sql/assertions.sql` rather than disappearing. Design note and
 measurements in `design/constraint-enforcement.md`.
 
-**Unreleased — the boundary is where it says it is.** Three findings from an
+**0.4 — the boundary is where it says it is.** Three findings from an
 architecture review, and each is a discipline this codebase already holds
 stopping one step short of where it was aimed. `Finding` and `RuleSet` move
 to `varda.ext`, so the sentence four files repeat — an extension imports the
@@ -273,7 +273,7 @@ carry the file that declared them, `--skip-imported` drops another schema's
 findings without dropping its tables from any rule, and `V801` reports a
 physical-name collision against a class this model declares.
 
-**Unreleased — the extension interface, settled.** Breaking, once. The
+**0.4 — the extension interface, settled.** Breaking, once. The
 model a rule walks is `varda.snapshot`, frozen data holding nothing from
 LinkML, and what Varda concludes from it is `varda.analysis`; a rule yields
 `Finding(subject, message)` and the engine adds the rest; the registry is an
@@ -282,7 +282,7 @@ CLI is built on. Every output tree is byte-identical but one ordering, which
 now agrees across the three SQL artifacts. Reasoning in `docs/design.md`;
 migration in `docs/extending.md`.
 
-**Unreleased — the committed output is checked.** `varda verify` generates
+**0.4 — the committed output is checked.** `varda verify` generates
 exactly as `generate` would with the same flags, writes nothing, and exits
 `1` when a file under `--out` differs, is missing, or is one a generator
 declares and no longer produces; `--diff` shows how. It is

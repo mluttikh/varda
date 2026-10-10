@@ -1,6 +1,6 @@
 # Constraint enforcement in generated DDL
 
-**Status: shipped, unreleased.** `--constraints` and `sql/assertions.sql`
+**Status: shipped in 0.4.** `--constraints` and `sql/assertions.sql`
 exist; the reasoning that survives into the package lives in
 `docs/design.md`, under *Why enforcement is a level, not a switch* and *Why
 the claims outlive the constraints*.

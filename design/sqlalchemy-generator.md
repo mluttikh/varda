@@ -1,6 +1,6 @@
 # A SQLAlchemy Core generator
 
-**Status: shipped, unreleased — except the decisions below.** The generator,
+**Status: shipped in 0.4 — except the decisions below.** The generator,
 the type table and the catalog-equivalence check exist. The reasoning that
 survives into the package is in `docs/design.md`, under *Why the SQLAlchemy
 generator is Core and not the ORM* and *Why the SQLAlchemy module names no
