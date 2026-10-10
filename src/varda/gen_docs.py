@@ -10,17 +10,24 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from . import analysis
+from .snapshot import Additivity
+
 if TYPE_CHECKING:
     from .ext import Context
-    from .model import DimensionalModel, Hierarchy, Level, Table
+    from .snapshot import Hierarchy, Level, Model, Table
 
 #: Below this, a level identifies itself and there is nothing to qualify.
 IDENTITY_IS_COMPOUND = 2
 
+#: How each additivity reads to the person deciding whether to sum. Keyed by
+#: the enum and read by subscript, so a value added to `Additivity` without
+#: a phrase here is a `KeyError` in the suite rather than a page that prints
+#: the raw name and reads as though it meant to.
 ADDITIVITY = {
-    "ADDITIVE": "sums across every dimension",
-    "SEMI_ADDITIVE": "does not sum across",
-    "NON_ADDITIVE": "never sum; recompute from components",
+    Additivity.ADDITIVE: "sums across every dimension",
+    Additivity.SEMI_ADDITIVE: "does not sum across",
+    Additivity.NON_ADDITIVE: "never sum; recompute from components",
 }
 
 
@@ -43,14 +50,15 @@ def _columns(table: Table) -> list[str]:
     ]
     for column in table.columns:
         notes: list[str] = []
-        if column.references:
+        if column.references is not None and column.references.name:
             notes.append(f"→ `{column.references}`")
         if column.additivity:
-            phrase = ADDITIVITY.get(column.additivity, column.additivity)
-            if column.additivity == "SEMI_ADDITIVE" and (
-                column.semi_additive_over
+            phrase = ADDITIVITY[column.additivity]
+            over = column.semi_additive_over
+            if column.additivity == Additivity.SEMI_ADDITIVE and (
+                over is not None and over.name
             ):
-                phrase = f"{phrase} `{column.semi_additive_over}`"
+                phrase = f"{phrase} `{over}`"
             notes.append(phrase)
         if column.unit:
             notes.append(f"unit: `{column.unit}`")
@@ -85,7 +93,7 @@ def _level(level: Level) -> str:
     """
     if level.column is None:
         return f"`{level.spec}`"
-    if level.via is not None and level.via.references:
+    if level.via is not None and level.via.references is not None:
         return f"`{level.via.references}.{level.column.name}`"
     return f"`{level.column.name}`"
 
@@ -95,9 +103,8 @@ def _identity_note(hierarchy: Hierarchy) -> str | None:
 
     The concepts page argues that what names a level is not what identifies
     it — `city_name` holds "Springfield" for cities in three states — and
-    the drill path, which is a list of names, cannot show that. Nothing else
-    read `Level.identity`, so the model computed the answer on every access
-    and told no one.
+    the drill path, which is a list of names, cannot show that.
+    :func:`varda.analysis.identities` can, and this says it.
 
     The identity is rendered whole rather than as the finest key plus what
     qualifies it, which reads wrong wherever a level declares a key: the
@@ -109,9 +116,9 @@ def _identity_note(hierarchy: Hierarchy) -> str | None:
     Only the finest level. Every coarser one's identity is a prefix of it,
     so listing them all repeats the same path at increasing lengths.
     """
-    if not hierarchy.resolved:
+    if not hierarchy.levels:
         return None
-    identity = hierarchy.resolved[-1].identity
+    identity = analysis.identities(hierarchy)[-1]
     if len(identity) < IDENTITY_IS_COMPOUND:
         return None  # the level identifies itself; nothing to qualify
     named = ", ".join(f"`{c.name}`" for c in identity)
@@ -146,7 +153,7 @@ def _table(table: Table) -> str:
     # it came from, because `country_name` alone leaves a reader looking for
     # a column this table does not have.
     for hierarchy in table.hierarchies:
-        path = " → ".join(_level(lv) for lv in hierarchy.resolved)
+        path = " → ".join(_level(lv) for lv in hierarchy.levels)
         line = f"**Drill path** ({hierarchy.name}): {path}"
         if hierarchy.description:
             line = f"{line} — {hierarchy.description}"
@@ -158,7 +165,7 @@ def _table(table: Table) -> str:
     return "\n".join(lines)
 
 
-def generate(model: DimensionalModel) -> str:
+def generate(model: Model) -> str:
     """Render the model as a Markdown reference."""
     out = [
         "# Model reference",

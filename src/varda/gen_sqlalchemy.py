@@ -36,12 +36,14 @@ import re
 import textwrap
 from typing import TYPE_CHECKING
 
+from . import analysis
 from .gen_sql import DEFAULT_LEVEL, Dialect, GenerationError, enforcement
+from .snapshot import ColumnRole
 
 if TYPE_CHECKING:
     from .ext import Context
     from .gen_sql import Enforcement
-    from .model import Column, DimensionalModel, Table
+    from .snapshot import Column, Model, Table
 
 #: LinkML range to the SQLAlchemy type that renders it. The keys are
 #: :data:`varda.gen_sql.TYPES`'s keys and a test says so, because two lists of
@@ -103,6 +105,28 @@ COLUMN_INFO = (
 )
 
 
+def _column_info(column: Column) -> list[tuple[str, object]]:
+    """Read the values :data:`COLUMN_INFO` names, as the model wrote them.
+
+    A reference is copied as the name written rather than as what it
+    resolved to: the module records the model's claim, and a consumer
+    joining on it reads the same name the model does.
+    """
+    values: dict[str, object] = {
+        "role": column.role,
+        "references": _name(column.references),
+        "additivity": column.additivity,
+        "semi_additive_over": _name(column.semi_additive_over),
+        "unit": column.unit,
+    }
+    return [(key, values[key]) for key in COLUMN_INFO]
+
+
+def _name(ref: object) -> str | None:
+    """Render a reference as the name written, or nothing."""
+    return None if ref is None else str(ref)
+
+
 def sa_type(column: Column) -> str:
     """Render a column's type as the SQLAlchemy expression that builds it.
 
@@ -129,15 +153,7 @@ def sa_type(column: Column) -> str:
 
 def _args(column: Column) -> str:
     """Render the type's parameters, on the same rules the DDL uses."""
-    if column.max_length is not None:
-        return str(column.max_length)
-    precision = column.precision
-    if precision is None:
-        return ""
-    scale = column.scale
-    if scale is None or scale > precision:
-        return str(precision)
-    return f"{precision}, {scale}"
+    return ", ".join(str(p) for p in analysis.type_params(column))
 
 
 def _quote(value: str) -> str:
@@ -237,7 +253,7 @@ def _parts(
 def _hierarchies(table: Table) -> list[dict[str, object]]:
     """Render the drill paths as plain data a consumer can walk."""
     return [
-        {"name": h.name, "levels": list(h.levels)}
+        {"name": h.name, "levels": list(h.specs)}
         for h in table.hierarchies
         if h.name
     ]
@@ -250,16 +266,11 @@ def _column(column: Column, rule: Enforcement) -> str:
         f"        {_quote(column.physical)},",
         f"        {sa_type(column)},",
     ]
-    target = (
-        column.table.model.table(column.references or "")
-        if column.references
-        else None
-    )
-    if rule.references and target is not None and target.surrogate_keys:
-        key = target.surrogate_keys[0]
-        ref = _quote(f"{target.physical}.{key.physical}")
+    found = analysis.reference(column)
+    if rule.references and found is not None:
+        ref = _quote(f"{found.table.physical}.{found.key.physical}")
         lines.append(f"        sa.ForeignKey({ref}),")
-    if column.role == "SURROGATE_KEY" and rule.keys:
+    if column.role == ColumnRole.SURROGATE_KEY and rule.keys:
         # autoincrement=False or SQLAlchemy emits SERIAL / IDENTITY: it reads
         # an integer primary key as one the database generates. A warehouse
         # surrogate key is assigned by the loader, and a sequence default
@@ -272,11 +283,11 @@ def _column(column: Column, rule: Enforcement) -> str:
         # `gen_sql._column_line` makes the same trade, and a model whose
         # surrogate keys are not declared `required` is what tells the two
         # apart.
-        surrogate = column.role == "SURROGATE_KEY"
+        surrogate = column.role == ColumnRole.SURROGATE_KEY
         lines.append(f"        nullable={not (surrogate or column.required)},")
     if column.description:
         lines.append(f"        comment={_text(column.description, 8)},")
-    info = _mapping([(k, getattr(column, k)) for k in COLUMN_INFO], 8)
+    info = _mapping(_column_info(column), 8)
     if info:
         lines.append(info)
     lines.append("    ),")
@@ -334,8 +345,9 @@ def _table(table: Table, variable: str, rule: Enforcement) -> str:
         "    metadata,",
     ]
     lines += [_column(c, rule) for c in table.columns]
+    claims = analysis.unique_claims(table)
     if rule.unique:
-        for claim in table.unique_claims:
+        for claim in claims:
             cols = ", ".join(_quote(c.physical) for c in claim)
             lines.append(f"    sa.UniqueConstraint({cols}),")
     if table.description:
@@ -345,11 +357,11 @@ def _table(table: Table, variable: str, rule: Enforcement) -> str:
     # data, so a consumer can still read what the loader is trusted to hold.
     dropped: list[list[str]] = []
     if rule.documented:
-        dropped = [[c.physical for c in claim] for claim in table.unique_claims]
+        dropped = [[c.physical for c in claim] for claim in claims]
     info = _mapping(
         [
             ("role", table.role),
-            ("grain", list(table.grain)),
+            ("grain", [ref.name for ref in table.grain]),
             ("unique_unenforced", dropped),
             ("grain_statement", table.grain_statement),
             ("scd", table.scd),
@@ -365,7 +377,7 @@ def _table(table: Table, variable: str, rule: Enforcement) -> str:
 
 
 def generate(
-    model: DimensionalModel,
+    model: Model,
     schema: str = "mart",
     level: str = DEFAULT_LEVEL,
 ) -> str:
@@ -409,8 +421,11 @@ def generate(
 def run(ctx: Context) -> dict[str, str]:
     """Run this generator and return its artifacts.
 
-    ``ctx.dialect`` is deliberately unread. `Context` says a generator
+    ``ctx.options.dialect`` is deliberately unread. `Context` says a generator
     emitting something other than DDL is free to ignore it, and this is that
     generator: naming an engine is what the DDL is for.
     """
-    return {"python/mart.py": generate(ctx.model, ctx.schema, ctx.constraints)}
+    opts = ctx.options
+    return {
+        "python/mart.py": generate(ctx.model, opts.schema, opts.constraints)
+    }

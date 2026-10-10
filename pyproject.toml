@@ -236,10 +236,10 @@ convention = "pep257"
 # through a logger to satisfy the rule would make the thing worse at its job.
 "src/varda/cli.py" = ["T201"]
 #
-# D102 in the model layer: `model.py` is mostly one-line property wrappers,
+# D102 in the snapshot: `snapshot.py` is mostly one-line property wrappers,
 # and the only docstring they could carry is the property name restated. The
 # class docstrings carry the meaning; the accessors do not need one each.
-"src/varda/model.py" = ["D102"]
+"src/varda/snapshot.py" = ["D102"]
 #
 # D103 in the rules: every rule registers a human-readable title in its
 # decorator, and `varda rules` prints it. A docstring is reserved for rules

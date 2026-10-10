@@ -22,11 +22,14 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from . import analysis
+from .snapshot import ColumnRole
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from .ext import Context
-    from .model import Column, DimensionalModel, Table
+    from .snapshot import Column, Model, Table
 
 #: LinkML range to SQL type, as PostgreSQL spells it. Deliberately a closed
 #: table with no fallback: an unmapped range raises rather than quietly
@@ -296,32 +299,12 @@ def _facets(column: Column) -> str:
     Nothing is the honest output for a column that declares none, but it is
     not a safe one everywhere, and that is the whole reason the facets exist.
     A bare `VARCHAR` is unbounded in PostgreSQL and DuckDB and means
-    `VARCHAR(1)` in SQL Server, so every string column in a generated star
-    truncates to one character on one major engine. A bare `NUMERIC` is
-    exact and unconstrained in PostgreSQL and `DECIMAL(18, 3)` in DuckDB,
-    where a unit price of 0.123456 is stored as 0.123 and nothing says so.
-
-    Varda emits the bare type anyway when nothing is declared, rather than
-    inventing a default width. A default is the same silent fallback
-    :data:`TYPES` refuses when it raises on an unmapped range: it would put a
-    number nobody chose into the DDL, and be wrong in the direction that
-    looks like working output. `V707` asks the question where it costs most.
-
-    A scale that cannot be emitted is dropped rather than guessed at, and
-    there are two of those: one with no precision beside it, since there is
-    no `NUMERIC(, 2)` and the missing half would have to be invented, and one
-    larger than its precision, which no database accepts. V803 reports both
-    as errors; this is what `--force` writes in the meantime.
+    `VARCHAR(1)` in SQL Server; a bare `NUMERIC` is exact and unconstrained
+    in PostgreSQL and `DECIMAL(18, 3)` in DuckDB. What is emitted, and what
+    is dropped rather than guessed at, is :func:`varda.analysis.type_params`.
     """
-    if column.max_length is not None:
-        return f"({column.max_length})"
-    precision = column.precision
-    if precision is None:
-        return ""
-    scale = column.scale
-    if scale is None or scale > precision:
-        return f"({precision})"
-    return f"({precision}, {scale})"
+    params = analysis.type_params(column)
+    return f"({', '.join(str(p) for p in params)})" if params else ""
 
 
 def quoted(name: str) -> str:
@@ -373,84 +356,29 @@ def _comment(text: str, label: str = "") -> list[str]:
     return [f"-- {line}" for line in textwrap.wrap(body, width=77)]
 
 
-def _pending(table: Table, remaining: dict[str, Table]) -> set[str]:
-    """Name the tables this one references that are not yet created.
-
-    A self-reference is not pending. `FOREIGN KEY (manager_key) REFERENCES
-    dim_employee` inside `CREATE TABLE dim_employee` is legal SQL, and a
-    recursive dimension is common enough that treating it as a cycle would
-    refuse a normal model.
-    """
-    targets = {(c.references or "") for c in table.foreign_keys}
-    return (targets & set(remaining)) - {table.name}
-
-
-def _by_dependency(
-    tables: tuple[Table, ...], *, references: bool
-) -> list[Table]:
-    """Order tables so every reference target precedes the table using it.
-
-    Sorting by name is not enough once one dimension references another,
-    which is what a snowflake is: `DimCity` sorts before `DimState` and
-    references it, so the emitted file creates a table whose target does not
-    exist yet and stops there.
-
-    Ties are broken by name, so a model with no dimension-to-dimension
-    references emits in exactly the order it did before — a flat star sees no
-    diff.
-
-    The ordering runs whether or not foreign keys are emitted, so that
-    turning enforcement off does not reshuffle a file and produce a diff
-    that means nothing. Only the refusal is conditional: with no foreign
-    keys in the output there is nothing an order could violate.
-    """
-    remaining = {t.name: t for t in tables}
-    out: list[Table] = []
-    while remaining:
-        ready = sorted(
-            name
-            for name, table in remaining.items()
-            if not _pending(table, remaining)
-        )
-        if not ready:
-            # Every remaining table waits on another one. With the foreign
-            # keys inline in CREATE TABLE there is no order that works, so
-            # this raises rather than emitting a file that cannot run — the
-            # same treatment an unmapped range gets.
-            #
-            # Only while they are being emitted. Under `--constraints
-            # asserted` or `none` the file declares no references, nothing
-            # in it depends on the order, and a pair of dimensions that
-            # point at each other — which V404 permits — generates. The
-            # remainder is emitted by name so the output stays
-            # deterministic.
-            if references:
-                names = ", ".join(sorted(remaining))
-                msg = (
-                    f"foreign keys form a cycle among: {names}. "
-                    f"No CREATE TABLE order satisfies them."
-                )
-                raise GenerationError(msg)
-            ready = sorted(remaining)
-        out += [remaining.pop(name) for name in ready]
-    return out
-
-
-def _ordered(model: DimensionalModel, *, references: bool) -> list[Table]:
+def _ordered(model: Model, *, references: bool) -> tuple[Table, ...]:
     """Order tables so every foreign key's target is already created.
 
-    Dimensions and bridges are ordered together rather than as two blocks.
-    A bridge references dimensions, but a dimension may reference a bridge
-    too — V404 permits both — and two fixed blocks cannot express that.
-    Facts come last and need no ordering among themselves, because nothing
-    may reference a fact.
+    The order is :func:`varda.analysis.creation_order`, which runs whether or
+    not foreign keys are emitted, so that turning enforcement off does not
+    reshuffle a file and produce a diff that means nothing.
+
+    Only the refusal is conditional. With the foreign keys inline in CREATE
+    TABLE, tables that reference each other in a cycle have no order that
+    works, so this raises rather than emitting a file that cannot run. Under
+    `--constraints asserted` or `none` the file declares no references, and
+    a pair of dimensions pointing at each other — which V404 permits —
+    generates.
     """
-    return [
-        *_by_dependency(
-            (*model.dimensions, *model.bridges), references=references
-        ),
-        *model.facts,
-    ]
+    cycle = analysis.reference_cycle(model)
+    if references and cycle:
+        names = ", ".join(cycle)
+        msg = (
+            f"foreign keys form a cycle among: {names}. "
+            f"No CREATE TABLE order satisfies them."
+        )
+        raise GenerationError(msg)
+    return analysis.creation_order(model)
 
 
 def _column_line(column: Column, sql: Dialect, rule: Enforcement) -> str:
@@ -464,7 +392,7 @@ def _column_line(column: Column, sql: Dialect, rule: Enforcement) -> str:
     the column is populated and that half is free.
     """
     parts = [f"    {quoted(column.physical)}", sql_type(column, sql)]
-    if column.role == "SURROGATE_KEY":
+    if column.role == ColumnRole.SURROGATE_KEY:
         parts.append(f"PRIMARY KEY{rule.suffix}" if rule.keys else "NOT NULL")
     elif column.required:
         parts.append("NOT NULL")
@@ -481,20 +409,17 @@ def _reference_line(fk: Column, schema: str, rule: Enforcement) -> str | None:
     """Render one foreign key, or nothing where there is no target to name.
 
     REFERENCES goes on its own line, always rather than only when the
-    one-liner overflows. Quoting pushed the longer keys past the width a
-    terminal shows, and a format that changes shape with the length of a
+    one-liner overflows: a format that changes shape with the length of a
     name produces diffs that look meaningful and are not.
     """
-    target = fk.table.model.table(fk.references or "")
-    if target is None:
-        return None  # V403 already reported it; do not also crash here
-    key = target.surrogate_keys
-    if not key:
-        return None  # V301's business
+    found = analysis.reference(fk)
+    if found is None:
+        return None  # V402, V403 or V301 reports why
     return (
         f"FOREIGN KEY ({quoted(fk.physical)})\n"
         f"        REFERENCES {quoted(schema)}."
-        f"{quoted(target.physical)} ({quoted(key[0].physical)}){rule.suffix}"
+        f"{quoted(found.table.physical)} ({quoted(found.key.physical)})"
+        f"{rule.suffix}"
     )
 
 
@@ -502,15 +427,12 @@ def _claims(table: Table, schema: str, rule: Enforcement) -> list[str]:
     """Render every claim beyond the primary key, in model order.
 
     What the table says is unique first, then what it says it references.
-    The uniqueness comes from :attr:`varda.model.Table.unique_claims`, which
-    the assertion generator reads too — the DDL renders each claim as a
-    constraint and the assertions render each as a query, and one claim
-    computed in two places is one claim that eventually disagrees with
-    itself.
+    The uniqueness is :func:`varda.analysis.unique_claims`, which the
+    assertions render as queries — one claim, computed once.
     """
     out: list[str] = []
     if rule.unique:
-        out += [_unique_line(c, rule) for c in table.unique_claims]
+        out += [_unique_line(c, rule) for c in analysis.unique_claims(table)]
     if rule.references:
         out += [
             line
@@ -564,7 +486,7 @@ def _table(table: Table, schema: str, sql: Dialect, rule: Enforcement) -> str:
 
 
 def generate(
-    model: DimensionalModel,
+    model: Model,
     schema: str = "mart",
     dialect_name: str = DEFAULT_DIALECT,
     level: str = DEFAULT_LEVEL,
@@ -597,8 +519,9 @@ def generate(
 
 def run(ctx: Context) -> dict[str, str]:
     """Run this generator and return its artifacts."""
+    opts = ctx.options
     return {
         "sql/mart.sql": generate(
-            ctx.model, ctx.schema, ctx.dialect, ctx.constraints
+            ctx.model, opts.schema, opts.dialect, opts.constraints
         )
     }

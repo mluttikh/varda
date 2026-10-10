@@ -63,32 +63,44 @@ from sqlalchemy.dialects import postgresql as sa_postgresql
 from sqlalchemy.schema import CreateTable
 from sqlglot import expressions as sqlglot_exp
 
-import varda
 from varda import (
     __version__,
+    analysis,
+    api,
     cli,
     gen_sql,
     gen_sqlalchemy,
     registry,
-    rules,
 )
 from varda import ext as ext_module
+from varda import snapshot as varda_snapshot
+from varda.analysis import physical_name
 from varda.ext import (
     Context,
     Extension,
     ExtensionError,
+    Finding,
     Generator,
+    Issue,
+    Model,
+    Options,
+    Rule,
     RuleError,
+    RuleSet,
+    Severity,
 )
 from varda.gen_assertions import generate as generate_assertions
 from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
-from varda.model import PROFILE, TYPES, DimensionalModel, physical_name
-from varda.rules import RuleSet
+from varda.registry import PROFILE, TYPES, Config, Registry
+from varda.snapshot import table_of
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    import enum as enum_module
+    from collections.abc import Iterator, Sequence
+
+    from varda.vocabulary import Vocabulary
 
 ROOT = pathlib.Path(__file__).parents[1]
 EXAMPLES = ROOT / "examples"
@@ -105,15 +117,19 @@ def build(
     tmp_path: pathlib.Path,
     classes: dict[str, Any],
     imports: list[str] | None = None,
-) -> DimensionalModel:
+    extensions: Sequence[Extension] = (),
+    registry: Registry | None = None,
+) -> Model:
     """Write a minimal LinkML schema and load it as a model.
 
     Tests state only the classes they care about. Everything a rule needs to
     be *provoked* is in the class; everything else is boilerplate that would
     otherwise be repeated thirty times and read past.
 
-    Loaded through the import map, the way the CLI loads one, so a test can
-    write ``imports=["varda"]`` and resolve the installed profile.
+    Loaded under Varda plus ``extensions`` and nothing installed, so a test
+    sees exactly the extension set it names — and through that set's import
+    map, so it can write ``imports=["varda"]`` and resolve the profile. A
+    test about discovery passes the ``registry`` it discovered instead.
     """
     schema = {
         "id": "https://example.org/t",
@@ -129,12 +145,29 @@ def build(
     }
     path = tmp_path / "t.yaml"
     path.write_text(yaml.safe_dump(schema), encoding="utf-8")
-    return DimensionalModel.load(path, importmap=registry.importmap())
+    if registry is not None:
+        return api.load(path, registry)
+    return load(path, *extensions)
 
 
-def codes(model: DimensionalModel) -> set[str]:
+def load(path: pathlib.Path, *extensions: Extension) -> Model:
+    """Load a model under Varda plus exactly ``extensions``."""
+    return api.load(path, Registry.of(*extensions))
+
+
+def findings(model: Model, **kwargs: Any) -> list[Issue]:
+    """Check a model and return what was found, in rule order."""
+    return list(api.check(model, **kwargs).issues)
+
+
+def codes(model: Model) -> set[str]:
     """Return the rule codes that fired against a model."""
-    return {f.rule for f in rules.check(model)}
+    return {f.code for f in findings(model)}
+
+
+def vocabulary(*extensions: Extension) -> Vocabulary:
+    """Return what Varda plus ``extensions`` declare."""
+    return Registry.of(*extensions).vocabulary
 
 
 def dimension(**extra: Any) -> dict[str, Any]:
@@ -170,26 +203,13 @@ def _col(role: str, rng: str = "datetime") -> dict[str, Any]:
     return {"range": rng, "annotations": {"varda:role": role}}
 
 
-@pytest.fixture(autouse=True)
-def _clean_registry() -> Iterator[None]:
-    """Reset the registry between tests.
-
-    Every lookup in the registry is cached, and the cache is keyed on nothing
-    — it is valid only for one extension set. A test that injects an
-    extension would otherwise leak its vocabulary into every test after it.
-    """
-    registry.reset_caches()
-    yield
-    registry.reset_caches()
-
-
 # ---------------------------------------------------------------------------
 # The model layer
 # ---------------------------------------------------------------------------
 
 
 def test_example_loads() -> None:
-    model = DimensionalModel.load(RETAIL)
+    model = load(RETAIL)
     assert len(model.tables) == 8
     assert len(model.facts) == 2
     assert len(model.dimensions) == 5
@@ -203,7 +223,7 @@ def test_every_example_is_clean(path: pathlib.Path) -> None:
     An example that does not conform is worse than no example: it is the
     first thing anybody copies.
     """
-    assert rules.check(DimensionalModel.load(path)) == []
+    assert findings(load(path)) == []
 
 
 @pytest.mark.parametrize("path", [RETAIL, SNOWFLAKE], ids=lambda p: p.stem)
@@ -214,7 +234,7 @@ def test_every_example_generates_runnable_ddl(path: pathlib.Path) -> None:
     its dimensions reference each other, so by-name creation order emits a
     foreign key before its target exists.
     """
-    executes(generate_sql(DimensionalModel.load(path)))
+    executes(generate_sql(load(path)))
 
 
 def test_the_snowflake_example_uses_the_forms_it_exists_for() -> None:
@@ -223,20 +243,22 @@ def test_the_snowflake_example_uses_the_forms_it_exists_for() -> None:
     Asserted rather than assumed: an example added to cover four forms is
     one edit away from covering three, and nothing else would notice.
     """
-    model = DimensionalModel.load(SNOWFLAKE)
+    model = load(SNOWFLAKE)
     levels = [
         lv
         for table in model.dimensions
         for hierarchy in table.hierarchies
-        for lv in hierarchy.resolved
+        for lv in hierarchy.levels
     ]
     assert any(lv.is_reference for lv in levels), "no reference level"
-    assert any(lv.declared_key for lv in levels), "no declared level key"
+    assert any(lv.key is not None for lv in levels), "no declared level key"
     assert any(len(t.unique_keys) > 1 for t in model.dimensions), (
         "no dimension identified two ways"
     )
     assert any(
-        c.references and (m := model.table(c.references)) and m.is_dimension
+        c.references is not None
+        and (m := c.references.target) is not None
+        and m.is_dimension
         for t in model.dimensions
         for c in t.foreign_keys
     ), "no dimension references another dimension"
@@ -363,7 +385,7 @@ def test_v001_message_names_the_profile(tmp_path: pathlib.Path) -> None:
             )
         },
     )
-    found = [f for f in rules.check(model) if f.rule == "V001"]
+    found = [f for f in findings(model) if f.code == "V001"]
     assert "varda.yaml" in found[0].message
 
 
@@ -372,7 +394,7 @@ def test_v002_bad_enum_value(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {"DimThing": dimension(annotations={"varda:role": "dimenson"})},
     )
-    found = [f for f in rules.check(model) if f.rule == "V002"]
+    found = [f for f in findings(model) if f.code == "V002"]
     assert found
     assert "TableRole" in found[0].message
 
@@ -386,7 +408,7 @@ def test_v003_unknown_prefix(tmp_path: pathlib.Path) -> None:
             )
         },
     )
-    found = [f for f in rules.check(model) if f.rule == "V003"]
+    found = [f for f in findings(model) if f.code == "V003"]
     assert found
     assert found[0].severity == "warning"
 
@@ -398,13 +420,14 @@ def test_v003_is_not_an_error() -> None:
     every contributing extension installed, which defeats the purpose of
     annotations being inert to tools that do not understand them.
     """
-    _, severity, _, _ = next(r for r in rules.all_rules() if r[0] == "V003")
-    assert severity == "warning"
+    v003 = Registry.of().rule("V003")
+    assert v003 is not None
+    assert v003.severity == "warning"
 
 
 def _instantiating(
     tmp_path: pathlib.Path, table: str | None = None, column: str | None = None
-) -> DimensionalModel:
+) -> Model:
     """Build a dimension declaring the given `instantiates`, if any."""
     cls = dimension()
     if table is not None:
@@ -449,14 +472,14 @@ def test_v005_a_metaclass_for_the_other_kind(tmp_path: pathlib.Path) -> None:
     model = _instantiating(
         tmp_path, "varda:ColumnAnnotations", "varda:TableAnnotations"
     )
-    found = [f for f in rules.check(model) if f.rule == "V005"]
+    found = [f for f in findings(model) if f.code == "V005"]
     assert len(found) == 2
     assert "governs a column and this is a table" in found[0].message
 
 
 def test_v005_an_unknown_metaclass(tmp_path: pathlib.Path) -> None:
     model = _instantiating(tmp_path, "varda:NoSuchThing")
-    found = [f for f in rules.check(model) if f.rule == "V005"]
+    found = [f for f in findings(model) if f.code == "V005"]
     assert len(found) == 1
     assert "no active profile declares" in found[0].message
 
@@ -470,18 +493,18 @@ def test_v005_a_bare_name_names_nothing(tmp_path: pathlib.Path) -> None:
     """
     found = [
         f
-        for f in rules.check(_instantiating(tmp_path, "TableAnnotations"))
-        if f.rule == "V005"
+        for f in findings(_instantiating(tmp_path, "TableAnnotations"))
+        if f.code == "V005"
     ]
     assert len(found) == 1
 
 
 def test_governs_is_the_inverse_of_applies_to() -> None:
     """One relationship, read from both ends, against the shipped profile."""
-    assert registry.governs("varda:TableAnnotations") == "table"
-    assert registry.governs("varda:ColumnAnnotations") == "column"
-    assert registry.governs("varda:Hierarchy") is None
-    assert registry.governs("TableAnnotations") is None
+    assert vocabulary().governs("varda:TableAnnotations") == "table"
+    assert vocabulary().governs("varda:ColumnAnnotations") == "column"
+    assert vocabulary().governs("varda:Hierarchy") is None
+    assert vocabulary().governs("TableAnnotations") is None
 
 
 def test_v101_table_without_role(tmp_path: pathlib.Path) -> None:
@@ -648,7 +671,7 @@ def test_v105_dimension_with_two_surrogate_keys(
         "annotations": {"varda:role": "SURROGATE_KEY"},
     }
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V301"]
+    found = [f for f in findings(model) if f.code == "V301"]
     assert found
     assert "found 2" in found[0].message
 
@@ -895,7 +918,7 @@ def test_v203_semi_additive_over_is_not_a_key(
             "DimThing": dimension(),
         },
     )
-    found = [f for f in rules.check(model) if f.rule == "V703"]
+    found = [f for f in findings(model) if f.code == "V703"]
     assert found
     assert "date_key" in found[0].message
 
@@ -1035,7 +1058,7 @@ def test_v206_silent_when_declared_factless(tmp_path: pathlib.Path) -> None:
 
 
 def test_rule_codes_are_unique() -> None:
-    all_codes = [c for c, *_ in rules.all_rules()]
+    all_codes = [r.code for r in Registry.of().rules]
     assert len(all_codes) == len(set(all_codes))
 
 
@@ -1068,20 +1091,18 @@ def test_an_info_rule_never_stops_a_run(tmp_path: pathlib.Path) -> None:
     """
     rs = RuleSet(tag="LL")
     rs.rule("LL001", "info", "Noted")(
-        lambda m: iter(
-            [rules.Finding("LL001", "info", str(t), "noted") for t in m.tables]
-        )
+        lambda m: iter([Finding(t, "noted") for t in m.tables])
     )
-    model = build(tmp_path, {"DimThing": dimension()})
-    with registry.using(_bare("l", "lll", rule_tag="LL", rules=rs)):
-        found = rules.check(model)
-        assert "LL001" in {f.rule for f in found}
-        path = tmp_path / "t.yaml"
-        assert cli.main(["check", str(path), "--strict"]) == 0
+    ext = _bare("l", "lll", rule_tag="LL", rules=rs)
+    model = build(tmp_path, {"DimThing": dimension()}, extensions=[ext])
+    assert "LL001" in {f.code for f in findings(model)}
+    path = tmp_path / "t.yaml"
+    argv = ["check", str(path), "--strict"]
+    assert cli.main(argv, registry=model.registry) == 0
 
 
 def test_unknown_codes_finds_stale_exemptions() -> None:
-    assert rules.unknown_codes(["V001", "V999"]) == ["V999"]
+    assert Registry.of().unknown_codes(["V001", "V999"]) == ("V999",)
 
 
 def test_exemptions_skip_a_rule(tmp_path: pathlib.Path) -> None:
@@ -1090,7 +1111,7 @@ def test_exemptions_skip_a_rule(tmp_path: pathlib.Path) -> None:
         {"DimThing": dimension(annotations={"varda:role": "DIMENSION"})},
     )
     assert "V502" in codes(model)
-    fired = {f.rule for f in rules.check(model, exemptions=["V502"])}
+    fired = {f.code for f in findings(model, exempt=["V502"])}
     assert "V502" not in fired
 
 
@@ -1120,40 +1141,39 @@ def test_model_objects_can_go_in_a_set() -> None:
     identity question through strings, which is the indirection this layer
     exists to remove.
     """
-    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    model = load(SNOWFLAKE)
     table = model.dimensions[0]
     assert len({*table.columns}) == len(table.columns)
     assert len({*model.tables}) == len(model.tables)
     hierarchy = next(h for t in model.tables for h in t.hierarchies)
-    assert len({*hierarchy.resolved}) == len(hierarchy.resolved)
+    assert len({*hierarchy.levels}) == len(hierarchy.levels)
 
 
 def test_model_objects_are_the_same_object_each_time() -> None:
     """Identity is only worth having if instances are stable.
 
-    `hierarchies` and `resolved` were plain properties and rebuilt on every
-    access — 51 rebuilds across 8 tables in one `check()` — so two `Level`
-    objects for one level were never the same object and a set of them
-    would have held duplicates.
+    A snapshot is built once, so asking twice for a column, a table or a
+    level hands back the object asked for the first time — and a set of
+    them holds each one once.
     """
-    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    model = load(SNOWFLAKE)
     table = model.dimensions[0]
     assert table.columns[0] is table.columns[0]
     assert model.tables[0] is model.tables[0]
     owner = next(t for t in model.tables if t.hierarchies)
     assert owner.hierarchies[0] is owner.hierarchies[0]
     hierarchy = owner.hierarchies[0]
-    assert hierarchy.resolved is hierarchy.resolved
+    assert hierarchy.levels[0] is hierarchy.levels[0]
 
 
 def test_declared_annotations_are_namespaced() -> None:
-    assert "varda:role" in registry.declared_annotations("table")
-    assert "varda:grain" in registry.declared_annotations("table")
-    assert "varda:grain" not in registry.declared_annotations("column")
+    assert "varda:role" in vocabulary().declared("table")
+    assert "varda:grain" in vocabulary().declared("table")
+    assert "varda:grain" not in vocabulary().declared("column")
 
 
 def test_permitted_values() -> None:
-    assert registry.permitted("TableRole") == (
+    assert vocabulary().permitted("TableRole") == (
         "FACT",
         "DIMENSION",
         "BRIDGE",
@@ -1161,12 +1181,12 @@ def test_permitted_values() -> None:
 
 
 def test_annotation_enum_resolves() -> None:
-    assert registry.annotation_enum("table", "varda:role") == "TableRole"
-    assert registry.annotation_enum("table", "varda:grain") is None
+    assert vocabulary().enum_of("table", "varda:role") == "TableRole"
+    assert vocabulary().enum_of("table", "varda:grain") is None
 
 
 def test_importmap_points_at_the_profile() -> None:
-    assert "varda" in registry.importmap()
+    assert "varda" in Registry.of().importmap
 
 
 def test_extension_activates(tmp_path: pathlib.Path) -> None:
@@ -1174,21 +1194,19 @@ def test_extension_activates(tmp_path: pathlib.Path) -> None:
 
     table = dimension()
     table["annotations"]["acme:cost_center"] = "CC-4471"
-    with registry.using(EXTENSION):
-        model = build(tmp_path, {"DimThing": table})
-        fired = codes(model)
-        assert "V001" not in fired  # acme:cost_center is now declared
-        assert "ACME101" not in fired
-        assert "acme" in registry.prefixes()
-        assert "acme:cost_center" in registry.declared_annotations("table")
+    model = build(tmp_path, {"DimThing": table}, extensions=[EXTENSION])
+    fired = codes(model)
+    assert "V001" not in fired  # acme:cost_center is now declared
+    assert "ACME101" not in fired
+    assert "acme" in model.vocabulary.prefixes
+    assert "acme:cost_center" in model.vocabulary.declared("table")
 
 
 def test_extension_rule_fires(tmp_path: pathlib.Path) -> None:
     from acme_ext import EXTENSION  # noqa: PLC0415
 
-    with registry.using(EXTENSION):
-        model = build(tmp_path, {"DimThing": dimension()})
-        assert "ACME101" in codes(model)
+    model = build(tmp_path, {"DimThing": dimension()}, extensions=[EXTENSION])
+    assert "ACME101" in codes(model)
 
 
 def test_extension_enum_is_checked(tmp_path: pathlib.Path) -> None:
@@ -1203,11 +1221,10 @@ def test_extension_enum_is_checked(tmp_path: pathlib.Path) -> None:
     table = dimension()
     table["annotations"]["acme:cost_center"] = "CC-1"
     table["attributes"]["d_id"]["annotations"]["acme:sensitivity"] = "secret"
-    with registry.using(EXTENSION):
-        model = build(tmp_path, {"DimThing": table})
-        found = [f for f in rules.check(model) if f.rule == "V002"]
-        assert found
-        assert "Sensitivity" in found[0].message
+    model = build(tmp_path, {"DimThing": table}, extensions=[EXTENSION])
+    found = [f for f in findings(model) if f.code == "V002"]
+    assert found
+    assert "Sensitivity" in found[0].message
 
 
 def test_extension_severity_default_applies(tmp_path: pathlib.Path) -> None:
@@ -1223,11 +1240,10 @@ def test_extension_severity_default_applies(tmp_path: pathlib.Path) -> None:
             "varda:additivity": "ADDITIVE",
         },
     }
-    with registry.using(EXTENSION):
-        model = build(tmp_path, {"BridgeX": table})
-        found = [f for f in rules.check(model) if f.rule == "V705"]
-        assert found
-        assert found[0].severity == "error"
+    model = build(tmp_path, {"BridgeX": table}, extensions=[EXTENSION])
+    found = [f for f in findings(model) if f.code == "V705"]
+    assert found
+    assert found[0].severity == "error"
 
 
 # ---------------------------------------------------------------------------
@@ -1239,15 +1255,13 @@ def _bare(name: str, prefix: str, **kw: Any) -> Extension:
     return Extension(name=name, prefix=prefix, origin="test", **kw)
 
 
-def activate(*exts: Extension) -> None:
-    """Activate extensions and immediately deactivate them.
+def activate(*exts: Extension) -> Registry:
+    """Ask for a registry holding Varda and ``exts``.
 
-    Every validation test below asserts on what happens when the registry is
-    asked to accept a set of extensions, and the answer arrives on the way
-    in. Naming that here keeps each test to a single `with`.
+    Every validation test below asserts on what happens when a set of
+    extensions is put together, and the answer arrives on construction.
     """
-    with registry.using(*exts):
-        pass
+    return Registry.of(*exts)
 
 
 def test_reserved_prefix_is_refused() -> None:
@@ -1282,7 +1296,9 @@ def test_duplicate_rule_code_is_refused() -> None:
     right = RuleSet(tag="RR")
     left.rule("LL001", "error", "left")(lambda _m: iter(()))
     # Force a collision the tag check cannot catch, by appending directly.
-    right.rules.append(("LL001", "error", "right", lambda _m: iter(())))
+    right._rules.append(
+        Rule("LL001", Severity.ERROR, "right", lambda _m: iter(()))
+    )
     with pytest.raises(ExtensionError, match="registered by both"):
         activate(
             _bare("l", "lft", rule_tag="LL", rules=left),
@@ -1355,33 +1371,20 @@ def test_nothing_is_written_outside_the_output_directory(
     assert not out.exists()
 
 
-def test_every_cached_lookup_is_reset() -> None:
-    """A reset that stops short is a cache that silently goes stale.
+def test_registries_share_nothing() -> None:
+    """A registry sees its own extensions, whatever was built before it.
 
-    `annotation_shape` and `structured_shape` were both missing from the
-    hand-written list this replaces, so a shape looked up before an
-    extension was active stayed `None` afterwards and V004 quietly stopped
-    checking that extension's structured annotations. The list is now built
-    rather than listed; this asserts the build finds everything.
+    When the registry was module state, a shape looked up before an
+    extension was active stayed cached afterwards, and V004 quietly stopped
+    checking that extension's structured annotations. Two registries now
+    have nothing in common to go stale.
     """
-    owned = {
-        name
-        for name, obj in vars(registry).items()
-        if hasattr(obj, "cache_clear")
-        and getattr(obj, "__module__", None) == registry.__name__
-    }
-    reset = {fn.__name__ for fn in registry._cached()}
-    assert owned - reset == registry._KEEP_CACHED
-
-
-def test_a_structured_shape_is_seen_after_an_extension_is_activated() -> None:
-    """The failure the reset above exists to prevent, from the outside."""
     from acme_ext import EXTENSION  # noqa: PLC0415
 
-    assert registry.structured_shape("acme", "AcmeTableAnnotations") is None
-    with registry.using(EXTENSION):
-        shape = registry.structured_shape("acme", "AcmeTableAnnotations")
+    assert vocabulary().shape("acme", "AcmeTableAnnotations") is None
+    shape = vocabulary(EXTENSION).shape("acme", "AcmeTableAnnotations")
     assert shape == {"cost_center": "string", "retention_days": "integer"}
+    assert vocabulary().shape("acme", "AcmeTableAnnotations") is None
 
 
 def test_profile_prefix_must_match(tmp_path: pathlib.Path) -> None:
@@ -1449,11 +1452,11 @@ def test_severity_disagreement_is_refused() -> None:
 
 
 def test_agreeing_severity_defaults_are_fine() -> None:
-    with registry.using(
+    agreed = activate(
         _bare("group", "grp", severity_defaults={"V705": "error"}),
         _bare("team", "tm", severity_defaults={"V705": "error"}),
-    ):
-        assert registry.severities()["V705"] == "error"
+    )
+    assert agreed.severities["V705"] == "error"
 
 
 def test_unknown_severity_is_refused() -> None:
@@ -1486,13 +1489,13 @@ def executes(sql: str) -> None:
 
 
 def test_sql_is_deterministic() -> None:
-    model = DimensionalModel.load(RETAIL)
+    model = load(RETAIL)
     assert generate_sql(model) == generate_sql(model)
 
 
 def test_the_example_ddl_executes() -> None:
     """The shipped example runs against an empty database."""
-    executes(generate_sql(DimensionalModel.load(RETAIL)))
+    executes(generate_sql(load(RETAIL)))
 
 
 def test_a_snowflake_ddl_executes(tmp_path: pathlib.Path) -> None:
@@ -1524,11 +1527,11 @@ def test_reserved_words_survive_as_identifiers(
 
 
 def test_sql_orders_dimensions_before_facts() -> None:
-    sql = generate_sql(DimensionalModel.load(RETAIL))
+    sql = generate_sql(load(RETAIL))
     assert sql.index('"dim_customer" (') < sql.index('"fct_sale" (')
 
 
-def _creates_before_references(sql: str, model: DimensionalModel) -> None:
+def _creates_before_references(sql: str, model: Model) -> None:
     """Assert every table is created after everything it references.
 
     Written over the model rather than against named pairs, because the
@@ -1539,7 +1542,8 @@ def _creates_before_references(sql: str, model: DimensionalModel) -> None:
     where = {t.name: sql.index(f'"{t.physical}" (') for t in model.tables}
     for table in model.tables:
         for column in table.foreign_keys:
-            target = model.table(column.references or "")
+            ref = column.references
+            target = ref.target if ref is not None else None
             if target is None or target.name == table.name:
                 continue
             assert where[target.name] < where[table.name], (
@@ -1567,7 +1571,7 @@ def test_sql_creates_a_snowflake_in_dependency_order(
 
 def test_sql_orders_a_flat_star_as_before() -> None:
     """Dependency ordering breaks ties by name, so a star does not move."""
-    sql = generate_sql(DimensionalModel.load(RETAIL))
+    sql = generate_sql(load(RETAIL))
     tables = ["dim_customer", "dim_date", "dim_product", "dim_segment"]
     positions = [sql.index(f'"{name}" (') for name in tables]
     assert positions == sorted(positions)
@@ -1625,7 +1629,7 @@ def test_sql_refuses_a_cycle_between_dimensions(
 
 
 def test_sql_emits_foreign_keys() -> None:
-    sql = generate_sql(DimensionalModel.load(RETAIL))
+    sql = generate_sql(load(RETAIL))
     assert (
         'FOREIGN KEY ("customer_key")\n'
         '        REFERENCES "mart"."dim_customer" ("customer_key")' in sql
@@ -1633,7 +1637,7 @@ def test_sql_emits_foreign_keys() -> None:
 
 
 def test_sql_lines_fit_the_limit() -> None:
-    model = DimensionalModel.load(RETAIL)
+    model = load(RETAIL)
     written = [
         generate_sql(model, "mart", dialect, level)
         for dialect in gen_sql.DIALECTS
@@ -1766,8 +1770,10 @@ def test_generate_fails_closed(tmp_path: pathlib.Path) -> None:
 
     gen = Generator(name="zzz", artifacts=("zzz/out.txt",), run=boom)
     out = tmp_path / "out"
-    with registry.using(_bare("a", "one", generators=(gen,))):
-        code = cli.main(["generate", str(RETAIL), "--out", str(out)])
+    code = cli.main(
+        ["generate", str(RETAIL), "--out", str(out)],
+        registry=Registry.of(_bare("a", "one", generators=(gen,))),
+    )
     assert code == 1
     assert not out.exists()
 
@@ -1778,8 +1784,10 @@ def test_generate_rejects_an_undeclared_path(tmp_path: pathlib.Path) -> None:
 
     gen = Generator(name="zzz", artifacts=("declared.txt",), run=sneaky)
     out = tmp_path / "out"
-    with registry.using(_bare("a", "one", generators=(gen,))):
-        code = cli.main(["generate", str(RETAIL), "--out", str(out)])
+    code = cli.main(
+        ["generate", str(RETAIL), "--out", str(out)],
+        registry=Registry.of(_bare("a", "one", generators=(gen,))),
+    )
     assert code == 1
     assert not out.exists()
 
@@ -1870,7 +1878,7 @@ def test_rules_command_lists_every_rule(
     assert cli.main(["rules"]) == 0
     out = capsys.readouterr().out
     assert "V001" in out
-    assert f"{len(rules.all_rules())} rules" in out
+    assert f"{len(Registry.of().rules)} rules" in out
 
 
 def test_ext_command_describes_varda(
@@ -1951,9 +1959,9 @@ def test_toml_declares_an_extension_without_python(
         profile=PROFILE_YAML,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
-    assert "fin" in registry.prefixes()
-    assert "fin:ledger" in registry.declared_annotations("table")
+    found = Registry.discover(tmp_path).vocabulary
+    assert "fin" in found.prefixes
+    assert "fin:ledger" in found.declared("table")
 
 
 def test_toml_extension_vocabulary_is_enforced(
@@ -1970,7 +1978,6 @@ def test_toml_extension_vocabulary_is_enforced(
         profile=PROFILE_YAML,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
     model = build(
         tmp_path,
         {
@@ -1982,8 +1989,9 @@ def test_toml_extension_vocabulary_is_enforced(
                 }
             )
         },
+        registry=Registry.discover(tmp_path),
     )
-    found = [f for f in rules.check(model) if f.rule == "V002"]
+    found = [f for f in findings(model) if f.code == "V002"]
     assert found
     assert "Ledger" in found[0].message
 
@@ -2006,9 +2014,9 @@ def test_toml_severity_beats_an_extension(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    with registry.using(EXTENSION):
-        assert EXTENSION.severity_defaults["V705"] == "error"
-        assert registry.severities()["V705"] == "info"
+    assert EXTENSION.severity_defaults["V705"] == "error"
+    configured = Registry.of(EXTENSION, config=Config.load(path))
+    assert configured.severities["V705"] == "info"
 
 
 def test_toml_exemptions_are_read(
@@ -2021,8 +2029,7 @@ def test_toml_exemptions_are_read(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
-    assert registry.exemptions() == ["V502", "V705"]
+    assert Registry.discover(tmp_path).exemptions == ("V502", "V705")
 
 
 def test_toml_unknown_key_is_refused(
@@ -2042,9 +2049,8 @@ def test_toml_unknown_key_is_refused(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
     with pytest.raises(ExtensionError, match="unknown key"):
-        registry.exemptions()
+        Registry.discover(tmp_path)
 
 
 def test_toml_unknown_severity_is_refused(
@@ -2065,9 +2071,8 @@ def test_toml_unknown_severity_is_refused(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
     with pytest.raises(ExtensionError, match="not one of"):
-        registry.severities()
+        _ = Registry.discover(tmp_path).severities
 
 
 def test_toml_severity_for_a_retired_rule_is_reported(
@@ -2084,7 +2089,6 @@ def test_toml_severity_for_a_retired_rule_is_reported(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
     assert cli.main(["check", str(RETAIL)]) == 0
     assert "severity override names no registered rule" in (
         capsys.readouterr().err
@@ -2124,7 +2128,6 @@ def _advertise(
     monkeypatch.setattr(
         registry, "entry_points", lambda group: points if group else ()
     )
-    registry.reset_caches()
 
 
 def test_an_entry_point_extension_becomes_active(
@@ -2134,10 +2137,10 @@ def test_an_entry_point_extension_becomes_active(
     from acme_ext import EXTENSION  # noqa: PLC0415
 
     _advertise(monkeypatch, _FakeEntryPoint("acme", EXTENSION))
-    active = {e.prefix: e for e in registry.extensions()}
-    assert "acme" in active
-    assert "ACME101" in {code for code, *_ in rules.all_rules()}
-    assert "acme:cost_center" in registry.declared_annotations("table")
+    found = Registry.discover()
+    assert "acme" in {e.prefix for e in found.extensions}
+    assert "ACME101" in {r.code for r in found.rules}
+    assert "acme:cost_center" in found.vocabulary.declared("table")
 
 
 def test_an_entry_point_records_where_it_came_from(
@@ -2152,28 +2155,8 @@ def test_an_entry_point_records_where_it_came_from(
     # the behavior being pinned here.
     plain = Extension(name="fin", prefix="fin")
     _advertise(monkeypatch, _FakeEntryPoint("finance", plain))
-    found = next(e for e in registry.extensions() if e.prefix == "fin")
+    found = next(e for e in Registry.discover().extensions if e.prefix == "fin")
     assert found.origin == "entry point finance"
-
-
-def test_an_extension_loads_after_its_profile_has_been_read(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A singleton whose cached profile has been touched still loads.
-
-    An extension is a module-level singleton, and `profile_view` and
-    `profile_version` are `cached_property` — they write their results into
-    the instance's `__dict__`. Re-creating the extension from that dict to
-    stamp its origin therefore raised `TypeError: got an unexpected keyword
-    argument 'profile_view'` the moment anything had read the parsed
-    profile, and which invocation hit it depended on what had run first in
-    the process.
-    """
-    from acme_ext import EXTENSION  # noqa: PLC0415
-
-    assert EXTENSION.profile_version == "1.2.0"  # populates the cache
-    _advertise(monkeypatch, _FakeEntryPoint("acme", EXTENSION))
-    assert "acme" in {e.prefix for e in registry.extensions()}
 
 
 def test_an_entry_point_that_is_not_an_extension_is_refused(
@@ -2181,7 +2164,7 @@ def test_an_entry_point_that_is_not_an_extension_is_refused(
 ) -> None:
     _advertise(monkeypatch, _FakeEntryPoint("bogus", object()))
     with pytest.raises(ExtensionError, match="not an Extension"):
-        registry.extensions()
+        _ = Registry.discover().extensions
 
 
 def test_an_entry_point_that_will_not_load_is_refused(
@@ -2195,7 +2178,7 @@ def test_an_entry_point_that_will_not_load_is_refused(
     boom = _FakeEntryPoint("broken", None, fails=ImportError("no module"))
     _advertise(monkeypatch, boom)
     with pytest.raises(ExtensionError, match="could not be loaded"):
-        registry.extensions()
+        _ = Registry.discover().extensions
 
 
 def test_toml_extensions_import_a_module(
@@ -2209,8 +2192,7 @@ def test_toml_extensions_import_a_module(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
-    active = {e.prefix for e in registry.extensions()}
+    active = {e.prefix for e in Registry.discover().extensions}
     assert "acme" in active
 
 
@@ -2225,8 +2207,7 @@ def test_toml_extensions_take_a_named_attribute(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
-    assert "acme" in {e.prefix for e in registry.extensions()}
+    assert "acme" in {e.prefix for e in Registry.discover().extensions}
 
 
 def test_toml_extensions_reject_a_missing_module(
@@ -2239,9 +2220,8 @@ def test_toml_extensions_reject_a_missing_module(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
     with pytest.raises(ExtensionError, match="cannot import"):
-        registry.extensions()
+        _ = Registry.discover().extensions
 
 
 def test_toml_extensions_reject_a_name_that_is_not_an_extension(
@@ -2254,9 +2234,8 @@ def test_toml_extensions_reject_a_name_that_is_not_an_extension(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
     with pytest.raises(ExtensionError, match="does not name an Extension"):
-        registry.extensions()
+        _ = Registry.discover().extensions
 
 
 def test_toml_missing_profile_is_refused(
@@ -2272,9 +2251,8 @@ def test_toml_missing_profile_is_refused(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
     with pytest.raises(ExtensionError, match="does not exist"):
-        registry.extensions()
+        _ = Registry.discover().extensions
 
 
 def test_toml_incomplete_extension_is_refused(
@@ -2288,9 +2266,8 @@ def test_toml_incomplete_extension_is_refused(
         """,
     )
     monkeypatch.setenv("VARDA_CONFIG", str(path))
-    registry.reset_caches()
     with pytest.raises(ExtensionError, match="missing prefix"):
-        registry.extensions()
+        _ = Registry.discover().extensions
 
 
 def test_config_is_found_by_searching_upward(
@@ -2327,8 +2304,7 @@ def test_profile_namespace_is_pinned() -> None:
     This assertion is not testing behaviour. It is a tripwire, so that
     changing the namespace has to be deliberate.
     """
-    view = registry.varda_extension().profile_view
-    assert view is not None
+    view = SchemaView(str(PROFILE))
     assert str(view.schema.id) == "https://w3id.org/varda"
     assert view.schema.prefixes["varda"].prefix_reference == (
         "https://w3id.org/varda/"
@@ -2351,8 +2327,8 @@ def test_version_has_one_source() -> None:
 
 def test_example_declares_the_same_namespace() -> None:
     """The shipped example must not drift from the profile it annotates."""
-    model = DimensionalModel.load(RETAIL)
-    declared = model.view.schema.prefixes["varda"].prefix_reference
+    view = SchemaView(str(RETAIL))
+    declared = view.schema.prefixes["varda"].prefix_reference
     assert str(declared) == "https://w3id.org/varda/"
 
 
@@ -2658,7 +2634,7 @@ def test_a_hierarchy_reaches_the_model_as_levels(
     assert table is not None
     (hierarchy,) = table.hierarchies
     assert hierarchy.name == "geography"
-    assert hierarchy.levels == ("country", "region", "city")
+    assert hierarchy.specs == ("country", "region", "city")
     assert [c.name for c in hierarchy.level_columns] == [
         "country",
         "region",
@@ -2793,7 +2769,7 @@ def test_a_level_reaches_through_a_foreign_key(
     table = model.table("DimCity")
     assert table is not None
     (hierarchy,) = table.hierarchies
-    country, state, city = hierarchy.resolved
+    country, state, city = hierarchy.levels
     assert country.is_reference
     assert country.via is not None
     assert country.via.name == "country_key"
@@ -2811,7 +2787,7 @@ def test_v125_a_bare_foreign_key_is_not_a_level(
     model = build(
         tmp_path, _snowflake(["country_key", "state_key", "city_name"])
     )
-    found = [f for f in rules.check(model) if f.rule == "V605"]
+    found = [f for f in findings(model) if f.code == "V605"]
     assert found
     # The message has to carry the fix, since the right answer is one dot away.
     assert "country_key.<column of DimCountry>" in found[0].message
@@ -2832,7 +2808,7 @@ def test_v121_a_reference_level_that_does_not_resolve(
     model = build(
         tmp_path, _snowflake([level, "state_key.state_name", "city_name"])
     )
-    found = [f for f in rules.check(model) if f.rule == "V601"]
+    found = [f for f in findings(model) if f.code == "V601"]
     assert found
     assert fragment in found[0].message
 
@@ -2892,16 +2868,20 @@ def test_a_level_key_defaults_to_what_identifies_it(
     )
     table = model.table("DimCity")
     assert table is not None
-    country, state, city = table.hierarchies[0].resolved
-    assert country.key is not None
-    assert country.key.name == "country_key"
-    assert city.key is not None
-    assert city.key.name == "city_name"
-    assert not country.declared_key
+    hierarchy = table.hierarchies[0]
+    country, _, city = hierarchy.levels
+    country_key = analysis.level_key(country)
+    city_key = analysis.level_key(city)
+    assert country_key is not None
+    assert country_key.name == "country_key"
+    assert city_key is not None
+    assert city_key.name == "city_name"
+    assert country.key is None  # nothing was declared
     # Identity is the key of every coarser level, then this one.
-    assert [c.name for c in country.identity] == ["country_key"]
-    assert [c.name for c in state.identity] == ["country_key", "state_key"]
-    assert [c.name for c in city.identity] == [
+    country_id, state_id, city_id = analysis.identities(hierarchy)
+    assert [c.name for c in country_id] == ["country_key"]
+    assert [c.name for c in state_id] == ["country_key", "state_key"]
+    assert [c.name for c in city_id] == [
         "country_key",
         "state_key",
         "city_name",
@@ -2930,8 +2910,8 @@ def test_a_denormalized_level_needs_no_key(tmp_path: pathlib.Path) -> None:
     assert not codes(model)
     found = model.table("DimThing")
     assert found is not None
-    levels = found.hierarchies[0].resolved
-    assert [c.name for c in levels[2].identity] == [
+    identities = analysis.identities(found.hierarchies[0])
+    assert [c.name for c in identities[2]] == [
         "country_name",
         "state_name",
         "city_name",
@@ -2955,12 +2935,13 @@ def test_a_level_can_be_keyed_on_another_column(
     assert not codes(model)
     found = model.table("DimThing")
     assert found is not None
-    product = found.hierarchies[0].resolved[1]
+    product = found.hierarchies[0].levels[1]
     assert product.column is not None
     assert product.column.name == "product_name"
     assert product.key is not None
     assert product.key.name == "sku"
-    assert [c.name for c in product.identity] == ["brand", "sku"]
+    identity = analysis.identities(found.hierarchies[0])[1]
+    assert [c.name for c in identity] == ["brand", "sku"]
 
 
 def _keyed(key: str) -> dict[str, Any]:
@@ -2996,7 +2977,7 @@ def test_v127_a_key_that_identifies_nothing(
     tmp_path: pathlib.Path, key: str, fragment: str
 ) -> None:
     model = build(tmp_path, {"DimThing": _keyed(key)})
-    found = [f for f in rules.check(model) if f.rule == "V607"]
+    found = [f for f in findings(model) if f.code == "V607"]
     assert found
     assert fragment in found[0].message
 
@@ -3038,7 +3019,7 @@ def test_a_missing_reference_key_names_the_far_table(
             ]
         ),
     )
-    found = [f for f in rules.check(model) if f.rule == "V607"]
+    found = [f for f in findings(model) if f.code == "V607"]
     assert found
     assert "not a column of DimCountry" in found[0].message
 
@@ -3103,7 +3084,7 @@ def test_v134_a_typo_in_a_structured_annotation(
         {"name": "h", "levles": ["cat", "d_id"]}
     ]
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V004"]
+    found = [f for f in findings(model) if f.code == "V004"]
     assert found
     assert "'levles'" in found[0].message
     assert "levels" in found[0].message
@@ -3119,7 +3100,7 @@ def test_v134_reaches_a_typo_inside_a_level(
         {"name": "h", "levels": [{"colunm": "cat", "key": "d_id"}, "d_id"]}
     ]
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V004"]
+    found = [f for f in findings(model) if f.code == "V004"]
     assert found
     assert "varda:hierarchies.levels" in found[0].message
     assert "'colunm'" in found[0].message
@@ -3162,7 +3143,7 @@ def test_v306_several_natural_keys_and_nothing_said(
     tmp_path: pathlib.Path,
 ) -> None:
     model = build(tmp_path, {"DimThing": _two_identities()})
-    found = [f for f in rules.check(model) if f.rule == "V306"]
+    found = [f for f in findings(model) if f.code == "V306"]
     assert len(found) == 1
     assert "gtin, supplier_part" in found[0].message
 
@@ -3253,7 +3234,7 @@ def test_v307_a_lone_identity_that_may_be_absent(
     table = dimension()
     del table["attributes"]["d_id"]["required"]
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V307"]
+    found = [f for f in findings(model) if f.code == "V307"]
     assert len(found) == 1
     assert found[0].severity == "warning"
 
@@ -3432,7 +3413,7 @@ def test_v128_unique_key_names_nothing(tmp_path: pathlib.Path) -> None:
     table = dimension()
     table["unique_keys"] = {"k": {"unique_key_slots": ["d_idd"]}}
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V303"]
+    found = [f for f in findings(model) if f.code == "V303"]
     assert found
     assert "d_idd" in found[0].message
 
@@ -3465,9 +3446,9 @@ def test_v130_a_natural_key_no_unique_key_covers(
         "by_id": {"unique_key_slots": ["d_id", "vs"]},
     }
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V305"]
+    found = [f for f in findings(model) if f.code == "V305"]
     assert found
-    assert "gtin" in found[0].subject
+    assert "gtin" in str(found[0].subject)
 
 
 def test_v130_is_silent_without_declared_keys(
@@ -3506,7 +3487,7 @@ def test_v131_catches_a_collision_nobody_declared(
         tmp_path,
         {"DimCustomer": dimension(), "Dim_Customer": dimension()},
     )
-    found = [f for f in rules.check(model) if f.rule == "V801"]
+    found = [f for f in findings(model) if f.code == "V801"]
     assert len(found) == 1
     assert "derived" in found[0].message
     assert "varda:physical_name" not in found[0].message
@@ -3527,7 +3508,7 @@ def test_v131_catches_names_that_differ_only_in_case(
     left["annotations"]["varda:physical_name"] = "DimThing"
     right["annotations"]["varda:physical_name"] = "dimthing"
     model = build(tmp_path, {"DimLeft": left, "DimRight": right})
-    found = [f for f in rules.check(model) if f.rule == "V801"]
+    found = [f for f in findings(model) if f.code == "V801"]
     assert len(found) == 1
     assert "differ only in case" in found[0].message
     with pytest.raises(duckdb.Error):
@@ -3665,7 +3646,7 @@ def test_a_schema_name_with_a_quote_in_it_still_parses(name: str) -> None:
     apostrophe in it emitted DDL no database would parse, and only under the
     one dialect this suite cannot execute.
     """
-    model = DimensionalModel.load(RETAIL)
+    model = load(RETAIL)
     ddl = generate_sql(model, schema="ma'rt", dialect_name=name)
     statement = ddl.splitlines()[4]
     assert "ma'rt" in ddl
@@ -3674,7 +3655,7 @@ def test_a_schema_name_with_a_quote_in_it_still_parses(name: str) -> None:
 
 def test_the_schema_statement_escapes_both_of_its_layers() -> None:
     """The T-SQL form quotes the name twice over, at two different depths."""
-    model = DimensionalModel.load(RETAIL)
+    model = load(RETAIL)
     ddl = generate_sql(model, schema="ma'rt", dialect_name="sqlserver")
     assert "SCHEMA_ID('ma''rt')" in ddl
     assert """EXEC('CREATE SCHEMA "ma''rt"')""" in ddl
@@ -3695,20 +3676,15 @@ def test_the_default_dialect_is_postgres() -> None:
 def test_the_context_default_matches_the_generator_default() -> None:
     """Two copies of one string, and the reason for them is good.
 
-    `Context.dialect` is a name rather than a table so that `ext.py` — the
+    `Options.dialect` is a name rather than a table so that `ext.py` — the
     only module a third party imports — stays free of SQL. That is worth
     keeping, and it leaves the default written down twice. `ONE_IDENTITY`
     exists on the argument that two copies of a threshold drift, and the
     version is single-sourced on the same one; this is the copy that was
     left ungated.
     """
-    assert (
-        Context(
-            model=DimensionalModel.load(RETAIL, importmap=registry.importmap()),
-            source=RETAIL,
-        ).dialect
-        == gen_sql.DEFAULT_DIALECT
-    )
+    assert Options().dialect == gen_sql.DEFAULT_DIALECT
+    assert Context(model=load(RETAIL)).options == Options()
 
 
 def test_an_unknown_dialect_names_the_known_ones() -> None:
@@ -3791,7 +3767,7 @@ def test_the_header_names_the_dialect(tmp_path: pathlib.Path) -> None:
 # --- uuid --------------------------------------------------------------------
 
 
-def _uuid_key(tmp_path: pathlib.Path) -> DimensionalModel:
+def _uuid_key(tmp_path: pathlib.Path) -> Model:
     """Build a dimension whose natural key is a UUID, importing the profile."""
     table = dimension()
     table["attributes"]["d_id"] = {
@@ -3841,9 +3817,11 @@ def test_uuid_is_the_profiles_and_not_the_generators(
     ordinary LinkML schema.
     """
     model = _uuid_key(tmp_path)
-    found = model.view.get_type("uuid")
-    assert found is not None
-    assert found.typeof == "string"
+    assert "uuid" in model.declared_types
+    column = next(
+        c for t in model.tables for c in t.columns if c.range == "uuid"
+    )
+    assert column.type_chain == ("uuid", "string")
     assert "V804" not in codes(model)
 
 
@@ -3855,7 +3833,7 @@ def test_uuid_without_the_import_is_reported(tmp_path: pathlib.Path) -> None:
         "annotations": {"varda:role": "NATURAL_KEY"},
     }
     model = build(tmp_path, {"DimThing": table})
-    found = [f for f in rules.check(model) if f.rule == "V804"]
+    found = [f for f in findings(model) if f.code == "V804"]
     assert len(found) == 1
     assert "imports: - varda" in found[0].message
 
@@ -3877,7 +3855,7 @@ def test_v804_a_range_naming_a_class(tmp_path: pathlib.Path) -> None:
     table = dimension()
     table["attributes"]["d_id"]["range"] = "DimOther"
     model = build(tmp_path, {"DimThing": table, "DimOther": dimension()})
-    found = [f for f in rules.check(model) if f.rule == "V804"]
+    found = [f for f in findings(model) if f.code == "V804"]
     assert len(found) == 1
     assert "names a class" in found[0].message
 
@@ -3885,14 +3863,14 @@ def test_v804_a_range_naming_a_class(tmp_path: pathlib.Path) -> None:
 def test_v804_leaves_the_examples_alone() -> None:
     """Every range a shipped model uses resolves."""
     for path in (RETAIL, SNOWFLAKE):
-        model = DimensionalModel.load(path, importmap=registry.importmap())
+        model = load(path)
         assert "V804" not in codes(model)
 
 
 # --- types the schema declares for itself ------------------------------------
 
 
-def _declared_type(tmp_path: pathlib.Path, **facets: Any) -> DimensionalModel:
+def _declared_type(tmp_path: pathlib.Path, **facets: Any) -> Model:
     """Build a model whose measure is ranged on a type the schema declares."""
     fact = {
         "annotations": {
@@ -3935,7 +3913,7 @@ def _declared_type(tmp_path: pathlib.Path, **facets: Any) -> DimensionalModel:
     }
     path = tmp_path / "t.yaml"
     path.write_text(yaml.safe_dump(schema), encoding="utf-8")
-    return DimensionalModel.load(path, importmap=registry.importmap())
+    return load(path)
 
 
 def test_a_declared_type_generates(tmp_path: pathlib.Path) -> None:
@@ -4096,7 +4074,7 @@ def test_v803_a_facet_on_a_range_it_cannot_parameterize(
     tmp_path: pathlib.Path,
 ) -> None:
     model = build(tmp_path, {"DimThing": _sized(range="date", max_length=10)})
-    found = [f for f in rules.check(model) if f.rule == "V803"]
+    found = [f for f in findings(model) if f.code == "V803"]
     assert len(found) == 1
     assert "parameterizes nothing" in found[0].message
     assert "string" in found[0].message
@@ -4120,7 +4098,7 @@ def test_v803_a_scale_with_no_precision(tmp_path: pathlib.Path) -> None:
         tmp_path,
         {"FctX": _decimal_measure(scale=2), "DimThing": dimension()},
     )
-    found = [f for f in rules.check(model) if f.rule == "V803"]
+    found = [f for f in findings(model) if f.code == "V803"]
     assert len(found) == 1
     assert "no varda:precision" in found[0].message
     assert '"amount" NUMERIC,' in generate_sql(model)
@@ -4164,7 +4142,7 @@ def test_v707_a_decimal_measure_saying_nothing(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path, {"FctX": _decimal_measure(), "DimThing": dimension()}
     )
-    found = [f for f in rules.check(model) if f.rule == "V707"]
+    found = [f for f in findings(model) if f.code == "V707"]
     assert len(found) == 1
     assert found[0].severity == "warning"
 
@@ -4256,7 +4234,7 @@ def test_the_identity_note_names_a_declared_key() -> None:
     which the path above it never mentions. Rendering the tuple states the
     answer without putting a stray column in a sentence about the path.
     """
-    model = DimensionalModel.load(SNOWFLAKE, importmap=registry.importmap())
+    model = load(SNOWFLAKE)
     page = generate_docs(model)
     assert "one member is `brand`, `gtin` together" in page
 
@@ -4299,7 +4277,7 @@ def test_one_discriminator_not_both(tmp_path: pathlib.Path) -> None:
 # --- the levels --------------------------------------------------------------
 
 
-def _star(tmp_path: pathlib.Path) -> DimensionalModel:
+def _star(tmp_path: pathlib.Path) -> Model:
     """Build a dimension and a fact referencing it, with a compound grain."""
     fact = {
         "annotations": {
@@ -4450,7 +4428,7 @@ def test_the_emission_order_does_not_move_with_the_level() -> None:
     The dependency ordering runs whether or not foreign keys are emitted, so
     that a level change produces a diff about constraints and nothing else.
     """
-    model = DimensionalModel.load(SNOWFLAKE)
+    model = load(SNOWFLAKE)
     orders = [
         [
             line
@@ -4526,18 +4504,18 @@ def test_the_level_reaches_the_generator_from_the_flag(
     assert "FOREIGN KEY" not in written
 
 
-def test_a_generator_written_before_the_field_still_sees_a_level(
+def test_a_generator_given_no_options_still_sees_a_level(
     tmp_path: pathlib.Path,
 ) -> None:
-    """`Context` is defaulted, so an extension's generator keeps working."""
-    ctx = Context(model=_star(tmp_path), source=tmp_path / "t.yaml")
-    assert ctx.constraints == gen_sql.DEFAULT_LEVEL
+    """`Options` is defaulted, so a generator never meets a missing level."""
+    ctx = Context(model=_star(tmp_path))
+    assert ctx.options.constraints == gen_sql.DEFAULT_LEVEL
 
 
 # --- the assertions the weaker levels move the claims into --------------------
 
 
-def _seeded(model: DimensionalModel) -> duckdb.DuckDBPyConnection:
+def _seeded(model: Model) -> duckdb.DuckDBPyConnection:
     """Load a star with one duplicate key and one orphan reference."""
     con = duckdb.connect()
     con.execute(generate_sql(model, "mart", "duckdb", "none"))
@@ -4657,7 +4635,7 @@ def test_the_assertions_state_the_ddl_claims_and_no_others() -> None:
     render each as a query; both read `Table.unique_claims`, so the two
     files cannot come to disagree about what the model said.
     """
-    model = DimensionalModel.load(RETAIL)
+    model = load(RETAIL)
     in_ddl = generate_sql(model).count("UNIQUE (")
     in_assertions = generate_assertions(model).count(": UNIQUE (")
     assert in_ddl == in_assertions > 0
@@ -4673,9 +4651,7 @@ def test_the_assertions_parse_everywhere_including_the_absent_dialects() -> (
     """
     blocks = [
         block[block.index("SELECT") :]
-        for block in generate_assertions(DimensionalModel.load(RETAIL)).split(
-            "\n\n"
-        )
+        for block in generate_assertions(load(RETAIL)).split("\n\n")
         if "SELECT" in block
     ]
     assert blocks
@@ -4768,7 +4744,7 @@ def _generated(generator: Any, model: pathlib.Path) -> str:
     """
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("ignore")
-        instance = generator(str(model), importmap=registry.importmap())
+        instance = generator(str(model), importmap=Registry.of().importmap)
         return str(instance.serialize())
 
 
@@ -4805,8 +4781,8 @@ def test_a_generator_sees_exactly_the_tables_the_model_declares() -> None:
     profile grows one. This says the stronger thing: what a stock tool sees
     is the model's own classes and nothing whatsoever besides.
     """
-    model = DimensionalModel.load(RETAIL, importmap=registry.importmap())
-    assert set(model.view.all_classes()) == {t.name for t in model.tables}
+    model = load(RETAIL)
+    assert model.declared_classes == {t.name for t in model.tables}
 
 
 def test_the_types_schema_declares_only_types() -> None:
@@ -4823,10 +4799,10 @@ def test_the_types_schema_declares_only_types() -> None:
 
 def test_the_profile_is_not_importable_and_the_types_schema_is() -> None:
     """The map is what a model imports, so it carries the importable one."""
-    varda = registry.varda_extension()
-    assert varda.profile == PROFILE
-    assert varda.types == TYPES
-    assert registry.importmap()["varda"] == str(TYPES.with_suffix(""))
+    core = registry.varda_extension()
+    assert core.profile == PROFILE
+    assert core.types == TYPES
+    assert Registry.of().importmap["varda"] == str(TYPES.with_suffix(""))
 
 
 def test_a_types_schema_declaring_a_class_is_refused(
@@ -4848,11 +4824,8 @@ def test_a_types_schema_declaring_a_class_is_refused(
         encoding="utf-8",
     )
     ext = Extension(name="acme", prefix="acme", types=schema)
-    with (
-        pytest.raises(ExtensionError, match="may declare types only"),
-        registry.using(ext),
-    ):
-        pass
+    with pytest.raises(ExtensionError, match="may declare types only"):
+        Registry.of(ext)
 
 
 def test_an_extension_declaring_no_types_is_not_in_the_map(
@@ -4884,9 +4857,8 @@ def test_an_extension_declaring_no_types_is_not_in_the_map(
         encoding="utf-8",
     )
     ext = Extension(name="acme", prefix="acme", profile=profile)
-    with registry.using(ext):
-        assert registry.declared_annotations("table") >= {"acme:owner"}
-        assert "acme" not in registry.importmap()
+    assert vocabulary(ext).declared("table") >= {"acme:owner"}
+    assert "acme" not in Registry.of(ext).importmap
 
 
 def test_the_import_map_is_json_a_generator_can_read(
@@ -4902,7 +4874,7 @@ def test_the_import_map_is_json_a_generator_can_read(
     written = tmp_path / "im.json"
     written.write_text(capsys.readouterr().out, encoding="utf-8")
     loaded = json.loads(written.read_text(encoding="utf-8"))
-    assert loaded == registry.importmap()
+    assert loaded == Registry.of().importmap
     imported = importlib.import_module("linkml.generators.erdiagramgen")
     out = imported.ERDiagramGenerator(str(RETAIL), importmap=loaded).serialize()
     assert "DimCustomer" in out
@@ -4914,8 +4886,8 @@ def test_uuid_still_resolves_through_the_import() -> None:
     Splitting the profile would be no fix at all if it took `range: uuid`
     with it: the type is why the import exists.
     """
-    model = DimensionalModel.load(RETAIL, importmap=registry.importmap())
-    assert "uuid" in model.view.all_types()
+    model = load(RETAIL)
+    assert "uuid" in model.declared_types
     assert "UUID" in generate_sql(model)
 
 
@@ -4986,7 +4958,7 @@ def test_the_module_and_the_ddl_build_the_same_database(
     keeps `NOT NULL`, and a model whose surrogate keys are not declared
     `required` was what told the two apart.
     """
-    loaded = DimensionalModel.load(model, importmap=registry.importmap())
+    loaded = load(model)
     module = _module(
         gen_sqlalchemy.generate(loaded, "mart", level),
         tmp_path,
@@ -5081,7 +5053,7 @@ def test_the_module_names_no_database() -> None:
     judgment back. Where Varda does have an engine-specific opinion, it is in
     the DDL, and the module header says where.
     """
-    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    loaded = load(RETAIL)
     source = gen_sqlalchemy.generate(loaded)
     for engine in ("mssql", "postgresql", "duckdb", "snowflake", "variant"):
         assert engine not in source.replace("sqlserver", ""), engine
@@ -5097,7 +5069,7 @@ def test_a_weaker_level_records_the_claims_it_drops(
     the one place this module has to put them — and the more useful of the
     two, since a consumer can read it.
     """
-    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    loaded = load(RETAIL)
     module = _module(
         gen_sqlalchemy.generate(loaded, "mart", "asserted"),
         tmp_path,
@@ -5119,7 +5091,7 @@ def test_a_surrogate_key_is_not_generated_by_the_database(
     key exists to make impossible. The first prototype died on DuckDB with
     `Type with name SERIAL does not exist`.
     """
-    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    loaded = load(RETAIL)
     source = gen_sqlalchemy.generate(loaded)
     assert "autoincrement=False" in source
     module = _module(source, tmp_path, "no_serial")
@@ -5140,7 +5112,7 @@ def test_the_annotations_reach_runtime(tmp_path: pathlib.Path) -> None:
     Until this generator, `varda:additivity` and `varda:semi_additive_over`
     reached no machine-readable output at all.
     """
-    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    loaded = load(RETAIL)
     module = _module(gen_sqlalchemy.generate(loaded), tmp_path, "runtime")
     fact = module.metadata.tables["mart.fct_inventory"]
     assert fact.info["role"] == "FACT"
@@ -5164,7 +5136,7 @@ def test_a_description_becomes_a_database_comment(
     The DDL writes a description as a `--` comment and the parser throws it
     away. Through this path it is a `COMMENT ON`, and it persists.
     """
-    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    loaded = load(RETAIL)
     module = _module(gen_sqlalchemy.generate(loaded), tmp_path, "comments")
     emitted: list[str] = []
 
@@ -5188,7 +5160,7 @@ def test_the_emitted_module_is_already_formatted(
     drill paths of the date dimension are what force the wrapping: written
     flat they run to 192 columns.
     """
-    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    loaded = load(RETAIL)
     source = gen_sqlalchemy.generate(loaded)
     assert max(len(line) for line in source.splitlines()) <= 80
     written = tmp_path / "mart.py"
@@ -5214,7 +5186,7 @@ def test_the_module_imports_nothing_of_vardas() -> None:
     nobody agreed to, and it would put Varda in the import graph of every
     service that reads the warehouse.
     """
-    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    loaded = load(RETAIL)
     source = gen_sqlalchemy.generate(loaded)
     assert "varda" not in source.replace("Generated by varda", "")
     imports = [
@@ -5291,7 +5263,7 @@ def test_a_physical_name_python_cannot_bind_still_emits_a_module(
 
 def test_generation_is_deterministic() -> None:
     """Same model in, same bytes out — the property the whole tree rests on."""
-    loaded = DimensionalModel.load(RETAIL, importmap=registry.importmap())
+    loaded = load(RETAIL)
     assert gen_sqlalchemy.generate(loaded) == gen_sqlalchemy.generate(loaded)
 
 
@@ -5378,47 +5350,30 @@ def test_an_extension_needs_nothing_but_the_interface_module(
     """
     rs = ext_module.RuleSet(tag="BND")
     rs.rule("BND001", "error", "Everything a rule needs is in varda.ext")(
-        lambda m: iter(
-            [
-                ext_module.Finding("BND001", "error", str(t), "reported")
-                for t in m.tables
-            ]
-        )
+        lambda m: iter([ext_module.Finding(t, "reported") for t in m.tables])
     )
-    model = build(tmp_path, {"DimThing": dimension()})
-    with registry.using(_bare("bnd", "bnd", rule_tag="BND", rules=rs)):
-        assert "BND001" in {f.rule for f in rules.check(model)}
+    ext = _bare("bnd", "bnd", rule_tag="BND", rules=rs)
+    model = build(tmp_path, {"DimThing": dimension()}, extensions=[ext])
+    assert "BND001" in {f.code for f in findings(model)}
 
 
-def test_the_older_import_path_still_reaches_the_same_class() -> None:
-    """`varda.rules` re-exports what moved, so a shipped extension survives.
-
-    An extension pinned against 0.3 imports these from `varda.rules`. The
-    move is a correction to where the boundary is drawn, not a reason to
-    break somebody who followed the documentation as it stood.
-    """
-    assert rules.Finding is ext_module.Finding
-    assert rules.RuleSet is ext_module.RuleSet
-    assert varda.Finding is ext_module.Finding
-
-
-def _runtime_varda_imports(path: pathlib.Path) -> set[str]:
-    """Name every `varda` module a file imports outside `TYPE_CHECKING`."""
+def _varda_imports(path: pathlib.Path) -> set[str]:
+    """Name every `varda` module a file imports, type-only imports included."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    guarded = {
-        id(sub)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.If)
-        and "TYPE_CHECKING" in ast.unparse(node.test)
-        for sub in ast.walk(node)
-    }
-    return {
+    modules = {
         str(node.module)
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom)
-        and id(node) not in guarded
         and (node.module or "").startswith("varda")
     }
+    modules |= {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name.startswith("varda")
+    }
+    return modules
 
 
 def test_the_worked_example_imports_only_the_interface_module() -> None:
@@ -5430,13 +5385,12 @@ def test_the_worked_example_imports_only_the_interface_module() -> None:
     narrow form of the conformance scan `SPEC.md` puts on the roadmap, run
     against the one extension this repository ships.
 
-    Type-only imports are excluded deliberately. A rule annotated with the
-    type of its argument names `DimensionalModel`, which `varda.ext` names
-    too; whether that read API is public is a separate and open question,
-    and this test would otherwise assert an answer to it.
+    Type-only imports included. The types a rule is annotated with — the
+    `Model` it walks, the `Finding` it yields — are `varda.ext`'s too, so
+    the promise holds for the type checker as well as at runtime.
     """
     fixture = ROOT / "tests" / "fixtures" / "acme_ext" / "__init__.py"
-    assert _runtime_varda_imports(fixture) == {"varda.ext"}
+    assert _varda_imports(fixture) == {"varda.ext"}
 
 
 # ---------------------------------------------------------------------------
@@ -5447,7 +5401,7 @@ def test_the_worked_example_imports_only_the_interface_module() -> None:
 def _exploding(tag: str = "BOOM") -> RuleSet:
     """Build a rule set whose one rule raises when it is run."""
 
-    def boom(_model: DimensionalModel) -> Iterator[rules.Finding]:
+    def boom(_model: Model) -> Iterator[Finding]:
         msg = "an index this rule assumed"
         raise IndexError(msg)
         yield  # pragma: no cover — unreachable, and what makes this a rule
@@ -5469,10 +5423,10 @@ def test_a_rule_that_raises_names_itself_and_the_extension_that_shipped_it(
     """
     model_path = tmp_path / "t.yaml"
     build(tmp_path, {"DimThing": dimension()})
-    with registry.using(
+    boom = Registry.of(
         _bare("boom", "boom", rule_tag="BOOM", rules=_exploding())
-    ):
-        assert cli.main(["check", str(model_path)]) == 1
+    )
+    assert cli.main(["check", str(model_path)], registry=boom) == 1
     err = capsys.readouterr().err
     assert "BOOM101" in err
     assert "boom" in err
@@ -5488,14 +5442,11 @@ def test_a_rule_that_raises_stops_a_run_rather_than_reporting_less() -> None:
     conforms when part of the question was never asked — which is the
     failure `varda check` exists to prevent.
     """
-    model = DimensionalModel.load(RETAIL, importmap=registry.importmap())
-    with (
-        registry.using(
-            _bare("boom", "boom", rule_tag="BOOM", rules=_exploding())
-        ),
-        pytest.raises(RuleError, match="BOOM101"),
-    ):
-        rules.check(model)
+    model = load(
+        RETAIL, _bare("boom", "boom", rule_tag="BOOM", rules=_exploding())
+    )
+    with pytest.raises(RuleError, match="BOOM101"):
+        findings(model)
 
 
 def test_a_rule_that_raises_leaves_no_artifacts_behind(
@@ -5508,10 +5459,12 @@ def test_a_rule_that_raises_leaves_no_artifacts_behind(
     nothing got as far as being generated.
     """
     out = tmp_path / "out"
-    with registry.using(
-        _bare("boom", "boom", rule_tag="BOOM", rules=_exploding())
-    ):
-        code = cli.main(["generate", str(RETAIL), "--out", str(out)])
+    code = cli.main(
+        ["generate", str(RETAIL), "--out", str(out)],
+        registry=Registry.of(
+            _bare("boom", "boom", rule_tag="BOOM", rules=_exploding())
+        ),
+    )
     assert code == 1
     assert not out.exists()
 
@@ -5572,28 +5525,27 @@ _EVERYTHING_WRONG: dict[str, Any] = {
 def test_every_finding_names_a_table_the_model_has(
     tmp_path: pathlib.Path,
 ) -> None:
-    """The convention that lets one place answer "which file is this in".
+    """A finding names its table, by object and in the text a reader sees.
 
-    Every subject a rule states begins with a table name — a table is its
-    own name, and a column, a hierarchy and a unique key are all rendered
-    `Table.thing`. `rules._subject_table` reads the origin of a finding out
-    of that, so a rule inventing a subject of another shape would silently
-    stop being attributed to any file. Provoked against a model that fails
-    widely, so the sixty-odd `Finding(...)` sites are covered by what they
-    emit rather than by being listed here.
+    The subject is an element now, so the engine reads its table directly
+    rather than out of a string. What a reader sees is still the text, and
+    it still leads with the table: a table is its own name, and a column, a
+    hierarchy and a unique key are all rendered `Table.thing`. Provoked
+    against a model that fails widely, so the sixty-odd `Finding(...)` sites
+    are covered by what they emit rather than by being listed here.
     """
     model = build(tmp_path, _EVERYTHING_WRONG)
-    found = rules.check(model)
-    names = {t.name for t in model.tables}
+    found = findings(model)
     unattributed = sorted(
-        f"{f.rule}: {f.subject}"
+        f"{f.code}: {f.subject}"
         for f in found
-        if rules._subject_table(f.subject) not in names
+        if table_of(f.subject) not in model.tables
+        or str(f.subject).split(".", 1)[0] != table_of(f.subject).name
     )
     assert not unattributed
     # A lower bound, so the model above cannot quietly stop provoking
     # anything and leave the walk with nothing to walk.
-    assert len({f.rule for f in found}) >= 15
+    assert len({f.code for f in found}) >= 15
 
 
 # ---------------------------------------------------------------------------
@@ -5639,8 +5591,8 @@ def two_files(
     return path
 
 
-def _loaded(path: pathlib.Path) -> DimensionalModel:
-    return DimensionalModel.load(path, importmap=registry.importmap())
+def _loaded(path: pathlib.Path) -> Model:
+    return load(path)
 
 
 def test_an_imported_class_is_a_table_of_this_model(
@@ -5671,8 +5623,8 @@ def test_a_finding_says_which_file_declared_the_subject(
     broken = dimension()
     del broken["attributes"]["d_id"]  # V302: no natural key
     path = two_files(tmp_path, {"DimLocal": dimension()}, {"DimShared": broken})
-    found = [f for f in rules.check(_loaded(path)) if f.rule == "V302"]
-    assert [f.subject for f in found] == ["DimShared"]
+    found = [f for f in findings(_loaded(path)) if f.code == "V302"]
+    assert [str(f.subject) for f in found] == ["DimShared"]
     assert found[0].origin == "shared.yaml"
     assert "imported from shared.yaml" in str(found[0])
 
@@ -5688,7 +5640,7 @@ def test_a_finding_against_this_file_carries_no_origin(
     broken = dimension()
     del broken["attributes"]["d_id"]
     model = build(tmp_path, {"DimThing": broken})
-    found = [f for f in rules.check(model) if f.rule == "V302"]
+    found = [f for f in findings(model) if f.code == "V302"]
     assert found
     assert all(f.origin == "" for f in found)
     assert "imported from" not in str(found[0])
@@ -5709,8 +5661,8 @@ def test_skipping_imported_findings_keeps_every_rule_looking_at_them(
     path = two_files(tmp_path, {"DimLocal": dimension()}, {"DimShared": broken})
     model = _loaded(path)
 
-    assert "V302" in {f.rule for f in rules.check(model)}
-    assert not rules.check(model, skip_imported=True)
+    assert "V302" in {f.code for f in findings(model)}
+    assert not findings(model, skip_imported=True)
     # Still two tables, and the generator still emits both.
     assert len(model.tables) == 2
 
@@ -5731,11 +5683,11 @@ def test_a_collision_with_an_imported_table_is_reported_against_this_one(
         {"DimShared": dimension()},
     )
     model = _loaded(path)
-    found = [f for f in rules.check(model) if f.rule == "V801"]
-    assert [f.subject for f in found] == ["Dim_Shared"]
+    found = [f for f in findings(model) if f.code == "V801"]
+    assert [str(f.subject) for f in found] == ["Dim_Shared"]
     assert "DimShared" in found[0].message
     assert found[0].origin == ""
-    assert "V801" in {f.rule for f in rules.check(model, skip_imported=True)}
+    assert "V801" in {f.code for f in findings(model, skip_imported=True)}
 
 
 def test_the_summary_counts_what_it_did_not_report(
@@ -5780,3 +5732,208 @@ def test_generate_takes_the_same_scope_as_check(
     emitted = (out / "sql" / "mart.sql").read_text(encoding="utf-8")
     assert "dim_shared" in emitted
     assert "dim_local" in emitted
+
+
+# ---------------------------------------------------------------------------
+# The interface — the snapshot, the registry, and Varda as a library
+# ---------------------------------------------------------------------------
+#
+# What the extension interface promises — SPEC's I9 and I12 — each held by a
+# test rather than by the prose.
+
+
+def _linkml_made(value: object, seen: set[int], path: str) -> Iterator[str]:
+    """Walk a snapshot, naming every value whose type LinkML defined.
+
+    Follows dataclass fields, mappings and sequences, and stops at the
+    registry: it is the extension set the model was read under, not part of
+    what the model says, and its public surface returns plain values.
+    """
+    if id(value) in seen:
+        return
+    seen.add(id(value))
+    module = type(value).__module__.split(".")[0]
+    if module in {"linkml_runtime", "linkml", "jsonasobj2"}:
+        yield f"{path}: {type(value).__name__}"
+    if isinstance(value, Registry):
+        return
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for field in dataclasses.fields(value):
+            yield from _linkml_made(
+                getattr(value, field.name, None), seen, f"{path}.{field.name}"
+            )
+    elif isinstance(value, dict | varda_snapshot.Annotations):
+        for key, item in value.items():
+            yield from _linkml_made(item, seen, f"{path}[{key!r}]")
+    elif isinstance(value, list | tuple | frozenset):
+        for i, item in enumerate(value):
+            yield from _linkml_made(item, seen, f"{path}[{i}]")
+
+
+@pytest.mark.parametrize("example", [RETAIL, SNOWFLAKE])
+def test_a_snapshot_holds_nothing_linkml_made(example: pathlib.Path) -> None:
+    """The wall along the untyped runtime has no doors in it.
+
+    `DimensionalModel` handed out `table.cls` and `column.slot`, and the
+    worked extension read them. A snapshot is plain data: an annotation's
+    value arrived as LinkML's `extended_str`, carrying the YAML position it
+    came from, and is rebuilt as the builtin it extends.
+    """
+    leaks = sorted(_linkml_made(load(example), set(), "model"))
+    assert not leaks, leaks[:5]
+
+
+def test_a_value_outside_its_enum_is_reported_once(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A misspelled value is wrong, not missing.
+
+    The typed field is `None` for both, so a rule asking whether an
+    annotation is absent reads the annotation rather than the field. Asked
+    of the field, `scd: TYPE_9` would be reported by V002 as a bad value
+    and by V502 as no value at all — two findings, one of them false.
+    """
+    misspelled = dimension(
+        annotations={"varda:role": "DIMENSION", "varda:scd": "TYPE_9"}
+    )
+    misspelled["attributes"]["amount"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "MEASURE",
+            "varda:additivity": "SOMETIMES",
+        },
+    }
+    fact = {
+        "annotations": {"varda:role": "FCT"},
+        "attributes": {"x": {"annotations": {"varda:role": "ATTRIBUTE"}}},
+    }
+    model = build(tmp_path, {"DimThing": misspelled, "FctThing": fact})
+    fired = codes(model)
+    assert "V002" in fired
+    assert {"V101", "V502", "V701"}.isdisjoint(fired)
+    dim = model.table("DimThing")
+    assert dim is not None
+    assert dim.scd is None
+    assert dim.annotations["varda:scd"] == "TYPE_9"
+
+
+def test_config_is_found_from_the_model_not_the_working_directory(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`varda check ../other/model.yaml` applies the model's own config.
+
+    Searched from the working directory, it applied this directory's
+    extensions and exemptions to another directory's model — the behaviour
+    `find_config` names as the most common way a tool differs between two
+    people on one repository.
+    """
+    monkeypatch.delenv("VARDA_CONFIG", raising=False)
+    home = tmp_path / "mart"
+    home.mkdir()
+    write_config(home, 'exempt = ["V502"]')
+    build(
+        home, {"DimThing": dimension(annotations={"varda:role": "DIMENSION"})}
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert cli.main(["check", str(home / "t.yaml")]) == 0
+    assert "V502" not in capsys.readouterr().out
+
+
+def test_config_can_be_named_outright(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--config` replaces the search.
+
+    A file that is not there is a usage error, rather than a silently empty
+    configuration that exempts nothing while the command line says it should.
+    """
+    monkeypatch.delenv("VARDA_CONFIG", raising=False)
+    model = tmp_path / "model"
+    model.mkdir()
+    build(
+        model, {"DimThing": dimension(annotations={"varda:role": "DIMENSION"})}
+    )
+    config = write_config(tmp_path, 'exempt = ["V502"]')
+    target = str(model / "t.yaml")
+    assert cli.main(["--config", str(config), "check", target]) == 0
+    assert "V502" not in capsys.readouterr().out
+    missing = str(tmp_path / "nowhere.toml")
+    assert cli.main(["--config", missing, "check", target]) == 2
+
+
+def test_the_library_refuses_a_model_that_does_not_conform(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`varda.api` makes the CLI's promises to a caller with no CLI.
+
+    A pre-commit hook or a notebook gets the same refusal, as an exception
+    carrying what stopped it, and the same way past it.
+    """
+    model = build(tmp_path, {"DimThing": {"annotations": {"varda:role": "X"}}})
+    with pytest.raises(api.NonconformingError) as refused:
+        api.generate(model)
+    assert refused.value.blocking
+    assert {i.code for i in refused.value.blocking} >= {"V002"}
+
+    generation = api.generate(model, only=["docs"], force=True)
+    assert generation.forced_past == refused.value.blocking
+    written = api.write(generation, tmp_path / "out")
+    assert written == [tmp_path / "out" / "docs" / "model.md"]
+
+
+def test_the_library_generates_what_the_command_line_does(
+    tmp_path: pathlib.Path,
+) -> None:
+    """One implementation behind both, so the bytes cannot differ."""
+    generation = api.generate(load(RETAIL), Options(dialect="duckdb"))
+    api.write(generation, tmp_path / "lib")
+    argv = ["generate", str(RETAIL), "--out", str(tmp_path / "cli")]
+    assert cli.main([*argv, "--dialect", "duckdb"]) == 0
+    for rel in generation.artifacts:
+        lib = (tmp_path / "lib" / rel).read_text(encoding="utf-8")
+        assert lib == (tmp_path / "cli" / rel).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("enum", "declared"),
+    [
+        (varda_snapshot.TableRole, "TableRole"),
+        (varda_snapshot.ColumnRole, "ColumnRole"),
+        (varda_snapshot.Additivity, "Additivity"),
+        (varda_snapshot.SlowlyChangingType, "SlowlyChangingType"),
+        (varda_snapshot.FactType, "FactType"),
+    ],
+)
+def test_the_closed_vocabularies_are_the_profiles(
+    enum: type[enum_module.StrEnum], declared: str
+) -> None:
+    """Two lists of one vocabulary are two answers to one question.
+
+    The profile is what `check` enforces and the enum is what generators
+    dispatch on; a value added to one and not the other is a value checked
+    and never generated, or generated and never checked.
+    """
+    assert tuple(m.value for m in enum) == vocabulary().permitted(declared)
+
+
+def test_no_generator_resolves_a_reference_itself() -> None:
+    """What a half-broken model looks like is decided in one module.
+
+    Before `analysis.reference`, each generator resolved a foreign key's
+    target and guarded against it being absent on its own — two with a
+    comment saying V403 had reported it, one without. A generator reading
+    `Ref.target` is the start of that again.
+    """
+    source = ROOT / "src" / "varda"
+    readers = sorted(
+        path.name
+        for path in source.glob("gen_*.py")
+        if ".target" in path.read_text(encoding="utf-8")
+    )
+    assert not readers

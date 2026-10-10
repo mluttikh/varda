@@ -38,20 +38,23 @@ reason the core can stay small enough to be correct.
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
-| `anns.py` | ~150 | Namespaced annotation reads. The one place LinkML's two annotation representations are reconciled. |
-| `model.py` | ~900 | The typed view: `Table`, `Column`, `DimensionalModel`. The wall along the untyped LinkML runtime. |
-| `ext.py` | ~340 | `Extension`, `Generator`, `Context`, `Finding`, `RuleSet`. **The module a third party imports** — everything an extension runs on is declared here. |
-| `registry.py` | ~800 | Discovery, validation, lookup. Where colliding extensions are refused. |
-| `rules.py` | ~1725 | The 49 core rules, and the engine that runs them. |
-| `gen_sql.py` | ~600 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
-| `gen_docs.py` | ~185 | Markdown reference. |
-| `gen_sqlalchemy.py` | ~415 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
+| `snapshot.py` | ~520 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, and the closed vocabularies as `StrEnum`s. **The public read API.** |
+| `analysis.py` | ~260 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, creation order, level identity. Public, on a weaker promise. |
+| `_linkml.py` | ~465 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
+| `ext.py` | ~425 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
+| `vocabulary.py` | ~145 | What the active profiles declare, read once. |
+| `registry.py` | ~630 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions are refused. |
+| `api.py` | ~280 | Varda as a library: `load`, `check`, `generate`, `write`. The rule engine and fail-closed generation live here. |
+| `rules.py` | ~1500 | The 49 core rules. |
+| `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
+| `gen_docs.py` | ~190 | Markdown reference. |
+| `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~490 | Five commands. |
+| `cli.py` | ~435 | Five commands, each a call into `api` and the printing around it. |
 
-**5,884 lines of source**: 3,041 of code, 1,436 of docstrings, 505 of
-comment, 902 blank. The prose share is deliberate and is house style —
+**6,100 lines of source**: 3,321 of code, 1,315 of docstrings, 488 of
+comment, 976 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -59,7 +62,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 346 tests in 5,782 lines.
+importable is kept to what is meant to be imported. And 356 tests in 5,939 lines.
 
 ### The four seams
 
