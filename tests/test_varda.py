@@ -46,6 +46,7 @@ import importlib
 import importlib.metadata
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import textwrap
@@ -5937,3 +5938,28 @@ def test_no_generator_resolves_a_reference_itself() -> None:
         if ".target" in path.read_text(encoding="utf-8")
     )
     assert not readers
+
+
+@pytest.mark.parametrize("example", [RETAIL, SNOWFLAKE])
+def test_every_sql_artifact_meets_the_tables_in_one_order(
+    example: pathlib.Path,
+) -> None:
+    """The DDL, the module and the assertions say they read side by side.
+
+    They did not: the DDL ordered tables by what they reference, and the
+    other two by role and then name, so a snowflaked dimension came first
+    in two files and after its parents in the third. One order, from
+    `analysis.creation_order`, is what makes the comment true.
+    """
+    model = load(example)
+    expected = [t.physical for t in analysis.creation_order(model)]
+    sql = generate_sql(model)
+    ddl = re.findall(r'^CREATE TABLE "mart"\."(\w+)"', sql, re.MULTILINE)
+    code = gen_sqlalchemy.generate(model)
+    module = re.findall(r'^\w+ = sa\.Table\(\n    "(\w+)"', code, re.MULTILINE)
+    checks = generate_assertions(model)
+    named = re.findall(r"^-- (\w+)[.:]", checks, re.MULTILINE)
+    assertions = list(dict.fromkeys(n for n in named if n in expected))
+    assert ddl == expected
+    assert module == expected
+    assert assertions == [t for t in expected if t in assertions]

@@ -164,7 +164,7 @@ def generate(model: Model, schema: str = "mart") -> str:
     ]
     blocks = [
         block
-        for table in (*model.dimensions, *model.bridges, *model.facts)
+        for table in analysis.creation_order(model)
         for block in _for_table(table, schema)
     ]
     if not blocks:

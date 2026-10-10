@@ -389,11 +389,11 @@ def generate(
     # declared — and that reading is the same on every engine, which is what
     # a database-neutral module needs it to be.
     rule = enforcement(level, Dialect("sqlalchemy"))
-    # Dimensions, then bridges, then facts — the order the DDL emits, so the
-    # two files read side by side. Nothing here needs it: SQLAlchemy resolves
-    # a `ForeignKey` string lazily and `metadata.sorted_tables` orders
-    # `create_all` itself, so a cycle that stops the DDL does not stop this.
-    tables = [*model.dimensions, *model.bridges, *model.facts]
+    # The order the DDL emits, so the two files read side by side. Nothing
+    # here needs it: SQLAlchemy resolves a `ForeignKey` string lazily and
+    # `metadata.sorted_tables` orders `create_all` itself, so a cycle that
+    # stops the DDL does not stop this.
+    tables = list(analysis.creation_order(model))
     variables = _variables(tables)
     blocks = [_table(t, variables[t], rule) for t in tables]
     header = [
