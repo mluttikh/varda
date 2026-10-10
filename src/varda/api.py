@@ -1,4 +1,4 @@
-"""Varda as a library: load, check, generate, write.
+"""Varda as a library: load, check, generate, write, compare.
 
 The command line is a thin layer over this module, so a pre-commit hook, a
 dbt integration or a notebook gets the same behaviour it does — the same
@@ -34,11 +34,13 @@ if TYPE_CHECKING:
     from .snapshot import Model
 
 __all__ = [
+    "Drift",
     "Generation",
     "GeneratorFailedError",
     "NonconformingError",
     "UnknownGeneratorError",
     "check",
+    "compare",
     "generate",
     "load",
     "write",
@@ -187,6 +189,8 @@ class Generation:
     #: ``{relative path: content}``, every generator's output together.
     artifacts: dict[str, str] = field(default_factory=dict)
     generators: tuple[str, ...] = ()
+    #: Every path the generators that ran declare, produced or not.
+    declared: tuple[str, ...] = ()
 
 
 def generate(  # noqa: PLR0913 — one keyword per CLI flag, all optional
@@ -223,6 +227,7 @@ def generate(  # noqa: PLR0913 — one keyword per CLI flag, all optional
         forced_past=stopping,
         artifacts=_collect(chosen, ctx),
         generators=tuple(g.name for g in chosen),
+        declared=tuple(p for g in chosen for p in g.artifacts),
     )
 
 
@@ -276,3 +281,66 @@ def write(
         target.write_text(content, encoding="utf-8")
         written.append(target)
     return written
+
+
+# ---------------------------------------------------------------------------
+# Comparing
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Drift:
+    """Where a run's artifacts and the files under a directory disagree.
+
+    Each field holds relative paths, sorted. ``extra`` is a file a generator
+    that ran declares, did not produce this time, and that is on disk
+    anyway — left by an earlier run. A file no generator that ran declares
+    is not Varda's to judge, so it is never reported.
+    """
+
+    changed: tuple[str, ...] = ()
+    missing: tuple[str, ...] = ()
+    extra: tuple[str, ...] = ()
+
+    @property
+    def clean(self) -> bool:
+        """Whether the directory holds exactly what the run produced."""
+        return not (self.changed or self.missing or self.extra)
+
+
+def compare(generation: Generation, out: str | pathlib.Path) -> Drift:
+    """Compare a run's artifacts with what is already under ``out``.
+
+    What :func:`write` would change, without changing it. Output is
+    deterministic, so any difference is the model and the files disagreeing
+    and never noise — with one exception made on purpose: line endings are
+    not compared, because git may check a file out with CRLF on Windows and
+    a file that differs only in that says the same thing.
+    """
+    root = pathlib.Path(out)
+    changed: list[str] = []
+    missing: list[str] = []
+    for rel, content in sorted(generation.artifacts.items()):
+        on_disk = read_committed(root / rel)
+        if on_disk is None:
+            missing.append(rel)
+        elif on_disk != content:
+            changed.append(rel)
+    extra = sorted(
+        rel
+        for rel in set(generation.declared) - set(generation.artifacts)
+        if (root / rel).is_file()
+    )
+    return Drift(tuple(changed), tuple(missing), tuple(extra))
+
+
+def read_committed(path: pathlib.Path) -> str | None:
+    """Read a file as :func:`compare` sees it, or ``None`` if there is none.
+
+    Universal newlines, so CRLF reads as LF. A file that is not UTF-8 is
+    read with replacement characters, which no generator produces, so it
+    compares as changed rather than stopping the run.
+    """
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8", errors="replace")

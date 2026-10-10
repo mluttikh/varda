@@ -1794,6 +1794,149 @@ def test_generate_rejects_an_undeclared_path(tmp_path: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------
+
+
+def _committed(tmp_path: pathlib.Path) -> tuple[list[str], pathlib.Path]:
+    """Generate the retail example, and return the arguments and the tree."""
+    out = tmp_path / "out"
+    args = [str(RETAIL), "--out", str(out)]
+    assert cli.main(["generate", *args]) == 0
+    return args, out
+
+
+def test_verify_passes_on_what_generate_wrote(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args, _ = _committed(tmp_path)
+    capsys.readouterr()
+    assert cli.main(["verify", *args]) == 0
+    assert "4 artifacts from 4 generators up to date" in capsys.readouterr().out
+
+
+def test_verify_fails_on_a_file_that_drifted(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The case it exists for: the model moved and the output did not."""
+    args, out = _committed(tmp_path)
+    ddl = out / "sql" / "mart.sql"
+    edited = ddl.read_text(encoding="utf-8") + "-- edited\n"
+    ddl.write_text(edited, encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(["verify", *args]) == 1
+    printed = capsys.readouterr().out
+    assert f"{ddl} differs" in printed
+    assert "1 of 4 artifacts" in printed
+    assert "-- edited" not in printed  # no diff unless asked
+
+
+def test_verify_diff_shows_the_change(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args, out = _committed(tmp_path)
+    ddl = out / "sql" / "mart.sql"
+    edited = ddl.read_text(encoding="utf-8") + "-- edited\n"
+    ddl.write_text(edited, encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(["verify", *args, "--diff"]) == 1
+    printed = capsys.readouterr().out
+    assert "--- sql/mart.sql (on disk)" in printed
+    assert "+++ sql/mart.sql (from the model)" in printed
+    assert "\n--- edited\n" in printed
+
+
+def test_verify_compares_the_run_its_flags_describe(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The flags `generate` takes mean the same run here."""
+    args, _ = _committed(tmp_path)
+    assert cli.main(["verify", *args, "--dialect", "duckdb"]) == 1
+    assert cli.main(["verify", *args, "--only", "sql"]) == 0
+
+
+def test_verify_fails_on_a_missing_file(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    args, out = _committed(tmp_path)
+    (out / "docs" / "model.md").unlink()
+    capsys.readouterr()
+    assert cli.main(["verify", *args]) == 1
+    assert "model.md is missing" in capsys.readouterr().out
+
+
+def test_verify_writes_nothing(tmp_path: pathlib.Path) -> None:
+    out = tmp_path / "out"
+    assert cli.main(["verify", str(RETAIL), "--out", str(out)]) == 1
+    assert not out.exists()
+
+
+def test_verify_ignores_line_endings(tmp_path: pathlib.Path) -> None:
+    """Git may check generated files out with CRLF, and they say the same."""
+    args, out = _committed(tmp_path)
+    for path in out.rglob("*.*"):
+        text = path.read_text(encoding="utf-8")
+        path.write_bytes(text.replace("\n", "\r\n").encode())
+    assert cli.main(["verify", *args]) == 0
+
+
+def test_verify_ignores_files_no_generator_declares(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A README beside the output is not Varda's to judge."""
+    args, out = _committed(tmp_path)
+    (out / "README.md").write_text("hand-written\n", encoding="utf-8")
+    seed = out / "sql" / "seed.sql"
+    seed.write_text("-- hand-written\n", encoding="utf-8")
+    assert cli.main(["verify", *args]) == 0
+
+
+def test_verify_reports_a_file_no_longer_generated(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A declared path the run did not produce, left by an earlier run.
+
+    `generate` writes and never deletes, so this is the one kind of drift
+    that rerunning it does not fix, and the message says what does.
+    """
+
+    def one(_ctx: Any) -> dict[str, str]:
+        return {"kept.txt": "a\n"}
+
+    gen = Generator(name="zzz", artifacts=("kept.txt", "gone.txt"), run=one)
+    registry = Registry.of(_bare("a", "one", generators=(gen,)))
+    out = tmp_path / "out"
+    args = ["verify", str(RETAIL), "--out", str(out), "--only", "zzz"]
+    out.mkdir()
+    (out / "kept.txt").write_text("a\n", encoding="utf-8")
+    assert cli.main(args, registry=registry) == 0
+    (out / "gone.txt").write_text("b\n", encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(args, registry=registry) == 1
+    assert "gone.txt is no longer generated; delete it" in (
+        capsys.readouterr().out
+    )
+
+
+def test_verify_refuses_a_nonconforming_model(tmp_path: pathlib.Path) -> None:
+    """A model `generate` refuses is not one `verify` vouches for."""
+    out = tmp_path / "out"
+    args = ["verify", str(_nonconforming(tmp_path)), "--out", str(out)]
+    assert cli.main(args) == 1
+    assert cli.main([*args, "--force"]) == 1  # forced past, but nothing there
+
+
+def test_the_library_compares_what_the_command_line_does(
+    tmp_path: pathlib.Path,
+) -> None:
+    generation = api.generate(load(RETAIL))
+    assert not api.compare(generation, tmp_path).clean
+    api.write(generation, tmp_path)
+    assert api.compare(generation, tmp_path) == api.Drift()
+    assert api.compare(generation, tmp_path).clean
+
+
+# ---------------------------------------------------------------------------
 # The command line
 # ---------------------------------------------------------------------------
 

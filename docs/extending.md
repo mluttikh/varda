@@ -221,6 +221,8 @@ model = api.load("mart.yaml")  # extensions found from the model's directory
 report = api.check(model)  # report.errors, report.warnings
 generation = api.generate(model)  # raises api.NonconformingError on errors
 api.write(generation, "out")
+drift = api.compare(generation, "out")  # what `varda verify` reports
+assert drift.clean  # drift.changed, drift.missing, drift.extra
 ```
 
 `api.load` discovers the extension set the way `varda check` does: installed

@@ -59,9 +59,12 @@ echo "4 dialects x 3 levels x 2 examples ok"
 
 step "generation is deterministic"
 OUT2=$(mktemp -d)
-trap 'rm -rf "$OUT" "$OUT2"' EXIT
+trap 'rm -rf "$OUT" "$DIA" "$OUT2"' EXIT
 "$PY/varda" generate examples/retail.yaml --out "$OUT2" >/dev/null
 diff -r "$OUT" "$OUT2"
 echo "same bytes on a second run"
+
+step "varda verify accepts what generate wrote"
+"$PY/varda" verify examples/retail.yaml --out "$OUT"
 
 printf '\n\033[1;32mPASS\033[0m\n'
