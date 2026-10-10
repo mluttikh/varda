@@ -1,6 +1,6 @@
 """The command line.
 
-Five commands, each doing one thing, each a call into :mod:`varda.api` and
+Six commands, each doing one thing, each a call into :mod:`varda.api` and
 the printing around it. Exit codes are part of the contract because these
 run in CI: ``0`` success, ``1`` the model or the run failed, ``2`` the
 invocation was wrong. A tool that returns ``0`` for "I could not tell" is one
@@ -10,6 +10,7 @@ that turns a red build green.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import pathlib
 import sys
@@ -152,12 +153,12 @@ def _report(issues: Sequence[Issue], *, forced: bool) -> None:
     print(f"\n{found}; {tail}", file=sys.stderr)
 
 
-def cmd_generate(args: argparse.Namespace) -> int:
-    """Run generators and write their output.
+def _generation(args: argparse.Namespace) -> api.Generation | int:
+    """Check and generate as ``generate`` and ``verify`` both do.
 
-    :func:`varda.api.generate` checks the model and refuses one that does
-    not conform, then runs every generator and collects every result before
-    anything is written. This prints what it said, and writes.
+    Returns the run, or the exit code that ends it — having printed why.
+    Shared, so the two commands cannot disagree about whether a model is fit
+    to generate from or what it generates.
     """
     model = _load(args)
     if not model.registry.generators:
@@ -193,6 +194,19 @@ def cmd_generate(args: argparse.Namespace) -> int:
     _stale(generation.report)
     if generation.forced_past:
         _report(generation.forced_past, forced=True)
+    return generation
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    """Run generators and write their output.
+
+    :func:`varda.api.generate` checks the model and refuses one that does
+    not conform, then runs every generator and collects every result before
+    anything is written. This prints what it said, and writes.
+    """
+    generation = _generation(args)
+    if isinstance(generation, int):
+        return generation
     written = api.write(generation, args.out)
     for target in written:
         print(f"wrote {target}")
@@ -201,6 +215,58 @@ def cmd_generate(args: argparse.Namespace) -> int:
         f"{len(generation.generators)} generators"
     )
     return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------
+
+
+def _diff(generation: api.Generation, out: pathlib.Path, rel: str) -> str:
+    """Show how a file on disk differs from what the model produces."""
+    on_disk = api.read_committed(out / rel) or ""
+    return "".join(
+        difflib.unified_diff(
+            on_disk.splitlines(keepends=True),
+            generation.artifacts[rel].splitlines(keepends=True),
+            fromfile=f"{rel} (on disk)",
+            tofile=f"{rel} (from the model)",
+        )
+    )
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Say whether the files under ``--out`` are what the model produces.
+
+    Generates exactly as ``generate`` would, writes nothing, and compares.
+    Exits ``1`` on any difference, so CI fails on output somebody forgot to
+    regenerate rather than deploying it.
+    """
+    generation = _generation(args)
+    if isinstance(generation, int):
+        return generation
+    out = pathlib.Path(args.out)
+    drift = api.compare(generation, out)
+    for rel in drift.changed:
+        print(f"{out / rel} differs")
+        if args.diff:
+            print(_diff(generation, out, rel), end="")
+    for rel in drift.missing:
+        print(f"{out / rel} is missing")
+    for rel in drift.extra:
+        # `generate` writes and never deletes, so it cannot fix this one.
+        print(f"{out / rel} is no longer generated; delete it")
+    ran = f"from {len(generation.generators)} generators"
+    if drift.clean:
+        print(f"{len(generation.artifacts)} artifacts {ran} up to date")
+        return EXIT_OK
+    if drift.changed or drift.missing:
+        n = len(drift.changed) + len(drift.missing)
+        print(
+            f"\n{n} of {len(generation.artifacts)} artifacts {ran} out of "
+            "date; run `varda generate` with the same options to update them"
+        )
+    return EXIT_FAIL
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +344,74 @@ def cmd_importmap(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _generation_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the flags ``generate`` and ``verify`` share.
+
+    One definition, so a run ``verify`` compares is the run ``generate``
+    with the same flags would write.
+    """
+    parser.add_argument("model")
+    parser.add_argument("--out", default="out", help="output directory")
+    parser.add_argument("--schema", default="mart", help="SQL schema name")
+    # Not `choices`. The dialect reaches a generator as a plain string, and
+    # an extension shipping its own SQL generator may know names the core
+    # does not — argparse refusing them here would make the core's table the
+    # limit of everyone's. `gen_sql.dialect` raises, naming what it knows.
+    parser.add_argument(
+        "--dialect",
+        default=gen_sql.DEFAULT_DIALECT,
+        metavar="NAME",
+        help=f"which database the DDL is for ({_dialects()})",
+    )
+    # Not `choices`, for the reason above: the levels are Varda's vocabulary
+    # but the string reaches a generator, and an extension's SQL generator
+    # may resolve it against engines the core does not name.
+    parser.add_argument(
+        "--constraints",
+        default=gen_sql.DEFAULT_LEVEL,
+        metavar="LEVEL",
+        help=(
+            f"how much the database is asked to police ({_levels()}); "
+            f"weaker levels move the claims into sql/assertions.sql"
+        ),
+    )
+    parser.add_argument(
+        "--only",
+        action="append",
+        metavar="NAME",
+        help="run only this generator; repeatable",
+    )
+    parser.add_argument(
+        "--exempt",
+        action="append",
+        metavar="CODE",
+        help="skip a rule; repeatable",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="stop on warnings as well as errors",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="generate even though the model does not conform",
+    )
+    # Here as well as on `check`, so the two commands cannot disagree about
+    # whether a model is fit to generate from. It stops another schema's
+    # findings from blocking this run; it does not stop the imported tables
+    # being emitted, which they must be — a fact referencing a dimension the
+    # file never creates is DDL that does not run.
+    parser.add_argument(
+        "--skip-imported",
+        action="store_true",
+        help=(
+            "do not let findings against another schema's classes stop the "
+            "run; their tables are still emitted"
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser."""
     parser = argparse.ArgumentParser(
@@ -319,67 +453,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.set_defaults(fn=cmd_check)
 
     p_gen = sub.add_parser("generate", help="write artifacts from a model")
-    p_gen.add_argument("model")
-    p_gen.add_argument("--out", default="out", help="output directory")
-    p_gen.add_argument("--schema", default="mart", help="SQL schema name")
-    # Not `choices`. The dialect reaches a generator as a plain string, and
-    # an extension shipping its own SQL generator may know names the core
-    # does not — argparse refusing them here would make the core's table the
-    # limit of everyone's. `gen_sql.dialect` raises, naming what it knows.
-    p_gen.add_argument(
-        "--dialect",
-        default=gen_sql.DEFAULT_DIALECT,
-        metavar="NAME",
-        help=f"which database the DDL is for ({_dialects()})",
-    )
-    # Not `choices`, for the reason above: the levels are Varda's vocabulary
-    # but the string reaches a generator, and an extension's SQL generator
-    # may resolve it against engines the core does not name.
-    p_gen.add_argument(
-        "--constraints",
-        default=gen_sql.DEFAULT_LEVEL,
-        metavar="LEVEL",
-        help=(
-            f"how much the database is asked to police ({_levels()}); "
-            f"weaker levels move the claims into sql/assertions.sql"
-        ),
-    )
-    p_gen.add_argument(
-        "--only",
-        action="append",
-        metavar="NAME",
-        help="run only this generator; repeatable",
-    )
-    p_gen.add_argument(
-        "--exempt",
-        action="append",
-        metavar="CODE",
-        help="skip a rule; repeatable",
-    )
-    p_gen.add_argument(
-        "--strict",
-        action="store_true",
-        help="stop on warnings as well as errors",
-    )
-    p_gen.add_argument(
-        "--force",
-        action="store_true",
-        help="generate even though the model does not conform",
-    )
-    # Here as well as on `check`, so the two commands cannot disagree about
-    # whether a model is fit to generate from. It stops another schema's
-    # findings from blocking this run; it does not stop the imported tables
-    # being emitted, which they must be — a fact referencing a dimension the
-    # file never creates is DDL that does not run.
-    p_gen.add_argument(
-        "--skip-imported",
-        action="store_true",
-        help=(
-            "do not let findings against another schema's classes stop the "
-            "run; their tables are still emitted"
-        ),
-    )
+    _generation_arguments(p_gen)
     p_gen.set_defaults(fn=cmd_generate)
+
+    p_verify = sub.add_parser(
+        "verify",
+        help="check the files under --out are what the model produces",
+    )
+    _generation_arguments(p_verify)
+    p_verify.add_argument(
+        "--diff",
+        action="store_true",
+        help="show how each file that differs would change",
+    )
+    p_verify.set_defaults(fn=cmd_verify)
 
     p_rules = sub.add_parser("rules", help="list conformance rules")
     p_rules.add_argument("-v", "--verbose", action="store_true")

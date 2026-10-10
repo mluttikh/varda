@@ -44,17 +44,17 @@ reason the core can stay small enough to be correct.
 | `ext.py` | ~425 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
 | `vocabulary.py` | ~145 | What the active profiles declare, read once. |
 | `registry.py` | ~630 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions are refused. |
-| `api.py` | ~280 | Varda as a library: `load`, `check`, `generate`, `write`. The rule engine and fail-closed generation live here. |
+| `api.py` | ~345 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
 | `rules.py` | ~1500 | The 49 core rules. |
 | `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~190 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~435 | Five commands, each a call into `api` and the printing around it. |
+| `cli.py` | ~510 | Six commands, each a call into `api` and the printing around it. |
 
-**6,100 lines of source**: 3,321 of code, 1,315 of docstrings, 488 of
-comment, 976 blank. The prose share is deliberate and is house style —
+**6,255 lines of source**: 3,431 of code, 1,349 of docstrings, 472 of
+comment, 1,003 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -62,7 +62,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 358 tests in 5,965 lines.
+importable is kept to what is meant to be imported. And 369 tests in 6,108 lines.
 
 ### The four seams
 
@@ -190,7 +190,7 @@ add early.
 | Deferred | Why | Rough size |
 | --- | --- | --- |
 | **Analytical functions** — `FunctionAnnotations`, parameters, implementation bindings | 17 further annotations for a feature most models never touch. Adding it early doubles the vocabulary a newcomer must read. | ~400 lines |
-| **Drift gate** (`varda verify`) | Genuinely valuable and genuinely cheap; cut only because it is worth nothing until generated output is being committed. **First thing to add.** | ~150 lines |
+| **Drift gate** (`varda verify`) | Genuinely valuable and genuinely cheap; cut only because it is worth nothing until generated output is being committed. Added after 0.3. | ~150 lines |
 | **Model diffing / evolution** | Needs a stable vocabulary to diff against. Building it before 1.0 means rebuilding it. | ~360 lines |
 | **Lineage and catalog export** | Every organization's catalog is different; this is extension territory until a second real consumer exists. | ~280 lines |
 | **Extension conformance kit** | A test harness proving a third-party extension is deterministic and stays inside the public API. Worth nothing until third-party extensions exist. | ~230 lines |
@@ -282,13 +282,23 @@ CLI is built on. Every output tree is byte-identical but one ordering, which
 now agrees across the three SQL artifacts. Reasoning in `docs/design.md`;
 migration in `docs/extending.md`.
 
+**Unreleased — the committed output is checked.** `varda verify` generates
+exactly as `generate` would with the same flags, writes nothing, and exits
+`1` when a file under `--out` differs, is missing, or is one a generator
+declares and no longer produces; `--diff` shows how. It is
+`api.compare` and the printing around it. Line endings are not compared, so
+a CRLF checkout passes, and a file no generator declares is never judged.
+
 ### Next, in the order it is worth doing
 
-**Make the output trustworthy.** Add `varda verify`: regenerate into a temp
-tree, compare against what is committed, exit non-zero on drift. Add
-`Artifact(path, compare)` so a generator can declare that its output compares
-as RDF graphs or as a sorted set of SQL statements rather than as bytes. This
-is the highest-value remaining item and it is small.
+**Finish the drift gate when something needs it.** `verify` compares text,
+which is right while every generator's output is deterministic text. Add
+`Artifact(path, compare)` when a generator's output can differ harmlessly —
+RDF, where two serializations of one graph are equal — so it can declare how
+it compares. And `verify` sees a file left behind only if a generator that
+ran declares it: one left by a generator since removed needs a manifest of
+what the last run wrote, which `write` could keep and prune against. Neither
+is worth building before the case that needs it.
 
 **Make extensions safe to depend on.** `requires_profile` pinning, plus the
 conformance kit: `varda ext --check NAME` runs a third-party extension against
@@ -361,8 +371,8 @@ request, in five parallel jobs:
 
 The `gate` job invoking `run_all.sh` rather than restating its steps is
 deliberate: CI and the local gate cannot drift apart, and anything added to
-one is added to both. When `varda verify` lands it goes in
-`run_all.sh` and CI picks it up with no change to the workflow.
+one is added to both. `varda verify` went into `run_all.sh` that way, and
+CI picked it up with no change to the workflow.
 
 The two extra `test` cells are for path handling, not for language
 differences. This package walks parent directories looking for `varda.toml`

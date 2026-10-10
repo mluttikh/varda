@@ -190,7 +190,24 @@ covers those, and `examples/snowflake.yaml` is a model that uses all of them.
 ```yaml title=".github/workflows/model.yml"
 - run: pip install varda
 - run: varda check mart.yaml --strict
+- run: varda verify mart.yaml --out out/
 ```
+
+If you commit the generated files, `verify` keeps them honest. It
+generates exactly as `generate` would with the same flags, writes nothing,
+and fails if anything under `--out` differs, is missing, or is left over from
+a run that no longer produces it:
+
+```console
+$ varda verify mart.yaml --out out/
+out/sql/mart.sql differs
+
+1 of 4 artifacts from 4 generators out of date; run `varda generate` with the same options to update them
+```
+
+`--diff` prints how each file would change. Line endings are not compared,
+so a checkout with CRLF passes, and files no generator declares, such as a
+hand-written README beside the output, are left alone.
 
 Exit codes are part of the contract: `0` success, `1` the model or the run
 failed, `2` the invocation was wrong.

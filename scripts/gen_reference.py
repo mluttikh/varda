@@ -363,7 +363,7 @@ def cli_page() -> str:
         ),
         "",
     ]
-    for cmd in ("", "check", "generate", "rules", "ext", "importmap"):
+    for cmd in ("", "check", "generate", "verify", "rules", "ext", "importmap"):
         tail = [cmd] if cmd else []
         argv = [sys.executable, "-m", "varda", *tail, "--help"]
         result = subprocess.run(  # noqa: S603

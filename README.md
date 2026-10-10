@@ -187,6 +187,7 @@ load rather than warning.
 | --- | --- |
 | `varda check MODEL` | validate; `--strict` fails on warnings too, `--skip-imported` leaves another schema's findings to that schema |
 | `varda generate MODEL --out DIR` | validate, then write artifacts; `--force` to build from a model that does not conform |
+| `varda verify MODEL --out DIR` | fail if the files under `DIR` are not what `generate` would write; `--diff` to show how |
 | `varda rules` | list every rule, `-v` for reasoning |
 | `varda ext` | describe active extensions and their vocabulary |
 | `varda importmap` | print the LinkML import map |
