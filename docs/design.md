@@ -48,10 +48,86 @@ lists. Retire a code by deleting it; never reuse it.
 **Severity conflicts are refused, not resolved.** See
 [Extending](extending.md#severity).
 
-**The typed boundary holds.** `model.py` is the wall along the untyped LinkML
-runtime; everything it returns is a concrete type. `mypy --strict` passes.
+**The typed boundary holds.** One internal module reads LinkML, and what it
+hands on is a snapshot of frozen, concrete types holding nothing LinkML made.
+`mypy --strict` passes. See *Why an extension reads a snapshot*.
 
 **The profile namespace never changes.** See below.
+
+## Why an extension reads a snapshot
+
+A rule walks a `Model`, and a `Model` is data: read once from the LinkML
+schema, frozen, and holding nothing LinkML made. The alternative — a typed
+view reading a live `SchemaView` on every access — handed out the LinkML
+objects underneath it, and an extension used them. That made LinkML's
+untyped classes part of what an extension depended on, whatever the
+documentation said, and left nothing that could be versioned.
+
+What Varda *concludes* from a model is kept apart from it, in `analysis`:
+the uniqueness a dimension's roles imply, the key a foreign key lands on,
+the order tables are created in. The model changes only when the
+vocabulary does; a conclusion tightens whenever Varda finds a case it reads
+wrongly. Two promises, kept in two places, so neither has to be the weaker
+one.
+
+The model is read even when it does not conform, because the rules need
+something to inspect and `--force` generates from it. A name that resolves
+to nothing is a `Ref` whose target is `None` — stated, rather than a column
+silently missing from a list — and only `analysis` decides what a generator
+does about it, so every generator does the same thing. A generator never
+reads `Ref.target` itself, and a test holds it to that. The alternative, a
+strict build beside a lenient one, would still have needed the lenient one
+for the rules.
+
+Four tests decide whether something belongs in the snapshot:
+
+- **Data, not interpretation.** A field records what the model says. If
+  Varda would have to decide something to fill it in — a derived key, an
+  order, what a foreign key lands on — it is a function in `analysis`.
+- **Raw annotations stay.** Some rules need an annotation as it was
+  written, not as it was parsed: whether a facet was declared at all,
+  whether a physical name was declared or derived, the value that would not
+  parse. So every element carries `annotations`, across every prefix, and
+  that is also how an extension reads its own vocabulary.
+- **Lenient construction.** A value outside its enum leaves the typed field
+  `None` and stays in `annotations`, where V002 reports it. The rules that
+  ask whether an annotation is missing read the raw annotation, so a
+  misspelled role is reported once, not also as absent.
+- **Built, then frozen.** Back-references make the graph cyclic, so the
+  adapter builds it in two passes and sets them before anything else sees
+  the objects. Every reader gets a value that cannot change under it.
+
+An extension imports `analysis` as a module, `from varda.ext import
+analysis`, rather than its names. Every import is still from `varda.ext`,
+and the weaker promise stays visible at each call site.
+
+## Why a foreign key is an annotation and not a LinkML reference
+
+A foreign key could be written the LinkML way: `range: DimCustomer`, with the
+dimension's surrogate key marked `identifier: true`. That would show the
+relationship to the stock generators, which `varda:references` does not.
+Run against linkml 1.11, the same two-table model written both ways gives:
+
+| | `range: integer` + `varda:references` | `range: DimCustomer` + `identifier: true` |
+| --- | --- | --- |
+| `gen-erdiagram` | no relationship | drawn, as `\|\|--\|\|` — one-to-one, where a fact to a dimension is many-to-one |
+| `gen-json-schema` | `integer` | `integer` |
+| `gen-pydantic` | `int` | `int` |
+| `gen-owl` | `customer_key` is a `DatatypeProperty` | `customer_key` is a `DatatypeProperty` **and** an `ObjectProperty` |
+
+OWL settles it. Attributes of the same name share one property IRI, so a
+fact's foreign key and the dimension's surrogate key become one property,
+typed two incompatible ways. OWL 2 DL requires object and data properties to
+be disjoint, so the ontology is no longer valid. This is not an edge case.
+Kimball naming gives a foreign key its target's key name, and all 16 foreign
+keys in `retail.yaml` and `snowflake.yaml` follow it. Avoiding the clash
+would mean renaming every foreign key or giving each its own `slot_uri`.
+
+The change would get one diagram tool a relationship drawn with the wrong
+cardinality and leave JSON Schema and Pydantic unchanged. It would also break
+OWL for every model, reverse V804, and make a column's type depend on its
+target. The relationships belong in Varda's own ERD generator, which can draw
+many-to-one correctly.
 
 ## Why the namespace is a w3id.org IRI
 
@@ -672,7 +748,7 @@ DDL can be asked not to enforce — primary keys, uniqueness, references — and
 nothing else. `NOT NULL` on an ordinary column and the width of a type are
 never dropped, so there is nothing to relocate, and asserting them anyway
 would be this file starting to say things the model did not. Both generators
-read `Table.unique_claims` for the same reason: one claim computed in two
+read `analysis.unique_claims` for the same reason: one claim computed in two
 places is one claim that eventually disagrees with itself.
 
 ## Why the grain sentence is not checked against the columns
