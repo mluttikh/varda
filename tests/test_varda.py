@@ -4215,6 +4215,22 @@ def test_generated_docs_render_drill_paths(tmp_path: pathlib.Path) -> None:
     assert "**Drill path** (geography): `country` → `region` → `city`" in page
 
 
+def test_generated_docs_keep_a_description_inside_its_cell(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A column row is one line split on pipes, and prose holds both.
+
+    `a | b` in a description rendered as a row of five cells under a header
+    of four, and a literal block's line break ended the row half way.
+    """
+    table = dimension()
+    table["attributes"]["d_id"]["description"] = "either a | b\nor c"
+    page = generate_docs(build(tmp_path, {"DimThing": table}))
+    row = next(ln for ln in page.splitlines() if ln.startswith("| `d_id`"))
+    assert row.endswith("either a \\| b or c |")
+    assert row.replace("\\|", "").count("|") == 5
+
+
 def test_generated_docs_say_what_makes_a_level_unique(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -5225,6 +5241,52 @@ def test_an_unsized_string_is_refused_by_the_ddl_and_not_by_the_module(
     # unsized string is `VARCHAR` on the engines that have one and
     # SQLAlchemy's business on the ones that do not.
     assert "sa.String()" in gen_sqlalchemy.generate(model)
+
+
+def test_a_physical_name_python_cannot_bind_still_emits_a_module(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A physical name is a SQL identifier, and SQL quotes what Python cannot.
+
+    `varda:physical_name: class` passed `check` and emitted `class =
+    sa.Table(...)`, which does not parse; `metadata` parsed and rebound the
+    `MetaData` every later table is attached to. The table keeps its name
+    in the database — only the variable it is bound to changes.
+    """
+
+    def named(physical: str) -> dict[str, Any]:
+        return dimension(
+            annotations={
+                "varda:role": "DIMENSION",
+                "varda:scd": "TYPE_1",
+                "varda:physical_name": physical,
+            }
+        )
+
+    model = build(
+        tmp_path,
+        {
+            "DimA": named("class"),
+            "DimB": named("metadata"),
+            "DimC": named("my-code"),
+            "DimD": named("my_code"),
+            "DimE": named("2024_sales"),
+        },
+    )
+    assert codes(model) == set()
+    module = _module(gen_sqlalchemy.generate(model), tmp_path, "named")
+    assert isinstance(module.metadata, sa.MetaData)
+    assert module.sa is sa
+    bound = {
+        "class_": "class",
+        "metadata_": "metadata",
+        "my_code_": "my-code",
+        "my_code": "my_code",
+        "_2024_sales": "2024_sales",
+    }
+    for variable, physical in bound.items():
+        assert getattr(module, variable).name == physical
+    assert len(module.metadata.tables) == len(bound)
 
 
 def test_generation_is_deterministic() -> None:

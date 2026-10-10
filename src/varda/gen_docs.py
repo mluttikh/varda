@@ -24,6 +24,18 @@ ADDITIVITY = {
 }
 
 
+def _cell(text: str) -> str:
+    """Render text so it stays inside one cell of a Markdown table.
+
+    A row is one line split on `|`, so a description holding either is a
+    row with more cells than the header, or a row cut short and the rest of
+    it printed as a paragraph. Line breaks collapse to spaces, and a pipe is
+    escaped — which GFM honors inside a code span too, so a physical name
+    holding one stays one cell.
+    """
+    return " ".join(text.split()).replace("|", "\\|")
+
+
 def _columns(table: Table) -> list[str]:
     rows = [
         "| Column | Role | Type | Notes |",
@@ -55,10 +67,13 @@ def _columns(table: Table) -> list[str]:
             notes.append(kept)
         if column.description:
             notes.append(column.description)
-        rows.append(
-            f"| `{column.physical}` | {column.role or '—'} | "
-            f"{column.range} | {'; '.join(notes) or '—'} |"
+        cells = (
+            f"`{column.physical}`",
+            column.role or "—",
+            column.range,
+            "; ".join(notes) or "—",
         )
+        rows.append("| " + " | ".join(_cell(c) for c in cells) + " |")
     return rows
 
 
