@@ -73,7 +73,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # 3.15 builds duckdb from source until duckdb ships a cp315 wheel.
+        # The pip cache keeps the wheel it builds, so only a run with a new
+        # pyproject.toml pays for that.
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
         include:
           # Two extra cells rather than a full 3x3. This package walks parent
           # directories looking for varda.toml and joins POSIX-style artifact
