@@ -62,7 +62,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 427 tests in 6,785 lines.
+importable is kept to what is meant to be imported. And 427 tests in 6,786 lines.
 
 ### The four seams
 

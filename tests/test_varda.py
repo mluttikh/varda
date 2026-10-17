@@ -6581,8 +6581,9 @@ def test_verify_reports_a_file_left_in_an_owned_directory(
     capsys.readouterr()
     assert cli.main(["verify", *base], registry=registry) == 1
     said = capsys.readouterr().out
-    assert "fct_returns.md is no longer generated; delete it" in said
-    assert "old/x.md is no longer generated; delete it" in said
+    # The path is printed the platform's way, the one its user would delete.
+    for left in (out / "per" / "fct_returns.md", out / "per" / "old" / "x.md"):
+        assert f"{left} is no longer generated; delete it" in said
 
 
 def test_verify_leaves_files_beside_an_owned_directory_alone(
