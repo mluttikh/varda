@@ -130,8 +130,9 @@ enums:
           window — must be unique.
       FOREIGN_KEY:
         description: >-
-          A reference to the surrogate key of a dimension or a bridge. Must
-          declare `varda:references`.
+          A reference to the surrogate key of a dimension. Must declare
+          `varda:references`, and must store the same type as the key it
+          names.
 
           Legal on any table. A fact referencing its dimensions is the common
           case, and a dimension referencing another is a snowflake — which is
@@ -139,6 +140,14 @@ enums:
           reach a readable column through the key. What a foreign key may not
           do is point at a fact: that join is fact-to-fact, the grain of the
           result is neither table's, and no aggregate over it is safe.
+
+          Nor, today, at a bridge. A bridge carries no surrogate key, so a
+          reference to one has nothing to land on and no generator can emit
+          it; V406 refuses it rather than letting it pass unenforced.
+
+          Required on a fact, as a warning. A fact row with no key for a
+          dimension drops out of every inner join to it; point it at an
+          unknown-member row instead.
       MEASURE:
         description: >-
           A numeric quantity that is aggregated. Must declare
@@ -297,7 +306,9 @@ classes:
           foreign key or a degenerate dimension: those are the columns that
           locate a row in the model's dimensional space. A measure cannot be
           part of a grain, because a grain is what a row is, not what it
-          records.
+          records. And each should be `required`: SQL counts NULLs as
+          distinct, so a uniqueness constraint over a column that may be
+          absent does not hold for the rows that lack it.
 
           Stating the grain as columns is what makes it checkable — a
           validator can test the claim, and a generator can emit it as a
@@ -406,8 +417,8 @@ classes:
         description: >-
           The name of the class this foreign key points at. Required on every
           column whose role is `FOREIGN_KEY`, and checked: it must name a
-          class that exists and that is a dimension or a bridge. The table
-          holding the key may be any of the three.
+          class that exists and that is a dimension. The table holding the
+          key may be any of the three.
         range: string
 
       additivity:
