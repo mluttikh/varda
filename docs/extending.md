@@ -208,6 +208,78 @@ ignore them and one emitting SQL for an engine the core has never heard of is
 not limited to the core's table. Every field is defaulted, so a generator
 written against an earlier version keeps working when a new one is added.
 
+### Output named by the model
+
+Some output has a file per table, and its names exist only once the model is
+read. A declaration ending in `/` claims a directory for that:
+
+```python
+def run(ctx):
+    return {
+        f"acme/tables/{table.physical}.md": render(table)
+        for table in ctx.model.tables
+    }
+
+
+GENERATOR = Generator(name="acme-pages", artifacts=("acme/tables/",), run=run)
+```
+
+The claim is the whole directory, and it is checked the way a file is, with
+three additions:
+
+- **Nothing may overlap it.** Another generator declaring a file or a
+  directory inside `acme/tables/`, or a directory containing it, is refused at
+  load. Claims are compared ignoring case, because macOS and Windows do.
+- **Every produced path is checked again when it is produced.** The names
+  under a claim come from the model, so a path that leaves the output tree, is
+  spelled more than one way (`acme//x.md`, a backslash), or differs from
+  another only in case stops the run naming the generator — before anything is
+  written.
+- **`varda verify` judges the whole directory.** A file under it that the run
+  did not produce — a table since removed from the model — is reported as no
+  longer generated. So a hand-written file does not belong under a claimed
+  directory; put it beside it.
+
+### Settings
+
+What a generator needs to know and the model does not say — where the tables
+physically live, the address a published page will have — goes in
+`varda.toml`, in a table named for the generator:
+
+```toml
+[generator.acme-pages]
+base_url = "https://data.acme.example/mart/"
+```
+
+The generator declares what it reads, and finds it on `ctx.settings`:
+
+```python
+def run(ctx):
+    base = ctx.settings.get("base_url", "/")
+    ...
+
+
+GENERATOR = Generator(
+    name="acme-pages",
+    artifacts=("acme/tables/",),
+    settings={"base_url": str},
+    run=run,
+)
+```
+
+A setting is a `str`, `int`, `float` or `bool`. The file is checked against
+the declaration when the registry is built, and refused naming the file for a
+table naming no registered generator, a key the generator does not declare, or
+a value of the wrong type — a misspelled setting would otherwise do nothing
+while reading exactly like one that works. A whole number is accepted where a
+float is declared; a boolean is never accepted where a number is.
+
+`ctx.settings` holds only this generator's table, read-only, and is empty
+where the file gives none, so defaults are the generator's to choose. A file
+rather than a flag, because it is committed beside the model: `generate` and
+`verify` read the same one, CI reads what a developer does, and changing it
+is drift `verify` reports like a change to the model.
+
 ## Using Varda as a library
 
 The command line is a thin layer over `varda.api`, so anything it does is

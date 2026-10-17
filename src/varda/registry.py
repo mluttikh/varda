@@ -27,11 +27,13 @@ from dataclasses import dataclass, field
 from functools import cache, cached_property
 from importlib import import_module
 from importlib.metadata import entry_points
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from . import _linkml
 from .ext import (
     PREFIX_PATTERN,
+    SETTING_TYPES,
     TAG_PATTERN,
     Extension,
     ExtensionError,
@@ -43,6 +45,8 @@ from .vocabulary import TARGETS, Vocabulary
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
+
+    from .ext import Setting
 
 #: The vocabulary — annotations, enums, and the shapes of the structured
 #: ones. Read straight off disk. A domain model never imports it; see TYPES.
@@ -78,7 +82,9 @@ ENTRY_POINT_GROUP = "varda.extensions"
 #: Every key ``varda.toml`` may carry. A key outside it is refused rather
 #: than ignored: `exempts = [...]` written for `exempt` is a rule suppressed
 #: nowhere while reading exactly like a rule suppressed here.
-CONFIG_KEYS = frozenset({"extensions", "extension", "severity", "exempt"})
+CONFIG_KEYS = frozenset(
+    {"extensions", "extension", "severity", "exempt", "generator"}
+)
 
 
 @cache
@@ -186,6 +192,7 @@ class Registry:
         self.extensions: tuple[Extension, ...] = tuple(found)
         self.config = config or Config()
         self.vocabulary = Vocabulary(self.extensions)
+        self._settings = _check_settings(self.generators, self.config)
 
     @classmethod
     def discover(
@@ -243,6 +250,15 @@ class Registry:
         """Every registered generator, sorted by name."""
         out = [g for ext in self.extensions for g in ext.generators]
         return tuple(sorted(out, key=lambda g: g.name))
+
+    def settings(self, generator: str) -> Mapping[str, Setting]:
+        """One generator's table from ``varda.toml``, read-only.
+
+        Empty where the file gives none. Checked against what the generator
+        declares when this registry was built, so a generator reading it
+        meets only keys it asked for, holding the types it asked for.
+        """
+        return self._settings.get(generator, MappingProxyType({}))
 
     @cached_property
     def severities(self) -> dict[str, Severity]:
@@ -493,14 +509,75 @@ def _escapes(path: str) -> bool:
     )
 
 
+def _spelled_once(path: str) -> bool:
+    r"""Flag whether a path has the one spelling every comparison expects.
+
+    Forward slashes, no empty segment and no `.` segment. Each of the others
+    names the same file as some canonical path while comparing unequal to
+    it: `okf//a.md` is `okf/a.md` to the filesystem and a second artifact to
+    `verify`, and `okf\a.md` is a subdirectory on Windows and a strange file
+    name on POSIX. A directory claim's trailing slash is its mark, not an
+    empty segment.
+    """
+    if "\\" in path:
+        return False
+    body = path.removesuffix("/")
+    return all(part not in {"", "."} for part in body.split("/"))
+
+
+def path_fault(path: str, *, claim: bool = False) -> str | None:
+    """Say what is wrong with an artifact path, or ``None`` if nothing is.
+
+    Asked of every declaration at load, and of every path a generator
+    produces when it runs. The second matters once a claim is a directory:
+    the paths under it are built from the model's names rather than written
+    by a person, and a table named `../x` would otherwise become a file
+    outside the tree under a claim that passed every check at load.
+
+    ``claim`` admits the trailing slash a directory declaration ends in. A
+    produced path is a file, and never ends in one.
+    """
+    if _escapes(path):
+        return (
+            "which does not stay inside the output directory; an artifact "
+            "path is relative and contains no '..'"
+        )
+    if not _spelled_once(path) or (path.endswith("/") and not claim):
+        return (
+            "which is not spelled one way only; write it with forward "
+            "slashes, no empty or '.' segments, and no trailing slash"
+        )
+    return None
+
+
+def _overlaps(one: str, other: str) -> bool:
+    """Flag whether two claims could ever name the same file.
+
+    Compared case-folded. macOS and Windows fold case by default, so
+    `OKF/a.md` and `okf/a.md` are one file there and one would overwrite the
+    other on exactly the machines CI runs the suite on to catch this.
+    """
+    a, b = one.casefold(), other.casefold()
+    return (
+        a == b
+        or (a.endswith("/") and b.startswith(a))
+        or (b.endswith("/") and a.startswith(b))
+    )
+
+
 def _check_artifacts(found: list[Extension]) -> None:
     """Refuse two generators claiming one name or one output path.
 
-    Also refuses a path that would be written outside ``--out``, at load,
-    before anything runs.
+    A directory claim collides with anything inside it, another directory
+    included, because the generator owning it may write any name there.
+    Two claims of one generator never collide: it cannot overwrite itself
+    by being declared twice.
+
+    Also refuses a path that would be written outside ``--out`` or that is
+    spelled more than one way, at load, before anything runs.
     """
     names: dict[str, str] = {}
-    paths: dict[str, str] = {}
+    claims: list[tuple[str, str]] = []
     for ext in found:
         for gen in ext.generators:
             if gen.name in names:
@@ -510,21 +587,107 @@ def _check_artifacts(found: list[Extension]) -> None:
                 )
                 raise ExtensionError(msg)
             names[gen.name] = ext.name
+            _check_setting_types(gen)
             for path in gen.artifacts:
-                if _escapes(path):
-                    msg = (
-                        f"{gen.name} declares artifact {path!r}, which does "
-                        f"not stay inside the output directory; an artifact "
-                        f"path is relative and contains no '..'"
-                    )
+                fault = path_fault(path, claim=True)
+                if fault is not None:
+                    msg = f"{gen.name} declares artifact {path!r}, {fault}"
                     raise ExtensionError(msg)
-                if path in paths:
-                    msg = (
-                        f"{path!r} is written by both {paths[path]} and "
-                        f"{gen.name}; one would silently overwrite the other"
+                for prior, owner in claims:
+                    if owner == gen.name or not _overlaps(prior, path):
+                        continue
+                    both = (
+                        f"{_claimed(path)} is written by both {owner} and "
+                        f"{gen.name}"
+                        if prior.casefold() == path.casefold()
+                        else f"{_claimed(prior)} ({owner}) and "
+                        f"{_claimed(path)} ({gen.name}) overlap"
                     )
+                    msg = f"{both}; one would silently overwrite the other"
                     raise ExtensionError(msg)
-                paths[path] = gen.name
+                claims.append((path, gen.name))
+
+
+def _claimed(path: str) -> str:
+    """Quote a claim the way an error names it."""
+    return f"directory {path!r}" if path.endswith("/") else repr(path)
+
+
+def _check_setting_types(gen: Generator) -> None:
+    """Refuse a generator declaring a setting of a type TOML cannot give."""
+    for key, kind in gen.settings.items():
+        if kind not in SETTING_TYPES:
+            allowed = ", ".join(t.__name__ for t in SETTING_TYPES)
+            msg = (
+                f"{gen.name} declares setting {key!r} as "
+                f"{getattr(kind, '__name__', kind)!r}; a setting is one of "
+                f"{allowed}"
+            )
+            raise ExtensionError(msg)
+
+
+def _check_settings(
+    generators: Sequence[Generator], config: Config
+) -> dict[str, Mapping[str, Setting]]:
+    """Read every ``[generator.<name>]`` table, or refuse the file.
+
+    Refused rather than ignored, three ways: a table naming no registered
+    generator, a key the generator does not declare, and a value of the
+    wrong type. Each is a setting that silently does nothing while reading
+    exactly like one that does — the argument that already refuses an
+    unknown top-level key, one table down.
+
+    A whole number is accepted where a float is declared, because TOML
+    writes `2` and `2.0` differently and a person means the same by both.
+    A boolean is never accepted where a number is, although Python counts
+    one as an int.
+    """
+    raw = config.data.get("generator", {})
+    if not isinstance(raw, dict):
+        msg = f"{config.where}: [generator] holds one table per generator"
+        raise ExtensionError(msg)
+    by_name = {g.name: g for g in generators}
+    out: dict[str, Mapping[str, Setting]] = {}
+    for name, table in sorted(raw.items()):
+        gen = by_name.get(name)
+        if gen is None:
+            known = ", ".join(sorted(by_name)) or "none"
+            msg = (
+                f"{config.where}: [generator.{name}] names no registered "
+                f"generator; registered: {known}"
+            )
+            raise ExtensionError(msg)
+        if not isinstance(table, dict):
+            msg = f"{config.where}: [generator.{name}] must be a table"
+            raise ExtensionError(msg)
+        values: dict[str, Setting] = {}
+        for key, value in sorted(table.items()):
+            kind = gen.settings.get(key)
+            if kind is None:
+                declared = ", ".join(sorted(gen.settings)) or "none"
+                msg = (
+                    f"{config.where}: [generator.{name}] has unknown key "
+                    f"{key!r}; {name} declares: {declared}"
+                )
+                raise ExtensionError(msg)
+            if not _is_a(value, kind):
+                msg = (
+                    f"{config.where}: [generator.{name}] {key} is "
+                    f"{value!r}; expected a {kind.__name__}"
+                )
+                raise ExtensionError(msg)
+            values[key] = float(value) if kind is float else value
+        out[name] = MappingProxyType(values)
+    return out
+
+
+def _is_a(value: object, kind: type) -> bool:
+    """Flag whether a TOML value is a setting of ``kind``."""
+    if isinstance(value, bool):
+        return kind is bool
+    if kind is float:
+        return isinstance(value, (int, float))
+    return isinstance(value, kind)
 
 
 def _check_types(found: list[Extension]) -> None:

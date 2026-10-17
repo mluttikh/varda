@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from . import analysis
@@ -50,7 +51,7 @@ from .vocabulary import Vocabulary
 
 if TYPE_CHECKING:
     import pathlib
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
 __all__ = [
     "Additivity",
@@ -74,6 +75,7 @@ __all__ = [
     "Rule",
     "RuleError",
     "RuleSet",
+    "Setting",
     "Severity",
     "SlowlyChangingType",
     "Table",
@@ -324,6 +326,15 @@ class Options:
     constraints: str = "enforced"
 
 
+#: A value a generator's setting may hold: what a TOML scalar reads as.
+Setting = str | int | float | bool
+
+#: The types a generator may declare a setting as. Scalars only, because a
+#: setting is something a person writes on one line of `varda.toml`, and a
+#: generator wanting structure has a model to read it from.
+SETTING_TYPES: tuple[type, ...] = (str, int, float, bool)
+
+
 @dataclass(frozen=True)
 class Context:
     """Everything a generator is given, and nothing more.
@@ -333,10 +344,19 @@ class Context:
     then its output is a function of how it was invoked rather than of the
     model — which is the property the whole generate-and-compare arrangement
     depends on.
+
+    ``settings`` is this generator's own table from ``varda.toml`` and no
+    other generator's, read-only, holding only the keys the generator
+    declares. A file is not a flag: it is committed beside the model and
+    found from the model's directory, so ``generate`` and ``verify`` read
+    the same one and CI reads what a developer does.
     """
 
     model: Model
     options: Options = field(default_factory=Options)
+    settings: Mapping[str, Setting] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 @dataclass(frozen=True, eq=False)
@@ -351,11 +371,36 @@ class Generator:
     Paths are declared up front, in ``artifacts``, so that two extensions
     claiming the same output file are caught at startup rather than by one
     silently overwriting the other's work.
+
+    A declaration ending in ``/`` claims a directory: everything under it is
+    this generator's to write, and nothing under it is anyone else's. It is
+    for output whose file names come from the model — one file per table —
+    which no declaration written before the model is read could list. The
+    claim is the whole directory, and ``varda verify`` reports any file in
+    it the run did not produce, so a hand-written file does not belong there.
+
+    ``settings`` names the keys this generator reads from its
+    ``[generator.<name>]`` table in ``varda.toml``, and the type of each. A
+    key the file gives and this does not declare is refused at load, as is
+    a value of the wrong type.
     """
 
     name: str
     artifacts: tuple[str, ...]
     run: Callable[[Context], dict[str, str]]
+    settings: Mapping[str, type] = field(default_factory=dict)
+
+    def declares(self, path: str) -> bool:
+        """Flag whether ``path`` is one this generator said it would write."""
+        return any(
+            path.startswith(claim) if claim.endswith("/") else path == claim
+            for claim in self.artifacts
+        )
+
+    @property
+    def directories(self) -> tuple[str, ...]:
+        """The directories this generator claims whole, as declared."""
+        return tuple(c for c in self.artifacts if c.endswith("/"))
 
 
 # ---------------------------------------------------------------------------

@@ -21,8 +21,8 @@ would turn every generator's exhaustive dispatch into a silent fallback.
 that is a defect in the mechanism.
 
 **Generation fails closed.** A model that does not conform is refused
-before any generator runs, and once they run, every result is collected
-before a byte is written.
+before any generator runs, and once they run, every result is collected,
+and every path it names checked, before a byte is written.
 
 **Somebody else's code failing is reported, not re-raised.** A generator that
 raises is named; so is a rule. Either stops the run — a rule that cannot run
@@ -100,6 +100,42 @@ Four tests decide whether something belongs in the snapshot:
 An extension imports `analysis` as a module, `from varda.ext import
 analysis`, rather than its names. Every import is still from `varda.ext`,
 and the weaker promise stays visible at each call site.
+
+## Why a generator may claim a directory, and its settings are a file
+
+A generator declared every path it would write before seeing a model, and
+that was the whole of what made output safe to compose: two extensions
+claiming one file were refused at load, and a path nobody declared stopped
+the run. It also made one kind of output impossible. An OKF bundle is one
+Markdown file per table, for agents to read, and its names exist only once
+the model has been read.
+
+A declaration ending in `/` claims a directory, and keeps every property
+the exact path had by moving the checks to where the names now come from.
+Collisions are still found at load — a directory collides with anything
+inside it — and compared ignoring case, because macOS and Windows fold it.
+Every produced path is checked when it is produced, because under a claim
+the names are the model's: a table named `../x` passes every check a
+declaration can be given. And the claim is the whole directory, so
+`verify` can judge every file in it. A table removed from the model leaves
+its page behind, and that is the half of the manifest the drift gate was
+waiting for that a claim provides for free. The price is that the
+directory is not shared with anybody, including a person: a hand-written
+file goes beside it.
+
+Settings answer what the model does not say — where a table physically
+lives, the address a published bundle will have. They are a table in
+`varda.toml` rather than a flag or a field of `Options`. Not a flag,
+because a generator whose output depends on how it was invoked breaks
+generate-and-compare: `verify` would have to be given the same flags as
+the `generate` that wrote the files, and nothing could check that it was.
+A file is committed beside the model and found from it, so both commands
+read one answer. Not `Options`, because every generator shares those, and
+one extension's configuration in the core's own record is a privilege the
+mechanism offers nobody else. Each generator declares the
+keys it reads and their types, and the file is refused for anything else —
+a misspelled setting would otherwise do nothing while reading exactly like
+one that works.
 
 ## Why a foreign key is an annotation and not a LinkML reference
 

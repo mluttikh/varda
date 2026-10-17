@@ -35,6 +35,8 @@ never a section in its own right.
     The public boundary — what an extension is entitled to import
     Rules that raise — somebody else's code failing inside this one
     Imports — when a model is more than one file
+    Directories — output whose file names come from the model
+    Settings — what a generator reads from varda.toml
 """
 
 from __future__ import annotations
@@ -6424,3 +6426,360 @@ def test_every_sql_artifact_meets_the_tables_in_one_order(
     assert ddl == expected
     assert module == expected
     assert assertions == [t for t in expected if t in assertions]
+
+
+# ---------------------------------------------------------------------------
+# Directories — output whose file names come from the model
+# ---------------------------------------------------------------------------
+
+
+def _per_table(*, claim: str = "per/", name: str = "per") -> Generator:
+    """Build a generator writing one file per table under a claimed folder.
+
+    The shape an OKF bundle has, and the one a list of paths written before
+    the model is read cannot declare.
+    """
+
+    def run(ctx: Context) -> dict[str, str]:
+        return {
+            f"{claim}{t.physical}.md": f"{t.name}\n" for t in ctx.model.tables
+        }
+
+    return Generator(name=name, artifacts=(claim,), run=run)
+
+
+def _producing(*paths: str, claim: str = "per/") -> Registry:
+    """Build a registry whose one extra generator produces exactly ``paths``."""
+
+    def run(_ctx: Context) -> dict[str, str]:
+        return dict.fromkeys(paths, "x\n")
+
+    gen = Generator(name="zzz", artifacts=(claim,), run=run)
+    return Registry.of(_bare("a", "one", generators=(gen,)))
+
+
+def test_a_directory_claim_covers_what_the_model_names(
+    tmp_path: pathlib.Path,
+) -> None:
+    out = tmp_path / "out"
+    registry = Registry.of(_bare("a", "one", generators=(_per_table(),)))
+    args = ["generate", str(RETAIL), "--out", str(out), "--only", "per"]
+    assert cli.main(args, registry=registry) == 0
+    written = sorted(p.name for p in (out / "per").iterdir())
+    assert written == sorted(f"{t.physical}.md" for t in load(RETAIL).tables)
+
+
+def test_a_directory_over_another_generators_file_is_refused() -> None:
+    """`sql/` would let one generator write the file `sql` already owns."""
+    with pytest.raises(ExtensionError, match="overlap"):
+        activate(_bare("a", "one", generators=(_per_table(claim="sql/"),)))
+
+
+def test_a_directory_inside_another_is_refused() -> None:
+    outer = _per_table(claim="per/", name="outer")
+    inner = _per_table(claim="per/deeper/", name="inner")
+    with pytest.raises(ExtensionError, match="overlap"):
+        activate(
+            _bare("a", "one", generators=(outer,)),
+            _bare("b", "two", generators=(inner,)),
+        )
+
+
+def test_claims_differing_only_in_case_collide() -> None:
+    """One file on macOS and Windows, which is where CI runs to catch it."""
+
+    def run(_ctx: Context) -> dict[str, str]:
+        return {}
+
+    gen = Generator(name="shout", artifacts=("SQL/MART.SQL",), run=run)
+    with pytest.raises(ExtensionError, match="silently overwrite"):
+        activate(_bare("a", "one", generators=(gen,)))
+
+
+def test_a_generator_may_claim_inside_its_own_directory() -> None:
+    """It cannot overwrite itself, so declaring a file twice is no collision."""
+
+    def run(_ctx: Context) -> dict[str, str]:
+        return {}
+
+    gen = Generator(name="mine", artifacts=("per/", "per/index.md"), run=run)
+    activate(_bare("a", "one", generators=(gen,)))
+
+
+@pytest.mark.parametrize(
+    "claim", ["../per/", "/per/", "C:\\per\\", "per/../../x/"]
+)
+def test_a_directory_claim_that_leaves_the_tree_is_refused(claim: str) -> None:
+    with pytest.raises(ExtensionError, match="stay inside"):
+        activate(_bare("a", "one", generators=(_per_table(claim=claim),)))
+
+
+@pytest.mark.parametrize("claim", ["per//", "./per/", "per/./x/", "per\\x/"])
+def test_a_claim_spelled_more_than_one_way_is_refused(claim: str) -> None:
+    """`per//` and `per/` are one directory and would compare as two."""
+    with pytest.raises(ExtensionError, match="spelled one way"):
+        activate(_bare("a", "one", generators=(_per_table(claim=claim),)))
+
+
+def test_a_produced_path_leaving_its_directory_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A table named `../x` must not become a file outside the tree.
+
+    The claim passed every check at load; the path under it is built from
+    the model, so it is checked again when it is produced.
+    """
+    out = tmp_path / "out"
+    registry = _producing("per/../../escaped.md")
+    args = ["generate", str(RETAIL), "--out", str(out), "--only", "zzz"]
+    assert cli.main(args, registry=registry) == 1
+    assert not (tmp_path / "escaped.md").exists()
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    "path", ["per//a.md", "per/./a.md", "per\\a.md", "per/sub/"]
+)
+def test_a_produced_path_spelled_more_than_one_way_is_refused(
+    path: str,
+) -> None:
+    with pytest.raises(api.GeneratorFailedError, match="spelled one way"):
+        api.generate(api.load(RETAIL, _producing(path)), only=["zzz"])
+
+
+def test_two_produced_paths_differing_only_in_case_are_refused() -> None:
+    """Two tables that fold to one name would be one file on a Mac."""
+    registry = _producing("per/dim_a.md", "per/DIM_A.md")
+    with pytest.raises(api.GeneratorFailedError, match="differ only in case"):
+        api.generate(api.load(RETAIL, registry), only=["zzz"])
+
+
+def test_a_path_outside_the_claim_is_still_undeclared() -> None:
+    registry = _producing("per/a.md", "elsewhere/b.md")
+    with pytest.raises(api.GeneratorFailedError, match="undeclared"):
+        api.generate(api.load(RETAIL, registry), only=["zzz"])
+
+
+def test_verify_reports_a_file_left_in_an_owned_directory(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A table removed from the model leaves its file, and verify says so.
+
+    The case SPEC parked as needing a manifest of what the last run wrote.
+    A claimed directory is that manifest: everything in it is the
+    generator's, so a file the run did not produce was left by an earlier
+    one. Nested folders are searched too, since the claim is the subtree.
+    """
+    out = tmp_path / "out"
+    registry = Registry.of(_bare("a", "one", generators=(_per_table(),)))
+    base = [str(RETAIL), "--out", str(out), "--only", "per"]
+    assert cli.main(["generate", *base], registry=registry) == 0
+    assert cli.main(["verify", *base], registry=registry) == 0
+    (out / "per" / "fct_returns.md").write_text("gone\n", encoding="utf-8")
+    (out / "per" / "old").mkdir()
+    (out / "per" / "old" / "x.md").write_text("gone\n", encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(["verify", *base], registry=registry) == 1
+    said = capsys.readouterr().out
+    assert "fct_returns.md is no longer generated; delete it" in said
+    assert "old/x.md is no longer generated; delete it" in said
+
+
+def test_verify_leaves_files_beside_an_owned_directory_alone(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only the claimed directory is the generator's to judge."""
+    out = tmp_path / "out"
+    registry = Registry.of(_bare("a", "one", generators=(_per_table(),)))
+    base = [str(RETAIL), "--out", str(out), "--only", "per"]
+    assert cli.main(["generate", *base], registry=registry) == 0
+    (out / "notes.md").write_text("mine\n", encoding="utf-8")
+    (out / "perhaps").mkdir()
+    (out / "perhaps" / "x.md").write_text("mine\n", encoding="utf-8")
+    assert cli.main(["verify", *base], registry=registry) == 0
+
+
+def test_a_directory_claim_reads_as_declared() -> None:
+    gen = _per_table()
+    assert gen.directories == ("per/",)
+    assert gen.declares("per/a.md")
+    assert gen.declares("per/deeper/a.md")
+    assert not gen.declares("per")
+    assert not gen.declares("perhaps/a.md")
+
+
+# ---------------------------------------------------------------------------
+# Settings — what a generator reads from varda.toml
+# ---------------------------------------------------------------------------
+
+
+def _greeter(name: str = "greet", **settings: type) -> Generator:
+    """Build a generator writing what its settings say, one file per key."""
+
+    def run(ctx: Context) -> dict[str, str]:
+        body = "".join(f"{k}={v!r}\n" for k, v in sorted(ctx.settings.items()))
+        return {f"{name}/settings.txt": body}
+
+    return Generator(
+        name=name,
+        artifacts=(f"{name}/",),
+        run=run,
+        settings=settings or {"greeting": str},
+    )
+
+
+def _configured(
+    tmp_path: pathlib.Path, body: str, *generators: Generator
+) -> Registry:
+    """Build a registry under a varda.toml holding ``body``."""
+    config = Config.load(write_config(tmp_path, body))
+    return Registry.of(
+        _bare("a", "one", generators=generators or (_greeter(),)),
+        config=config,
+    )
+
+
+def _settings_written(registry: Registry, name: str = "greet") -> str:
+    generation = api.generate(api.load(RETAIL, registry), only=[name])
+    return generation.artifacts[f"{name}/settings.txt"]
+
+
+def test_a_generator_reads_its_own_settings(tmp_path: pathlib.Path) -> None:
+    registry = _configured(
+        tmp_path,
+        """
+        [generator.greet]
+        greeting = "hello"
+        """,
+    )
+    assert _settings_written(registry) == "greeting='hello'\n"
+
+
+def test_settings_are_empty_when_the_file_gives_none(
+    tmp_path: pathlib.Path,
+) -> None:
+    registry = _configured(tmp_path, "")
+    assert _settings_written(registry) == ""
+    assert Context(model=load(RETAIL)).settings == {}
+
+
+def test_a_generator_sees_no_other_generators_settings(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Each gets its own context; one generator's table is not a channel."""
+    registry = _configured(
+        tmp_path,
+        """
+        [generator.greet]
+        greeting = "hello"
+        """,
+        _greeter(),
+        _greeter("other", greeting=str),
+    )
+    assert _settings_written(registry, "other") == ""
+
+
+def test_settings_cannot_be_changed_by_the_generator_reading_them(
+    tmp_path: pathlib.Path,
+) -> None:
+    registry = _configured(
+        tmp_path,
+        """
+        [generator.greet]
+        greeting = "hello"
+        """,
+    )
+    settings = registry.settings("greet")
+    with pytest.raises(TypeError):
+        settings["greeting"] = "changed"  # type: ignore[index]
+
+
+def test_a_table_naming_no_generator_is_refused(tmp_path: pathlib.Path) -> None:
+    """`[generator.greeet]` configures nothing and reads as if it did."""
+    with pytest.raises(ExtensionError, match="names no registered generator"):
+        _configured(
+            tmp_path,
+            """
+            [generator.greeet]
+            greeting = "hello"
+            """,
+        )
+
+
+def test_an_undeclared_setting_is_refused(tmp_path: pathlib.Path) -> None:
+    """V001's argument, one table down: a typo here does nothing, silently."""
+    with pytest.raises(ExtensionError, match="unknown key 'greating'") as err:
+        _configured(
+            tmp_path,
+            """
+            [generator.greet]
+            greating = "hello"
+            """,
+        )
+    assert "varda.toml" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [(str, "3"), (int, '"3"'), (int, "true"), (bool, "1"), (float, '"1.5"')],
+)
+def test_a_setting_of_the_wrong_type_is_refused(
+    tmp_path: pathlib.Path, kind: type, value: str
+) -> None:
+    """A boolean is never a number here, although Python counts it as one."""
+    with pytest.raises(ExtensionError, match="expected a"):
+        _configured(
+            tmp_path,
+            f"""
+            [generator.greet]
+            n = {value}
+            """,
+            _greeter(n=kind),
+        )
+
+
+def test_a_whole_number_is_a_float_setting(tmp_path: pathlib.Path) -> None:
+    """TOML writes `2` and `2.0` apart, and a person means one thing by both."""
+    registry = _configured(
+        tmp_path,
+        """
+        [generator.greet]
+        n = 2
+        """,
+        _greeter(n=float),
+    )
+    assert registry.settings("greet") == {"n": 2.0}
+    assert isinstance(registry.settings("greet")["n"], float)
+
+
+def test_a_generator_table_that_is_not_a_table_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    with pytest.raises(ExtensionError, match="one table per generator"):
+        _configured(tmp_path, "generator = 3")
+
+
+def test_a_setting_of_a_type_toml_cannot_give_is_refused() -> None:
+    with pytest.raises(ExtensionError, match="a setting is one of"):
+        activate(_bare("a", "one", generators=(_greeter(n=dict),)))
+
+
+def test_generate_and_verify_read_the_same_settings(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The settings live in a file, so the two commands cannot disagree.
+
+    Changing the file is drift like changing the model is: the committed
+    output no longer matches what the repository says to produce.
+    """
+    out = tmp_path / "out"
+    config = tmp_path / "cfg"
+    config.mkdir()
+    base = [str(RETAIL), "--out", str(out), "--only", "greet"]
+    before = _configured(config, '[generator.greet]\ngreeting = "hello"\n')
+    assert cli.main(["generate", *base], registry=before) == 0
+    assert cli.main(["verify", *base], registry=before) == 0
+    after = _configured(config, '[generator.greet]\ngreeting = "bye"\n')
+    capsys.readouterr()
+    assert cli.main(["verify", *base], registry=after) == 1
+    assert "settings.txt differs" in capsys.readouterr().out
