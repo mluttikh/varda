@@ -33,6 +33,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from . import analysis
 from .analysis import ONE_IDENTITY
 from .ext import Finding, RuleSet
 from .snapshot import (
@@ -466,6 +467,33 @@ def v204(model: Model) -> Iterator[Finding]:
                 )
 
 
+@RULES.rule("V207", "warning", "Grain columns are required")
+def v207(model: Model) -> Iterator[Finding]:
+    """Flag a grain column that may be absent.
+
+    V307's reasoning, applied to the grain. The grain is emitted as `UNIQUE`
+    over its columns, and SQL counts NULLs as distinct, so a row missing any
+    one of them is unconstrained: two loads of the same receipt line with no
+    product key are two rows, and the constraint stating that they cannot be
+    is there and holds for neither. A grain is what locates a row, and a row
+    that cannot be located has no grain.
+
+    A warning rather than an error, matching V307. The DDL runs either way;
+    what is lost is the claim, and losing it is a choice somebody may make
+    on purpose while a source is being brought up.
+    """
+    for table in model.tables:
+        for column in table.grain_columns:
+            if column.required:
+                continue
+            yield Finding(
+                column,
+                "in the grain and not required; SQL counts NULLs as "
+                "distinct, so the grain's uniqueness does not hold for a "
+                "row that has none",
+            )
+
+
 # -------------------------------------------------------------------------
 # V3xx — identity
 #
@@ -741,6 +769,102 @@ def v405(model: Model) -> Iterator[Finding]:
             "no FOREIGN_KEY column; a bridge resolves a many-to-many, and "
             "one that references nothing resolves nothing",
         )
+
+
+@RULES.rule("V406", "error", "A foreign key lands on a key")
+def v406(model: Model) -> Iterator[Finding]:
+    """Flag a foreign key naming a table with no surrogate key to join to.
+
+    A bridge is the case. V404 lets a foreign key name one and V103 keeps a
+    surrogate key off it, so the reference resolves to a table with nothing
+    to land on. Every generator then drops it — no `FOREIGN KEY`, no orphan
+    check, no reference in the SQLAlchemy module — and the model passed
+    `--strict` stating a join that nothing enforces and nothing tests. A
+    check that passes for output that does not say what the model says is
+    the failure V804 exists to refuse.
+
+    Reported for bridges only. A dimension with no surrogate key is V301's,
+    and a role that is missing is V101's.
+    """
+    for table in model.tables:
+        for column in table.foreign_keys:
+            ref = column.references
+            target = ref.target if ref is not None else None
+            if target is None or not target.is_bridge:
+                continue
+            if analysis.reference(column) is not None:
+                continue  # a bridge carrying a key anyway; V103 reports it
+            yield Finding(
+                column,
+                f"references {target.name!r}, a BRIDGE, which has no "
+                f"surrogate key to land on; no FOREIGN KEY or orphan check "
+                f"can be generated for it",
+            )
+
+
+@RULES.rule("V407", "error", "A foreign key has the type of its target key")
+def v407(model: Model) -> Iterator[Finding]:
+    """Flag a foreign key stored as a different type from the key it names.
+
+    A foreign key holds the value of the key it points at, so the two store
+    one type or the reference is between things that cannot be equal. LinkML
+    does not compare them and neither did anything here: a `string` key
+    referencing an `integer` one passed `--strict` and generated DDL that
+    DuckDB refuses to create.
+
+    Compared by what each column stores, through its type chain, rather than
+    by the range as written. A schema's own ``key: {typeof: integer}``
+    references an `integer` key cleanly, because both are integers; a
+    `string` column referencing a `uuid` key does not, although `uuid` is
+    declared in terms of `string`, because one is a `UUID` and the other a
+    `VARCHAR`. See :data:`varda.analysis.STORAGE`.
+    """
+    for table in model.tables:
+        for column in table.foreign_keys:
+            found = analysis.reference(column)
+            if found is None:
+                continue  # V402, V403, V301 or V406 reports why
+            mine = analysis.storage(column)
+            theirs = analysis.storage(found.key)
+            if mine is None or theirs is None or mine == theirs:
+                continue  # a range naming nothing is V804's
+            yield Finding(
+                column,
+                f"range {column.range!r} references {found.key}, whose "
+                f"range is {found.key.range!r}; a foreign key holds the "
+                f"value of the key it points at, so declare it with the "
+                f"same range",
+            )
+
+
+@RULES.rule("V408", "warning", "Fact foreign keys are required")
+def v408(model: Model) -> Iterator[Finding]:
+    """Flag a fact's foreign key that may be absent.
+
+    A fact row with no key for a dimension drops out of every inner join to
+    that dimension. Sliced by product the receipt lines total one figure,
+    sliced by promotion another, and both are right about the rows they saw.
+    The standard answer is a row in the dimension standing for "unknown" or
+    "not applicable", which the fact points at instead, so every row reaches
+    every dimension it has.
+
+    A warning, because the answer depends on the load and a modeler bringing
+    a source up may not have that row yet. Foreign keys in the grain are
+    V207's, which asks the same of them for a different reason, and are not
+    reported twice.
+    """
+    for table in model.facts:
+        grain = set(table.grain_columns)
+        for column in table.foreign_keys:
+            if column.required or column in grain:
+                continue
+            yield Finding(
+                column,
+                "a fact foreign key that is not required; a row with none "
+                "drops out of every inner join to its dimension, so a total "
+                "depends on which dimension it is sliced by. Point it at an "
+                "unknown-member row instead",
+            )
 
 
 # -------------------------------------------------------------------------

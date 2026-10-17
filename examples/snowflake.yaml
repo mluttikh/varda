@@ -197,6 +197,7 @@ classes:
         one row per product per line of a customer order
     attributes:
       order_line:
+        required: true
         annotations:
           varda:role: DEGENERATE_DIMENSION
           varda:max_length: 20

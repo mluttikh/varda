@@ -39,13 +39,13 @@ reason the core can stay small enough to be correct.
 | Module | Lines | Responsibility |
 | --- | --- | --- |
 | `snapshot.py` | ~520 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, and the closed vocabularies as `StrEnum`s. **The public read API.** |
-| `analysis.py` | ~260 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, creation order, level identity. Public, on a weaker promise. |
+| `analysis.py` | ~305 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, what a column stores, creation order, level identity. Public, on a weaker promise. |
 | `_linkml.py` | ~465 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
 | `ext.py` | ~425 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
 | `vocabulary.py` | ~145 | What the active profiles declare, read once. |
 | `registry.py` | ~630 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions are refused. |
 | `api.py` | ~345 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
-| `rules.py` | ~1500 | The 49 core rules. |
+| `rules.py` | ~1625 | The 53 core rules. |
 | `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~190 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
@@ -53,8 +53,8 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~510 | Six commands, each a call into `api` and the printing around it. |
 
-**6,255 lines of source**: 3,431 of code, 1,349 of docstrings, 472 of
-comment, 1,003 blank. The prose share is deliberate and is house style —
+**6,422 lines of source**: 3,512 of code, 1,403 of docstrings, 483 of
+comment, 1,024 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -62,7 +62,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 369 tests in 6,108 lines.
+importable is kept to what is meant to be imported. And 389 tests in 6,426 lines.
 
 ### The four seams
 

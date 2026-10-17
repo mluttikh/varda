@@ -633,25 +633,84 @@ def test_v115_grain_cannot_be_built_from_a_measure(
 def test_a_well_formed_grain_is_quiet(tmp_path: pathlib.Path) -> None:
     """The grain rules stay silent on a fact that declares both halves.
 
-    Worth asserting explicitly: five rules now read the grain, and a suite
+    Worth asserting explicitly: six rules now read the grain, and a suite
     that only ever checks that they fire cannot tell an alert validator from
     a noisy one.
     """
     model = build(
         tmp_path,
-        {
-            "FctX": _fact(
-                **{
-                    "varda:grain": ["d_key", "ticket"],
-                    "varda:grain_statement": "one row per ticket per thing",
-                    "varda:fact_type": "TRANSACTION",
-                }
-            ),
-            "DimThing": dimension(),
-        },
+        {"FctX": _required_grain(), "DimThing": dimension()},
     )
     fired = codes(model)
-    assert not fired & {"V201", "V202", "V203", "V204"}
+    assert not fired & {"V201", "V202", "V203", "V204", "V207"}
+
+
+def _required_grain() -> dict[str, Any]:
+    """Build a fact whose grain is two populated columns, legal throughout."""
+    fact = _fact(
+        **{
+            "varda:grain": ["d_key", "ticket"],
+            "varda:grain_statement": "one row per ticket per thing",
+            "varda:fact_type": "TRANSACTION",
+        }
+    )
+    for name in ("d_key", "ticket"):
+        fact["attributes"][name]["required"] = True
+    return fact
+
+
+def test_v207_a_grain_column_that_may_be_absent(
+    tmp_path: pathlib.Path,
+) -> None:
+    fact = _required_grain()
+    del fact["attributes"]["ticket"]["required"]
+    model = build(tmp_path, {"FctX": fact, "DimThing": dimension()})
+    found = [f for f in findings(model) if f.code == "V207"]
+    assert [str(f.subject) for f in found] == ["FctX.ticket"]
+    assert found[0].severity == "warning"
+
+
+def test_v207_reads_a_bridge_grain_too(tmp_path: pathlib.Path) -> None:
+    """A grain is wrong wherever it appears, as V203 already holds."""
+    bridge = {
+        "annotations": {
+            "varda:role": "BRIDGE",
+            "varda:grain": ["d_key"],
+            "varda:grain_statement": "one row per thing in a group",
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            }
+        },
+    }
+    model = build(tmp_path, {"BridgeX": bridge, "DimThing": dimension()})
+    assert "V207" in codes(model)
+
+
+def test_a_nullable_grain_does_not_hold(tmp_path: pathlib.Path) -> None:
+    """Why V207 exists: the grain is emitted, and admits the same row twice.
+
+    Three loads of one receipt line with no ticket number are three rows,
+    under a `UNIQUE` that states they cannot be.
+    """
+    fact = _required_grain()
+    del fact["attributes"]["ticket"]["required"]
+    model = build(tmp_path, {"FctX": fact, "DimThing": dimension()})
+    conn = duckdb.connect()
+    conn.execute(generate_sql(model))
+    conn.execute("INSERT INTO mart.dim_thing (d_key, d_id) VALUES (1, 'a')")
+    for _ in range(3):
+        conn.execute(
+            "INSERT INTO mart.fct_x (d_key, ticket, amount) "
+            "VALUES (1, NULL, 9.5)"
+        )
+    kept = conn.execute("SELECT count(*) FROM mart.fct_x").fetchone()
+    assert kept == (3,)
 
 
 def test_v105_dimension_without_surrogate_key(
@@ -794,6 +853,235 @@ def test_v110_foreign_key_points_at_a_fact(tmp_path: pathlib.Path) -> None:
         },
     )
     assert "V404" in codes(model)
+
+
+def _referring(target: str, **column: Any) -> dict[str, Any]:
+    """Build a legal fact whose one foreign key points at ``target``.
+
+    Keyed on the foreign key alone and factless, so a test varies only the
+    reference under test and nothing else fires.
+    """
+    return {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:fact_type": "FACTLESS",
+            "varda:grain": ["x_key"],
+            "varda:grain_statement": "one row per thing that happened",
+        },
+        "attributes": {
+            "x_key": {
+                "range": "integer",
+                "required": True,
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": target,
+                },
+                **column,
+            }
+        },
+    }
+
+
+def _bridge() -> dict[str, Any]:
+    """Build a legal bridge, with nothing for a foreign key to land on."""
+    return {
+        "annotations": {"varda:role": "BRIDGE"},
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "required": True,
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            }
+        },
+    }
+
+
+def test_the_reference_fixture_is_clean(tmp_path: pathlib.Path) -> None:
+    """The baseline the V406 to V408 tests vary, so a finding is theirs."""
+    model = build(
+        tmp_path, {"FctX": _referring("DimThing"), "DimThing": dimension()}
+    )
+    assert findings(model) == []
+
+
+def test_v406_a_foreign_key_to_a_bridge(tmp_path: pathlib.Path) -> None:
+    model = build(
+        tmp_path,
+        {
+            "FctX": _referring("BridgeX"),
+            "BridgeX": _bridge(),
+            "DimThing": dimension(),
+        },
+    )
+    found = [f for f in findings(model) if f.code == "V406"]
+    assert [str(f.subject) for f in found] == ["FctX.x_key"]
+    assert found[0].severity == "error"
+
+
+def test_a_reference_to_a_bridge_generates_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Why V406 exists: every generator drops the reference without a word.
+
+    V404 permits it and V103 keeps a surrogate key off the bridge, so it
+    passed `--strict` and emitted no constraint and no orphan check.
+    """
+    model = build(
+        tmp_path,
+        {
+            "FctX": _referring("BridgeX"),
+            "BridgeX": _bridge(),
+            "DimThing": dimension(),
+        },
+    )
+    fact_ddl = generate_sql(model).split('"mart"."fct_x"')[1]
+    assert "FOREIGN KEY" not in fact_ddl
+    assert "fct_x.x_key ->" not in generate_assertions(model)
+
+
+def test_v407_a_foreign_key_of_another_type(tmp_path: pathlib.Path) -> None:
+    model = build(
+        tmp_path,
+        {
+            "FctX": _referring("DimThing", range="string"),
+            "DimThing": dimension(),
+        },
+    )
+    found = [f for f in findings(model) if f.code == "V407"]
+    assert [str(f.subject) for f in found] == ["FctX.x_key"]
+    assert "'integer'" in found[0].message
+
+
+def test_a_mistyped_reference_does_not_execute(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Why V407 exists: `check` passed, and the DDL it certified fails."""
+    model = build(
+        tmp_path,
+        {
+            "FctX": _referring("DimThing", range="string"),
+            "DimThing": dimension(),
+        },
+    )
+    with pytest.raises(duckdb.Error, match="incompatible types"):
+        duckdb.connect().execute(generate_sql(model))
+
+
+def test_v407_reads_through_a_declared_type(tmp_path: pathlib.Path) -> None:
+    """A schema's own `typeof: integer` key stores an integer.
+
+    Compared on what each column stores rather than on the range as
+    written, or a model naming its key type would be refused for doing the
+    careful thing.
+    """
+    table = dimension()
+    table["attributes"]["d_key"]["range"] = "thing_key"
+    path = tmp_path / "t.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "id": "https://example.org/t",
+                "name": "t",
+                "prefixes": {
+                    "linkml": "https://w3id.org/linkml/",
+                    "varda": "https://w3id.org/varda/",
+                },
+                "default_prefix": "t",
+                "default_range": "string",
+                "imports": ["linkml:types"],
+                "types": {"thing_key": {"typeof": "integer"}},
+                "classes": {
+                    "FctX": _referring("DimThing"),
+                    "DimThing": table,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    model = load(path)
+    assert "V407" not in codes(model)
+    executes(generate_sql(model))
+
+
+def test_v407_tells_a_uuid_from_the_string_it_is_declared_as(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`uuid` is `typeof: string`, and a `VARCHAR` still cannot reference it."""
+    table = dimension()
+    table["attributes"]["d_key"]["range"] = "uuid"
+    model = build(
+        tmp_path,
+        {
+            "FctX": _referring("DimThing", range="string"),
+            "DimThing": table,
+        },
+        imports=["varda"],
+    )
+    assert "V407" in codes(model)
+
+
+def test_v407_lets_the_string_family_reference_itself(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Every generator stores a `uri` as it stores a `string`."""
+    table = dimension()
+    table["attributes"]["d_key"]["range"] = "string"
+    model = build(
+        tmp_path,
+        {"FctX": _referring("DimThing", range="uri"), "DimThing": table},
+    )
+    assert "V407" not in codes(model)
+    executes(generate_sql(model))
+
+
+def test_v408_a_fact_foreign_key_that_may_be_absent(
+    tmp_path: pathlib.Path,
+) -> None:
+    fact = _referring("DimThing")
+    fact["attributes"]["y_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimThing",
+        },
+    }
+    model = build(tmp_path, {"FctX": fact, "DimThing": dimension()})
+    found = [f for f in findings(model) if f.code == "V408"]
+    assert [str(f.subject) for f in found] == ["FctX.y_key"]
+    assert found[0].severity == "warning"
+
+
+def test_v408_leaves_a_grain_key_to_v207(tmp_path: pathlib.Path) -> None:
+    """One column, one fault, one finding."""
+    fact = _referring("DimThing")
+    del fact["attributes"]["x_key"]["required"]
+    model = build(tmp_path, {"FctX": fact, "DimThing": dimension()})
+    fired = codes(model)
+    assert "V207" in fired
+    assert "V408" not in fired
+
+
+def test_v408_leaves_a_snowflaked_dimension_alone(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only a fact's rows are summed, so only a fact's rows can go missing.
+
+    A city with no region is a modeling question about the dimension; it
+    drops no measure out of any total.
+    """
+    city = dimension()
+    city["attributes"]["region_key"] = {
+        "range": "integer",
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": "DimThing",
+        },
+    }
+    model = build(tmp_path, {"DimCity": city, "DimThing": dimension()})
+    assert "V408" not in codes(model)
 
 
 def test_v111_fact_without_type(tmp_path: pathlib.Path) -> None:
@@ -3476,6 +3764,7 @@ def _fact_keyed_twice() -> dict[str, Any]:
         "attributes": {
             "d_key": {
                 "range": "integer",
+                "required": True,
                 "annotations": {
                     "varda:role": "FOREIGN_KEY",
                     "varda:references": "DimThing",
@@ -4026,6 +4315,7 @@ def _declared_type(tmp_path: pathlib.Path, **facets: Any) -> Model:
         "attributes": {
             "d_key": {
                 "range": "integer",
+                "required": True,
                 "annotations": {
                     "varda:role": "FOREIGN_KEY",
                     "varda:references": "DimThing",
@@ -5127,6 +5417,34 @@ def test_the_type_tables_cover_the_same_ranges() -> None:
     is a generator that raises on a model the other one builds.
     """
     assert set(gen_sqlalchemy.TYPES) == set(gen_sql.TYPES)
+
+
+def test_storage_covers_the_ranges_the_generators_know() -> None:
+    """V407 compares storage, so storage must exist for every range stored."""
+    assert set(analysis.STORAGE) == set(gen_sql.TYPES)
+
+
+@pytest.mark.parametrize("name", sorted(gen_sql.DIALECTS))
+def test_one_storage_is_one_type_in_every_dialect(name: str) -> None:
+    """What lets V407 pass a `uri` referencing a `string` key.
+
+    The rule says two ranges sharing a storage reference each other cleanly,
+    which holds only while every dialect spells them alike. A dialect that
+    gave `uri` a type of its own would make the rule pass DDL that fails.
+    """
+    sql = gen_sql.DIALECTS[name]
+    spelled: dict[str, set[str | None]] = {}
+    for rng, stored in analysis.STORAGE.items():
+        spelled.setdefault(stored, set()).add(sql.type_of(rng))
+    assert {s: t for s, t in spelled.items() if len(t) > 1} == {}
+
+
+def test_one_storage_is_one_sqlalchemy_type() -> None:
+    """The same agreement, held by the module that names no dialect."""
+    spelled: dict[str, set[str]] = {}
+    for rng, stored in analysis.STORAGE.items():
+        spelled.setdefault(stored, set()).add(gen_sqlalchemy.TYPES[rng])
+    assert {s: t for s, t in spelled.items() if len(t) > 1} == {}
 
 
 #: Where a generic SQLAlchemy type does not render what `gen_sql` names for

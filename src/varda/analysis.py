@@ -97,6 +97,49 @@ def type_params(column: Column) -> tuple[int, ...]:
     return (precision, scale)
 
 
+#: What a value of each range is stored as, where two ranges share one.
+#:
+#: The string family is one storage, because every generator renders all
+#: four the same way — `VARCHAR`, `sa.String` — and a `uri` key referenced
+#: by a `string` column joins character for character. `float` and `double`
+#: are one storage for the same reason. Everything else is its own, and
+#: `uuid` above all: it is declared `typeof: string`, and a `UUID` key is
+#: still not something a `VARCHAR` column can reference.
+#:
+#: The keys are :data:`varda.gen_sql.TYPES`'s and a test says so, and a
+#: test holds every dialect to rendering one storage as one type.
+STORAGE: dict[str, str] = {
+    "string": "string",
+    "uri": "string",
+    "uriorcurie": "string",
+    "ncname": "string",
+    "integer": "integer",
+    "float": "double",
+    "double": "double",
+    "decimal": "decimal",
+    "boolean": "boolean",
+    "date": "date",
+    "datetime": "datetime",
+    "time": "time",
+    "uuid": "uuid",
+}
+
+
+def storage(column: Column) -> str | None:
+    """Name what a column's values are stored as, or ``None`` if unknown.
+
+    Resolved through the type chain nearest first, as the generators resolve
+    it, so a schema's own ``key: {typeof: integer}`` stores an integer and
+    ``uuid`` stores a UUID rather than the string it is declared in terms of.
+    ``None`` for a range naming nothing, which is V804's to report, and for
+    a real type no generator stores, which is that generator's.
+    """
+    return next(
+        (STORAGE[t] for t in column.type_chain if t in STORAGE),
+        None,
+    )
+
+
 def level_key(level: Level) -> Column | None:
     """Name what tells one member of a level from another, under one parent.
 
