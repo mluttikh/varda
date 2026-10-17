@@ -24,7 +24,7 @@ from .ext import (
     RuleError,
     Severity,
 )
-from .registry import Registry
+from .registry import Registry, path_fault
 from .snapshot import table_of
 
 if TYPE_CHECKING:
@@ -189,7 +189,8 @@ class Generation:
     #: ``{relative path: content}``, every generator's output together.
     artifacts: dict[str, str] = field(default_factory=dict)
     generators: tuple[str, ...] = ()
-    #: Every path the generators that ran declare, produced or not.
+    #: Every path the generators that ran declare, produced or not. A
+    #: directory claim appears as declared, ending in ``/``.
     declared: tuple[str, ...] = ()
 
 
@@ -221,11 +222,10 @@ def generate(  # noqa: PLR0913 — one keyword per CLI flag, all optional
     stopping = blocking(report, strict=strict)
     if stopping and not force:
         raise NonconformingError(report, stopping)
-    ctx = Context(model=model, options=options or Options())
     return Generation(
         report=report,
         forced_past=stopping,
-        artifacts=_collect(chosen, ctx),
+        artifacts=_collect(chosen, model, options or Options()),
         generators=tuple(g.name for g in chosen),
         declared=tuple(p for g in chosen for p in g.artifacts),
     )
@@ -247,10 +247,22 @@ def _selected(
     return [by_name[n] for n in only]
 
 
-def _collect(chosen: list[Generator], ctx: Context) -> dict[str, str]:
-    """Run every generator and gather what it produced."""
+def _collect(
+    chosen: list[Generator], model: Model, options: Options
+) -> dict[str, str]:
+    """Run every generator and gather what it produced.
+
+    Each generator is handed its own context, because each has its own
+    settings and must not see another's.
+    """
     collected: dict[str, str] = {}
+    folded: dict[str, str] = {}
     for gen in chosen:
+        ctx = Context(
+            model=model,
+            options=options,
+            settings=model.registry.settings(gen.name),
+        )
         try:
             produced = gen.run(ctx)
         except Exception as exc:
@@ -259,14 +271,38 @@ def _collect(chosen: list[Generator], ctx: Context) -> dict[str, str]:
             # culprit rather than a traceback through somebody else's code.
             msg = f"{gen.name} failed: {type(exc).__name__}: {exc}"
             raise GeneratorFailedError(msg) from exc
-        undeclared = sorted(set(produced) - set(gen.artifacts))
-        if undeclared:
-            msg = (
-                f"{gen.name} wrote undeclared path(s): {', '.join(undeclared)}"
-            )
-            raise GeneratorFailedError(msg)
+        for path in sorted(produced):
+            _check_produced(gen, path, folded)
         collected.update(produced)
     return collected
+
+
+def _check_produced(gen: Generator, path: str, folded: dict[str, str]) -> None:
+    """Refuse a produced path that is undeclared, unsafe or a duplicate.
+
+    Checked here and not only at load, because a path under a directory
+    claim is built from the model's names. A table named `../x` passes
+    every check a declaration can be given and still becomes a path out of
+    the tree, and two tables differing only in case become two paths that
+    are one file on macOS and Windows.
+
+    ``folded`` maps each case-folded path already produced, by any
+    generator in the run, to its spelling.
+    """
+    fault = path_fault(path)
+    if fault is not None:
+        msg = f"{gen.name} produced {path!r}, {fault}"
+        raise GeneratorFailedError(msg)
+    if not gen.declares(path):
+        msg = f"{gen.name} wrote undeclared path {path!r}"
+        raise GeneratorFailedError(msg)
+    prior = folded.setdefault(path.casefold(), path)
+    if prior != path:
+        msg = (
+            f"{gen.name} produced {path!r} and {prior!r}, which differ only "
+            f"in case and are one file wherever the filesystem folds it"
+        )
+        raise GeneratorFailedError(msg)
 
 
 def write(
@@ -294,8 +330,10 @@ class Drift:
 
     Each field holds relative paths, sorted. ``extra`` is a file a generator
     that ran declares, did not produce this time, and that is on disk
-    anyway — left by an earlier run. A file no generator that ran declares
-    is not Varda's to judge, so it is never reported.
+    anyway — left by an earlier run. Under a directory a generator claims,
+    that is any file the run did not produce, because the whole directory
+    is the generator's. A file no generator that ran declares is not
+    Varda's to judge, so it is never reported.
     """
 
     changed: tuple[str, ...] = ()
@@ -326,12 +364,37 @@ def compare(generation: Generation, out: str | pathlib.Path) -> Drift:
             missing.append(rel)
         elif on_disk != content:
             changed.append(rel)
-    extra = sorted(
+    declared = set(generation.declared)
+    left = {
         rel
-        for rel in set(generation.declared) - set(generation.artifacts)
-        if (root / rel).is_file()
-    )
-    return Drift(tuple(changed), tuple(missing), tuple(extra))
+        for rel in declared - set(generation.artifacts)
+        if not rel.endswith("/") and (root / rel).is_file()
+    }
+    left |= {
+        rel
+        for claim in declared
+        if claim.endswith("/")
+        for rel in _files_under(root, claim)
+        if rel not in generation.artifacts
+    }
+    return Drift(tuple(changed), tuple(missing), tuple(sorted(left)))
+
+
+def _files_under(root: pathlib.Path, claim: str) -> set[str]:
+    """List the files on disk under a claimed directory, as artifact paths.
+
+    Every one of them is the claiming generator's, so one the run did not
+    produce was left by an earlier run — a table since removed from the
+    model — and is drift that rerunning `generate` does not fix.
+    """
+    base = root / claim
+    if not base.is_dir():
+        return set()
+    return {
+        found.relative_to(root).as_posix()
+        for found in base.rglob("*")
+        if found.is_file()
+    }
 
 
 def read_committed(path: pathlib.Path) -> str | None:

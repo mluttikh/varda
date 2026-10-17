@@ -41,10 +41,10 @@ reason the core can stay small enough to be correct.
 | `snapshot.py` | ~520 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, and the closed vocabularies as `StrEnum`s. **The public read API.** |
 | `analysis.py` | ~305 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, what a column stores, creation order, level identity. Public, on a weaker promise. |
 | `_linkml.py` | ~465 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
-| `ext.py` | ~425 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
+| `ext.py` | ~470 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
 | `vocabulary.py` | ~145 | What the active profiles declare, read once. |
-| `registry.py` | ~630 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions are refused. |
-| `api.py` | ~345 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
+| `registry.py` | ~795 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
+| `api.py` | ~410 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
 | `rules.py` | ~1625 | The 53 core rules. |
 | `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~190 | Markdown reference. |
@@ -53,8 +53,8 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~510 | Six commands, each a call into `api` and the printing around it. |
 
-**6,422 lines of source**: 3,512 of code, 1,403 of docstrings, 483 of
-comment, 1,024 blank. The prose share is deliberate and is house style —
+**6,693 lines of source**: 3,657 of code, 1,484 of docstrings, 488 of
+comment, 1,064 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -62,7 +62,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 389 tests in 6,426 lines.
+importable is kept to what is meant to be imported. And 427 tests in 6,786 lines.
 
 ### The four seams
 
@@ -73,8 +73,11 @@ An extension plugs in at exactly four places. Everything else is internal.
    `V002`.
 2. **Rules** — a `RuleSet` whose codes all begin with the extension's tag.
    Merged into `Registry.rules`.
-3. **Generators** — `Generator(name, artifacts, run)`. Paths declared up
-   front so collisions are caught at load.
+3. **Generators** — `Generator(name, artifacts, run, settings)`. Paths
+   declared up front so collisions are caught at load; a path ending in `/`
+   claims a directory, for output named by the model. `settings` declares
+   what the generator reads from its `[generator.<name>]` table in
+   `varda.toml`.
 4. **Distribution** — a `varda.extensions` entry point, or a `varda.toml`
    entry, or `[[extension]]` inline in TOML for the no-Python case.
 
@@ -105,8 +108,12 @@ is reached, because artifacts built from a model that does not conform look
 finished and are not. Past that, every generator runs and every result is
 collected before a single byte is written. A half-generated output tree is
 worse than none: it looks complete, and the stale parts are the ones nobody
-thinks to check. *`api.generate`, `test_generate_fails_closed`,
-`test_generate_refuses_a_nonconforming_model`*
+thinks to check. Every path a generator produces is checked before that
+point, not only every path it declares: under a directory claim the names
+come from the model, so a table named `../x` would otherwise pass every
+check at load and be written outside the tree. *`api.generate`,
+`test_generate_fails_closed`, `test_generate_refuses_a_nonconforming_model`,
+`test_a_produced_path_leaving_its_directory_is_refused`*
 
 **I11 — Somebody else's code failing is named, not re-raised.** A generator
 that raises is reported as `{name} failed: …`; so is a rule, as
@@ -289,6 +296,18 @@ declares and no longer produces; `--diff` shows how. It is
 `api.compare` and the printing around it. Line endings are not compared, so
 a CRLF checkout passes, and a file no generator declares is never judged.
 
+**Unreleased — a generator can write what the model names.** Two changes to
+the generator seam, both additive, because an OKF bundle — one Markdown file
+per table, for agents to read — could not be written against it. A
+declaration ending in `/` claims a directory: nothing may overlap it, case
+ignored, every path produced under it is checked when it is produced, and
+`verify` reports any file in it the run did not produce, which is the
+removed-table half of the manifest the drift gate was waiting for. And a
+generator declares `settings`, read from its own `[generator.<name>]` table
+in `varda.toml`, checked at load for unknown tables, unknown keys and wrong
+types, and handed over read-only on `Context.settings`. A file rather than
+a flag, so `generate` and `verify` cannot disagree about it.
+
 ### Next, in the order it is worth doing
 
 **Finish the drift gate when something needs it.** `verify` compares text,
@@ -296,9 +315,11 @@ which is right while every generator's output is deterministic text. Add
 `Artifact(path, compare)` when a generator's output can differ harmlessly —
 RDF, where two serializations of one graph are equal — so it can declare how
 it compares. And `verify` sees a file left behind only if a generator that
-ran declares it: one left by a generator since removed needs a manifest of
-what the last run wrote, which `write` could keep and prune against. Neither
-is worth building before the case that needs it.
+ran declares it. Under a claimed directory that now covers every file, so a
+table removed from the model is caught; one left by a generator since
+removed still needs a manifest of what the last run wrote, which `write`
+could keep and prune against. Neither is worth building before the case
+that needs it.
 
 **Make extensions safe to depend on.** `requires_profile` pinning, plus the
 conformance kit: `varda ext --check NAME` runs a third-party extension against
