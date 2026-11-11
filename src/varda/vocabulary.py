@@ -121,6 +121,26 @@ class Vocabulary:
             return tuple(str(v) for v in (enum.permissible_values or {}))
         return ()
 
+    def meaning(self, enum_name: str, value: str) -> str | None:
+        """Name the concept one value of a profile's enum stands for.
+
+        LinkML's ``meaning`` on the permissible value, as a full IRI — a
+        profile's prefixes are its own, and a caller holding a CURIE written
+        against them would have nothing to expand it with. ``None`` where
+        the value declares none, names a prefix its profile does not, or is
+        not a value of that enum at all.
+        """
+        for _, view in self._profiles.values():
+            if view is None or enum_name not in view.schema.enums:
+                continue
+            found = (view.schema.enums[enum_name].permissible_values or {}).get(
+                value
+            )
+            if found is None or not found.meaning:
+                return None
+            return _linkml.expand(view, str(found.meaning))
+        return None
+
     def profile_filename(self, prefix: str) -> str:
         """Name the file an annotation of this prefix belongs in."""
         ext, _ = self._profiles.get(prefix, (None, None))

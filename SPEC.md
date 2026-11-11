@@ -38,11 +38,11 @@ reason the core can stay small enough to be correct.
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
-| `snapshot.py` | ~520 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, and the closed vocabularies as `StrEnum`s. **The public read API.** |
+| `snapshot.py` | ~710 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, what a model says an element means (`Mappings`, `Unit`, `Enumeration`), and the closed vocabularies as `StrEnum`s. **The public read API.** |
 | `analysis.py` | ~305 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, what a column stores, creation order, level identity. Public, on a weaker promise. |
-| `_linkml.py` | ~465 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
-| `ext.py` | ~470 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
-| `vocabulary.py` | ~145 | What the active profiles declare, read once. |
+| `_linkml.py` | ~545 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
+| `ext.py` | ~475 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
+| `vocabulary.py` | ~165 | What the active profiles declare, read once. |
 | `registry.py` | ~795 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
 | `api.py` | ~410 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
 | `rules.py` | ~1625 | The 53 core rules. |
@@ -53,8 +53,8 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~510 | Six commands, each a call into `api` and the printing around it. |
 
-**6,693 lines of source**: 3,657 of code, 1,484 of docstrings, 488 of
-comment, 1,064 blank. The prose share is deliberate and is house style —
+**6,988 lines of source**: 3,832 of code, 1,528 of docstrings, 523 of
+comment, 1,105 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -62,7 +62,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 427 tests in 6,786 lines.
+importable is kept to what is meant to be imported. And 434 tests in 7,039 lines.
 
 ### The four seams
 
@@ -307,6 +307,21 @@ generator declares `settings`, read from its own `[generator.<name>]` table
 in `varda.toml`, checked at load for unknown tables, unknown keys and wrong
 types, and handed over read-only on `Context.settings`. A file rather than
 a flag, so `generate` and `verify` cannot disagree about it.
+
+**Unreleased — the snapshot carries what a model says it means.** A model
+could give every table a `class_uri` and every measure a QUDT unit, pass
+`check`, and reach every rule and generator with none of it: the snapshot
+held Varda's annotations and a unit reduced to one label. It now holds
+LinkML's own metaslots as written — `uri` (`class_uri`, `slot_uri`),
+`title`, `aliases` and `mappings` on `Table` and `Column`,
+`Column.unit_of_measure` with `unit` still its label, and `Model.enums`
+with the `meaning` of each value — plus `Model.prefixes` and
+`Model.expand`, and `Vocabulary.meaning` for the profile's own values.
+Additive, and no vocabulary: nothing is annotated differently, no rule
+reads any of it yet, and no generator's output changes. An undeclared IRI
+is `None` rather than the one LinkML would mint, which is the same for a
+`date_key` in every table; what such a column is called in RDF is the
+generator's to decide. *`test_what_a_model_says_an_element_means_reaches_the_snapshot`*
 
 ### Next, in the order it is worth doing
 

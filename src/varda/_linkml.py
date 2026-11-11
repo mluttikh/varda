@@ -29,15 +29,20 @@ from .snapshot import (
     Annotations,
     Column,
     ColumnRole,
+    Enumeration,
     FactType,
     Hierarchy,
     Level,
+    Mappings,
     Model,
+    PermissibleValue,
     Ref,
     SlowlyChangingType,
     Table,
     TableRole,
     UniqueKey,
+    Unit,
+    expand_iri,
 )
 
 if TYPE_CHECKING:
@@ -179,6 +184,8 @@ def read(path: str | pathlib.Path, registry: Registry) -> Model:
         declared_prefixes=frozenset(
             str(p) for p in (view.schema.prefixes or {})
         ),
+        prefixes=_prefixes(view),
+        enums=_enums(view),
         declared_types=frozenset(str(t) for t in view.all_types()),
         declared_classes=frozenset(str(c) for c in view.all_classes()),
         declared_enums=frozenset(str(e) for e in view.all_enums()),
@@ -216,6 +223,71 @@ def _schema_files(view: SchemaView) -> dict[str, str]:
     return out
 
 
+def _prefixes(view: SchemaView) -> dict[str, str]:
+    """Map every prefix reachable from the schema to its namespace.
+
+    The imports first and the schema itself last, so that where two files
+    give one prefix two namespaces the model's own reading is the one kept.
+    Called after :func:`_schema_files` has walked the closure, without which
+    ``schema_map`` holds the one schema.
+    """
+    out: dict[str, str] = {}
+    schemas = list((view.schema_map or {}).values())
+    for found in [s for s in schemas if s is not view.schema] + [view.schema]:
+        for prefix in (found.prefixes or {}).values():
+            out[str(prefix.prefix_prefix)] = str(prefix.prefix_reference)
+    return dict(sorted(out.items()))
+
+
+def expand(view: SchemaView, uri: str) -> str | None:
+    """Expand a CURIE written in a profile, against that profile's prefixes."""
+    view.imports_closure()
+    return expand_iri(uri, _prefixes(view))
+
+
+def _enums(view: SchemaView) -> tuple[Enumeration, ...]:
+    """Read every enum the schema can see, sorted by name."""
+    out = [
+        Enumeration(
+            name=str(name),
+            description=(enum.description or "").strip(),
+            uri=_optional(enum.enum_uri),
+            values=tuple(
+                PermissibleValue(
+                    text=str(text),
+                    description=(value.description or "").strip(),
+                    title=_optional(value.title),
+                    meaning=_optional(value.meaning),
+                    mappings=_mappings(value),
+                )
+                for text, value in (enum.permissible_values or {}).items()
+            ),
+        )
+        for name, enum in view.all_enums().items()
+    ]
+    return tuple(sorted(out, key=lambda e: e.name))
+
+
+def _optional(value: Any) -> str | None:
+    """Read a metaslot as a plain string, or ``None`` where it is blank."""
+    if value is None:
+        return None
+    found = str(value).strip()
+    return found or None
+
+
+def _mappings(obj: Any) -> Mappings:
+    """Read LinkML's mapping slots off a class, a slot or an enum value."""
+    return Mappings(
+        exact=_strings(getattr(obj, "exact_mappings", None)),
+        close=_strings(getattr(obj, "close_mappings", None)),
+        related=_strings(getattr(obj, "related_mappings", None)),
+        narrow=_strings(getattr(obj, "narrow_mappings", None)),
+        broad=_strings(getattr(obj, "broad_mappings", None)),
+        unqualified=_strings(getattr(obj, "mappings", None)),
+    )
+
+
 def _table(
     view: SchemaView,
     name: str,
@@ -244,6 +316,10 @@ def _table(
         unique_keys=(),
         columns=(),
         description=(cls.description or "").strip(),
+        title=_optional(cls.title),
+        aliases=_strings(cls.aliases),
+        uri=_optional(cls.class_uri),
+        mappings=_mappings(cls),
         origin=origin,
         instantiates=tuple(str(x) for x in (cls.instantiates or [])),
         annotations=Annotations(annotations_of(cls)),
@@ -284,11 +360,15 @@ def _column(view: SchemaView, name: str, slot: Any, table: Table) -> Column:
         references=None,
         additivity=_member(Additivity, text(slot, "varda:additivity")),
         semi_additive_over=None,
-        unit=_unit(slot),
+        unit_of_measure=_unit(slot),
         max_length=None,
         precision=None,
         scale=None,
         description=(slot.description or "").strip(),
+        title=_optional(slot.title),
+        aliases=_strings(slot.aliases),
+        uri=_optional(slot.slot_uri),
+        mappings=_mappings(slot),
         instantiates=tuple(str(x) for x in (slot.instantiates or [])),
         annotations=Annotations(annotations_of(slot)),
     )
@@ -338,21 +418,21 @@ def _strings(value: Any) -> tuple[str, ...]:
     return (str(value),)
 
 
-def _unit(slot: Any) -> str | None:
-    """Read LinkML's ``unit`` as one label.
-
-    One unit may be written as a symbol, a UCUM code, an abbreviation or a
-    name, and a model may give any subset; they are tried in the order a
-    reader would recognize them.
-    """
+def _unit(slot: Any) -> Unit | None:
+    """Read LinkML's ``unit``, every part of it the model gave."""
     unit = getattr(slot, "unit", None)
     if unit is None:
         return None
-    for name in ("symbol", "ucum_code", "abbreviation", "descriptive_name"):
-        value = getattr(unit, name, None)
-        if value is not None and str(value).strip():
-            return str(value)
-    return None
+    return Unit(
+        symbol=_optional(getattr(unit, "symbol", None)),
+        ucum_code=_optional(getattr(unit, "ucum_code", None)),
+        abbreviation=_optional(getattr(unit, "abbreviation", None)),
+        descriptive_name=_optional(getattr(unit, "descriptive_name", None)),
+        iec61360code=_optional(getattr(unit, "iec61360code", None)),
+        has_quantity_kind=_optional(getattr(unit, "has_quantity_kind", None)),
+        derivation=_optional(getattr(unit, "derivation", None)),
+        exact_mappings=_strings(getattr(unit, "exact_mappings", None)),
+    )
 
 
 def _facet(column: Column, name: str) -> int | None:

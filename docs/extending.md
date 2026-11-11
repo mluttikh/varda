@@ -151,6 +151,24 @@ target, a grain column, a hierarchy level's key — is a `Ref`: the name, and
 the element it resolved to, or `None`. A model that fails `varda check` is
 still read, so a rule can report what is wrong with it.
 
+What a model says an element *means* is read from LinkML's own metaslots,
+not from annotations, and kept as the model wrote it:
+
+```python
+table.uri  # class_uri: "schema:Product", or None when none was declared
+column.uri  # slot_uri, likewise
+table.mappings.exact  # exact_mappings; also close, related, narrow, broad
+column.unit_of_measure  # every part of `unit`; column.unit is its label
+model.enum("Channel")  # an enum's values, and the `meaning` of each
+model.expand("schema:Product")  # "http://schema.org/Product"
+```
+
+An IRI the model did not declare is `None` rather than minted, and a CURIE
+whose prefix the model never declared expands to `None`: both are a rule's
+to report, as a `Ref` without a target is. What one of Varda's own values
+means is `model.vocabulary.meaning("ColumnRole", "VERSION_START")`, already
+expanded, because a model need not declare the profile's prefixes.
+
 What Varda *concludes* from a model is `analysis`, not the model itself:
 
 ```python

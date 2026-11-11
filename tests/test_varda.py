@@ -53,6 +53,7 @@ import shutil
 import subprocess
 import textwrap
 import warnings
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import duckdb
@@ -6226,7 +6227,7 @@ def _linkml_made(value: object, seen: set[int], path: str) -> Iterator[str]:
             yield from _linkml_made(
                 getattr(value, field.name, None), seen, f"{path}.{field.name}"
             )
-    elif isinstance(value, dict | varda_snapshot.Annotations):
+    elif isinstance(value, Mapping):
         for key, item in value.items():
             yield from _linkml_made(item, seen, f"{path}[{key!r}]")
     elif isinstance(value, list | tuple | frozenset):
@@ -6245,6 +6246,258 @@ def test_a_snapshot_holds_nothing_linkml_made(example: pathlib.Path) -> None:
     """
     leaks = sorted(_linkml_made(load(example), set(), "model"))
     assert not leaks, leaks[:5]
+
+
+def linked(tmp_path: pathlib.Path) -> Model:
+    """Load a model that says what its elements mean, in LinkML's own words.
+
+    No Varda annotation carries any of it: `class_uri`, `slot_uri`, the
+    mapping slots, `unit` and an enum value's `meaning` are all LinkML's,
+    and the model is a legal one with or without them.
+    """
+    schema = {
+        "id": "https://example.org/t",
+        "name": "t",
+        "prefixes": {
+            "linkml": "https://w3id.org/linkml/",
+            "varda": "https://w3id.org/varda/",
+            "schema": "http://schema.org/",
+            "skos": "http://www.w3.org/2004/02/skos/core#",
+            "unit": "http://qudt.org/vocab/unit/",
+        },
+        "default_prefix": "t",
+        "default_range": "string",
+        "imports": ["linkml:types"],
+        "enums": {
+            "Channel": {
+                "description": " Where an order was placed. ",
+                "enum_uri": "t:Channel",
+                "permissible_values": {
+                    "WEB": {
+                        "meaning": "schema:OnlineStore",
+                        "title": "Web shop",
+                        "close_mappings": ["skos:Concept"],
+                    },
+                    "STORE": {},
+                },
+            }
+        },
+        "classes": {
+            "DimProduct": dimension(
+                title="Product",
+                aliases=["article", "item"],
+                class_uri="schema:Product",
+                exact_mappings=["gr:ProductOrService"],
+                broad_mappings=["schema:Thing"],
+                mappings=["https://example.org/glossary/product"],
+            ),
+            "FctSale": {
+                "annotations": {
+                    "varda:role": "FACT",
+                    "varda:grain": ["d_key"],
+                    "varda:grain_statement": "one row per product sold",
+                },
+                "attributes": {
+                    "d_key": {
+                        "range": "integer",
+                        "required": True,
+                        "annotations": {
+                            "varda:role": "FOREIGN_KEY",
+                            "varda:references": "DimProduct",
+                        },
+                    },
+                    "net_amount": {
+                        "range": "decimal",
+                        "title": "Net amount",
+                        "slot_uri": "schema:price",
+                        "related_mappings": ["schema:totalPrice"],
+                        "unit": {
+                            "ucum_code": "[USD]",
+                            "descriptive_name": "US dollar",
+                            "exact_mappings": ["unit:USD"],
+                            "has_quantity_kind": "schema:MonetaryAmount",
+                        },
+                        "annotations": {
+                            "varda:role": "MEASURE",
+                            "varda:additivity": "ADDITIVE",
+                        },
+                    },
+                },
+            },
+        },
+    }
+    path = tmp_path / "t.yaml"
+    # Unsorted, because the order permissible values are declared in is
+    # part of what is read.
+    text = yaml.safe_dump(schema, sort_keys=False)
+    path.write_text(text, encoding="utf-8")
+    return load(path)
+
+
+def test_what_a_model_says_an_element_means_reaches_the_snapshot(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`class_uri`, `slot_uri` and the mapping slots are read, as written.
+
+    `varda check` accepted all of them and the snapshot held none, so a
+    model could link every table to an ontology and no rule could require
+    it and no generator emit it. Kept as the CURIE the model wrote, because
+    that spelling is what a finding quotes; `Model.expand` gives the IRI.
+    """
+    model = linked(tmp_path)
+    product = model.table("DimProduct")
+    sale = model.table("FctSale")
+    assert product is not None
+    assert sale is not None
+    assert product.uri == "schema:Product"
+    assert product.title == "Product"
+    assert product.aliases == ("article", "item")
+    assert list(product.mappings.items()) == [
+        ("exact", "gr:ProductOrService"),
+        ("broad", "schema:Thing"),
+        ("unqualified", "https://example.org/glossary/product"),
+    ]
+    amount = sale.column("net_amount")
+    assert amount is not None
+    assert amount.uri == "schema:price"
+    assert amount.title == "Net amount"
+    assert amount.mappings.related == ("schema:totalPrice",)
+    assert model.expand(amount.uri) == "http://schema.org/price"
+
+
+def test_an_undeclared_iri_is_none_rather_than_minted(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The snapshot records what the model said, and it said nothing.
+
+    LinkML would name an undeclared slot after the schema's default prefix,
+    which gives `d_key` in the dimension and `d_key` in the fact one IRI
+    between them — the collision `gen-owl` reports as an ambiguous
+    attribute and resolves by dropping the annotations of both. Which IRI
+    such a column gets is a generator's decision, so none is stored.
+    """
+    model = linked(tmp_path)
+    sale = model.table("FctSale")
+    assert sale is not None
+    key = sale.column("d_key")
+    assert key is not None
+    assert sale.uri is None
+    assert sale.title is None
+    assert not sale.mappings
+    assert key.uri is None
+    assert key.aliases == ()
+    assert not key.mappings
+
+
+def test_a_unit_keeps_every_part_the_model_gave(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A label can be printed and cannot be joined on.
+
+    `Column.unit` was the whole of what survived, so a measure that named
+    its unit in QUDT reached every generator as the text `[USD]`. The label
+    is unchanged and is now one reading of the unit rather than all of it.
+    """
+    model = linked(tmp_path)
+    sale = model.table("FctSale")
+    assert sale is not None
+    amount = sale.column("net_amount")
+    key = sale.column("d_key")
+    assert amount is not None
+    assert key is not None
+    unit = amount.unit_of_measure
+    assert unit is not None
+    assert amount.unit == unit.label == "[USD]"
+    assert unit.symbol is None
+    assert unit.descriptive_name == "US dollar"
+    assert unit.exact_mappings == ("unit:USD",)
+    assert unit.has_quantity_kind == "schema:MonetaryAmount"
+    assert model.expand(unit.exact_mappings[0]) == (
+        "http://qudt.org/vocab/unit/USD"
+    )
+    assert key.unit_of_measure is None
+    assert key.unit is None
+
+
+def test_a_curie_expands_through_the_prefixes_the_model_can_see(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An undeclared prefix resolves to nothing, as an unknown name does.
+
+    `gr:` is written in the model and declared nowhere, which is a finding
+    for a rule to make and not an error here. The prefixes of what a model
+    imports are included, because an imported table's IRIs are written
+    against the file that declared it; a full IRI is nobody's CURIE.
+    """
+    model = linked(tmp_path)
+    assert model.expand("schema:Product") == "http://schema.org/Product"
+    assert model.expand("gr:ProductOrService") is None
+    assert model.expand("Product") is None
+    assert model.expand("https://example.org/x") == "https://example.org/x"
+    assert model.expand("urn:isbn:0451450523") == "urn:isbn:0451450523"
+    assert model.prefixes["xsd"] == "http://www.w3.org/2001/XMLSchema#"
+    assert model.declared_prefixes < frozenset(model.prefixes)
+    assert "xsd" not in model.declared_prefixes
+    assert list(model.prefixes) == sorted(model.prefixes)
+
+
+def test_an_enum_carries_what_its_values_mean(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A value set is where a model already holds its links to a vocabulary.
+
+    Still not a column type — V804 refuses one as a range — but readable,
+    so a rule about controlled vocabularies has something to read.
+    """
+    model = linked(tmp_path)
+    assert [e.name for e in model.enums] == ["Channel"]
+    channel = model.enum("Channel")
+    assert channel is not None
+    assert channel.description == "Where an order was placed."
+    assert channel.uri == "t:Channel"
+    assert [v.text for v in channel.values] == ["WEB", "STORE"]
+    web = channel.value("WEB")
+    store = channel.value("STORE")
+    assert web is not None
+    assert store is not None
+    assert web.meaning == "schema:OnlineStore"
+    assert web.title == "Web shop"
+    assert web.mappings.close == ("skos:Concept",)
+    assert store.meaning is None
+    assert channel.value("PHONE") is None
+    assert model.enum("Nothing") is None
+    assert frozenset(e.name for e in model.enums) == model.declared_enums
+
+
+def test_the_linked_snapshot_holds_nothing_linkml_made(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The examples link to nothing, so they cannot hold this wall up.
+
+    Every field read here is a metaslot LinkML hands over as its own
+    `URIorCURIE`, `extended_str` or `UnitOfMeasure`.
+    """
+    leaks = sorted(_linkml_made(linked(tmp_path), set(), "model"))
+    assert not leaks, leaks[:5]
+
+
+def test_the_profile_says_what_its_own_values_mean() -> None:
+    """A `meaning` in the profile is answered as a full IRI.
+
+    The profile's prefixes are its own: a caller handed `time:hasBeginning`
+    would have nothing to expand it with, since a model need not declare
+    `time` to use `VERSION_START`.
+    """
+    declared = vocabulary()
+    assert declared.meaning("ColumnRole", "VERSION_START") == (
+        "http://www.w3.org/2006/time#hasBeginning"
+    )
+    assert declared.meaning("ColumnRole", "VERSION_END") == (
+        "http://www.w3.org/2006/time#hasEnd"
+    )
+    assert declared.meaning("ColumnRole", "MEASURE") is None
+    assert declared.meaning("ColumnRole", "NOT_A_ROLE") is None
+    assert declared.meaning("NotAnEnum", "MEASURE") is None
 
 
 def test_a_value_outside_its_enum_is_reported_once(

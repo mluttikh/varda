@@ -210,6 +210,144 @@ class Ref(Generic[T]):
 
 
 # ---------------------------------------------------------------------------
+# What the model says an element means
+#
+# LinkML already has the words for this — `class_uri`, `slot_uri`, the five
+# SKOS-shaped mapping slots, `unit`, an enum value's `meaning` — and Varda
+# adds none of its own. What it adds is that they arrive: a rule can require
+# them and a generator can emit them, where before a model could say all of
+# it and nothing downstream could tell.
+#
+# Every IRI is kept as it was written, a CURIE or a full IRI, because the
+# spelling is what the model says and what a finding should quote.
+# :meth:`Model.expand` turns one into the other.
+# ---------------------------------------------------------------------------
+
+
+def expand_iri(uri: str, prefixes: Mapping[str, str]) -> str | None:
+    """Expand a CURIE through a prefix map; see :meth:`Model.expand`."""
+    prefix, sep, local = uri.partition(":")
+    if not sep:
+        return None
+    namespace = prefixes.get(prefix)
+    if namespace is not None:
+        return namespace + local
+    # `https://…` and `urn:…` split on their first colon too, and neither
+    # is a CURIE: no prefix is named `https`, and what follows the scheme of
+    # a full IRI is never a bare local name.
+    if local.startswith("//") or prefix.lower() == "urn":
+        return uri
+    return None
+
+
+#: The kinds of mapping, in the order :meth:`Mappings.items` walks them.
+MAPPING_KINDS: tuple[str, ...] = (
+    "exact",
+    "close",
+    "related",
+    "narrow",
+    "broad",
+    "unqualified",
+)
+
+
+@dataclass(frozen=True)
+class Mappings:
+    """What an element is said to correspond to elsewhere, by how closely.
+
+    LinkML's mapping slots, one field each and named for the SKOS property
+    each one is. ``unqualified`` is the plain ``mappings:`` slot, which says
+    a correspondence exists and not which kind.
+    """
+
+    exact: tuple[str, ...] = ()
+    close: tuple[str, ...] = ()
+    related: tuple[str, ...] = ()
+    narrow: tuple[str, ...] = ()
+    broad: tuple[str, ...] = ()
+    unqualified: tuple[str, ...] = ()
+
+    def items(self) -> Iterator[tuple[str, str]]:
+        """Walk every mapping as ``(kind, target)``, closest kind first."""
+        for kind in MAPPING_KINDS:
+            for target in getattr(self, kind):
+                yield kind, target
+
+    def __bool__(self) -> bool:
+        """Flag whether the element maps to anything at all."""
+        return any(getattr(self, kind) for kind in MAPPING_KINDS)
+
+
+@dataclass(frozen=True)
+class Unit:
+    """LinkML's ``unit``, every part of it the model gave.
+
+    One unit may be written as a symbol, a UCUM code, an abbreviation or a
+    name, and a model may give any subset. :attr:`label` is the one a reader
+    would recognize; the rest is here because a label cannot be joined on,
+    and ``exact_mappings`` is where a model names the unit in QUDT.
+    """
+
+    symbol: str | None = None
+    ucum_code: str | None = None
+    abbreviation: str | None = None
+    descriptive_name: str | None = None
+    iec61360code: str | None = None
+    has_quantity_kind: str | None = None
+    derivation: str | None = None
+    exact_mappings: tuple[str, ...] = ()
+
+    @property
+    def label(self) -> str | None:
+        """The unit as one label, tried in the order a reader would know it."""
+        for value in (
+            self.symbol,
+            self.ucum_code,
+            self.abbreviation,
+            self.descriptive_name,
+        ):
+            if value is not None and value.strip():
+                return value
+        return None
+
+
+@dataclass(frozen=True)
+class PermissibleValue:
+    """One value of an enum, and the concept it stands for if it names one."""
+
+    text: str
+    description: str
+    title: str | None
+    #: LinkML's ``meaning``, as written.
+    meaning: str | None
+    mappings: Mappings
+
+
+@dataclass(frozen=True)
+class Enumeration:
+    """An enum the schema declares or imports.
+
+    Not a column type — V804 still refuses one as a range — but a value set
+    is where a model most often already holds its links to a controlled
+    vocabulary, and a hierarchy level that names a SKOS scheme will want to
+    point at one.
+    """
+
+    name: str
+    description: str
+    #: LinkML's ``enum_uri``, as written, or ``None`` when none was.
+    uri: str | None
+    values: tuple[PermissibleValue, ...]
+
+    def value(self, text: str) -> PermissibleValue | None:
+        """Look up one permissible value by its text."""
+        for found in self.values:
+            if found.text == text:
+                return found
+        return None
+
+
+# ---------------------------------------------------------------------------
 # The elements
 # ---------------------------------------------------------------------------
 
@@ -235,17 +373,34 @@ class Column:
     references: Ref[Table] | None
     additivity: Additivity | None
     semi_additive_over: Ref[Column] | None
-    #: LinkML's own ``unit``, as the label a reader would recognize.
-    unit: str | None
+    #: LinkML's own ``unit``, every part the model gave. :attr:`unit` is
+    #: the same thing as one label.
+    unit_of_measure: Unit | None
     #: The facets, each ``None`` unless declared, legal on this column's
     #: type and a whole number at or above its floor. V803 reports the rest.
     max_length: int | None
     precision: int | None
     scale: int | None
     description: str
+    #: LinkML's ``title`` and ``aliases``: what a person calls the column.
+    title: str | None
+    aliases: tuple[str, ...]
+    #: LinkML's ``slot_uri`` as written — a CURIE or a full IRI — or
+    #: ``None`` when the model declared none. Not defaulted: the IRI LinkML
+    #: would mint from the slot name is the same for a `date_key` in every
+    #: table, and which IRI an undeclared column gets is a generator's
+    #: decision rather than something the model said.
+    uri: str | None
+    mappings: Mappings
     instantiates: tuple[str, ...]
     annotations: Annotations
     table: Table = field(init=False, repr=False)
+
+    @property
+    def unit(self) -> str | None:
+        """LinkML's own ``unit``, as the label a reader would recognize."""
+        found = self.unit_of_measure
+        return None if found is None else found.label
 
     def parameterizes(self, facet: str) -> bool:
         """Flag whether this column's type is one ``facet`` says anything on.
@@ -363,6 +518,13 @@ class Table:
     #: Every column, inherited ones included, in declaration order.
     columns: tuple[Column, ...]
     description: str
+    #: LinkML's ``title`` and ``aliases``: what a person calls the table.
+    title: str | None
+    aliases: tuple[str, ...]
+    #: LinkML's ``class_uri`` as written, or ``None`` when the model
+    #: declared none. See :attr:`Column.uri` for why it is not defaulted.
+    uri: str | None
+    mappings: Mappings
     #: The file this class was declared in, when it arrived through
     #: ``imports:``; ``None`` when this model declared it. Named by file
     #: rather than by the schema's IRI, because the file is what somebody
@@ -480,6 +642,14 @@ class Model:
     #: The prefixes the schema itself declares — V003 does not warn about
     #: an annotation whose prefix the model has said it knows.
     declared_prefixes: frozenset[str]
+    #: Every prefix a CURIE in this model can be written with, and the
+    #: namespace each expands to: the schema's own and those of everything
+    #: it imports, because an imported table's ``class_uri`` is written
+    #: against the prefixes of the file that declared it. Where two files
+    #: disagree about a prefix, this schema's reading wins.
+    prefixes: Mapping[str, str]
+    #: Every enum the schema declares or imports, sorted by name.
+    enums: tuple[Enumeration, ...]
     #: Every type, class and enum the schema can resolve a range to, its
     #: imports included. V804 tells the three apart.
     declared_types: frozenset[str]
@@ -496,6 +666,23 @@ class Model:
     def table(self, name: str) -> Table | None:
         """Look up one table by class name."""
         return self._by_name.get(name)
+
+    def enum(self, name: str) -> Enumeration | None:
+        """Look up one enum by name."""
+        for found in self.enums:
+            if found.name == name:
+                return found
+        return None
+
+    def expand(self, uri: str) -> str | None:
+        """Turn an IRI the model wrote into a full one, or ``None``.
+
+        A CURIE is expanded through :attr:`prefixes`, and one whose prefix
+        the model never declared gives ``None`` — a name that resolves to
+        nothing, which is a rule's finding to report, exactly as a
+        :class:`Ref` without a target is. A full IRI is returned as it is.
+        """
+        return expand_iri(uri, self.prefixes)
 
     @property
     def facts(self) -> tuple[Table, ...]:
