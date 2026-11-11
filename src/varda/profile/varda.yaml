@@ -534,6 +534,12 @@ classes:
       not because LinkML enforces it: annotation values are opaque to LinkML,
       so a level naming a field this class does not have is caught by Varda's
       own rules rather than by the schema.
+
+      `varda:shorthand` is what makes the bare form legal: a scalar written
+      where a `Level` is expected is its `column`. A structured range
+      declaring no shorthand must be written as a mapping, and V007 says so.
+    annotations:
+      varda:shorthand: column
     attributes:
 
       column:

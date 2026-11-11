@@ -732,6 +732,16 @@ def _check_profiles(found: list[Extension]) -> None:
             )
             raise ExtensionError(msg)
         for name, cls in view.schema.classes.items():
+            # A shorthand naming no field would make every bare value of
+            # this range a mapping of something the class does not have,
+            # reported by V004 at every use rather than once, here.
+            short = _linkml.text(cls, f"{ext.prefix}:shorthand")
+            if short is not None and short not in (cls.attributes or {}):
+                msg = (
+                    f"{ext.name}: class {name} declares shorthand "
+                    f"{short!r}, which is not one of its fields"
+                )
+                raise ExtensionError(msg)
             target = _linkml.text(cls, f"{ext.prefix}:applies_to")
             if target is None:
                 continue

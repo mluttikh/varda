@@ -44,7 +44,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 53 rules (varda 0.4.0): 0 errors, 0 warnings
+8 tables checked against 55 rules (varda 0.4.0): 0 errors, 0 warnings
 ```
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -71,11 +71,11 @@ That is the whole reason for choosing annotations over a new format.
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 
-**Fifty-three rules**, in nine bands. A code names its concern:
+**Fifty-five rules**, in nine bands. A code names its concern:
 
 | | |
 | --- | --- |
-| `V001`–`V005` | The annotations themselves — typos, bad enum values, unknown prefixes, unknown fields |
+| `V001`–`V007` | The annotations themselves — typos, bad enum values, unknown prefixes, unknown fields, missing or mistyped values |
 | `V101`–`V104` | Roles — what a table is, what a column is, and where each role is legal |
 | `V201`–`V207` | Grain — a fact with no grain, a grain naming a column that does not exist, or one that may be absent |
 | `V301`–`V307` | Identity — a dimension with no natural key, a business key that repeats, two identities with nothing to tell them apart |

@@ -245,6 +245,24 @@ def expand(view: SchemaView, uri: str) -> str | None:
     return expand_iri(uri, _prefixes(view))
 
 
+def type_root(view: SchemaView, name: str) -> str | None:
+    """Name the `linkml:types` type a profile's type is declared in terms of.
+
+    ``None`` for a name that is no type at all, or one rooted outside
+    LinkML's own types.
+    """
+    try:
+        chain = [str(t) for t in view.type_ancestors(name)]
+    except ValueError:
+        return None
+    if not chain:
+        return None
+    root = chain[-1]
+    found = view.get_type(root)
+    origin = str(getattr(found, "from_schema", "") or "")
+    return root if origin.startswith("https://w3id.org/linkml/") else None
+
+
 def _enums(view: SchemaView) -> tuple[Enumeration, ...]:
     """Read every enum the schema can see, sorted by name."""
     out = [

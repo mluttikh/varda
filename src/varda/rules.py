@@ -30,7 +30,9 @@ covers everything tells a reader nothing.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from . import analysis
@@ -47,7 +49,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from .snapshot import Column, Element, Level, Model, Table
-    from .vocabulary import Target, Vocabulary
+    from .vocabulary import Declared, Target, Vocabulary
 
 RULES = RuleSet(tag="V")
 
@@ -270,6 +272,217 @@ def _stray_fields(
                 )
 
 
+# --- what a profile declares about a value ---
+#
+# A profile declares each annotation as a LinkML attribute, with a range,
+# `required` and `multivalued`, and LinkML enforces none of it: an
+# annotation's value is opaque to the metamodel. V006 and V007 are those
+# three, enforced on every active profile's terms. For Varda's own
+# vocabulary they add little, because a rule written for the purpose
+# already reports most of it with a message that says why; for an
+# extension they are the whole of the check, since nothing else reads its
+# declarations at all.
+
+#: What a dedicated rule already reports, and is skipped here so that one
+#: mistake is one finding. Keyed as `"<target> <tag>"` for an annotation and
+#: `"<prefix>:<Class>.<field>"` for a field of a structured one; the value
+#: names the rule, and a test provokes each to hold the claim.
+REPORTED_ELSEWHERE: dict[str, str] = {
+    "table varda:role": "V101",
+    "column varda:role": "V102",
+    "column varda:max_length": "V803",
+    "column varda:precision": "V803",
+    "column varda:scale": "V803",
+    "varda:Hierarchy.name": "V604",
+    "varda:Hierarchy.levels": "V603",
+}
+
+
+@dataclass(frozen=True)
+class _Fault:
+    """One way a value breaks its declaration, before it becomes a finding."""
+
+    #: `missing` for V006, `type` for V007.
+    kind: str
+    #: The key it would have in :data:`REPORTED_ELSEWHERE`.
+    key: str
+    message: str
+
+
+def _blank(value: Any) -> bool:
+    """Flag a value that says nothing: absent, empty, or only whitespace."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, list | Mapping):
+        return not value
+    return False
+
+
+def _faults(
+    model: Model,
+    subject: Table | Column,
+    target: Target,
+) -> Iterator[_Fault]:
+    """Walk one element's annotations against what their profiles declare."""
+    vocabulary = model.vocabulary
+    annotations = subject.annotations
+    for tag in vocabulary.required(target):
+        if _blank(annotations.get(tag)):
+            yield _Fault(
+                "missing",
+                f"{target} {tag}",
+                f"no {tag}; {vocabulary.profile_filename(tag.split(':')[0])} "
+                f"requires it on every {target}",
+            )
+    for tag, value in annotations.items():
+        declared = vocabulary.declaration(target, tag)
+        if declared is None or _blank(value):
+            continue  # V001's if undeclared; V006's above if required
+        walk = _Walk(vocabulary, tag.split(":")[0])
+        yield from walk.value(declared, value, tag, f"{target} {tag}")
+
+
+@dataclass(frozen=True)
+class _Walk:
+    """One annotation's value, walked against its profile's declarations.
+
+    Every range a structured annotation reaches is declared in the profile
+    that declares the annotation, so the prefix is fixed for the walk.
+    """
+
+    vocabulary: Vocabulary
+    prefix: str
+
+    def value(
+        self, declared: Declared, value: Any, where: str, key: str
+    ) -> Iterator[_Fault]:
+        """Walk one value against its declaration, recursing into structure.
+
+        A scalar where several values are allowed is one of them — `grain:
+        order_id` is how a one-column grain is written — so only the
+        reverse, a list where one value is declared, is a fault.
+        """
+        if declared.kind == "enum":
+            return  # V002 reads the value against the enum, list or not
+        if isinstance(value, list) and not declared.multivalued:
+            yield _Fault(
+                "type",
+                key,
+                f"{where} is a list; it takes one {declared.range}",
+            )
+            return
+        items = value if isinstance(value, list) else [value]
+        for i, item in enumerate(items):
+            at = f"{where}[{i}]" if isinstance(value, list) else where
+            if declared.kind == "class":
+                yield from self.entry(declared, item, at)
+                continue
+            problem = _type_problem(declared, item)
+            if problem is not None:
+                yield _Fault("type", key, f"{at} {problem}")
+
+    def entry(self, declared: Declared, item: Any, at: str) -> Iterator[_Fault]:
+        """Walk one entry of a structured annotation, field by field."""
+        cls = declared.range
+        fields = self.vocabulary.fields(self.prefix, cls)
+        if not isinstance(item, Mapping):
+            short = self.vocabulary.shorthand(self.prefix, cls)
+            if short is None:
+                yield _Fault(
+                    "type",
+                    f"{self.prefix}:{cls}",
+                    f"{at} is {item!r}; a {cls} is written as a mapping "
+                    f"of {', '.join(sorted(fields))}",
+                )
+                return
+            item = {short: item}
+        for name, field in fields.items():
+            nested = item.get(name)
+            key = f"{self.prefix}:{cls}.{name}"
+            if not _blank(nested):
+                yield from self.value(field, nested, f"{at}.{name}", key)
+            elif field.required:
+                yield _Fault(
+                    "missing",
+                    key,
+                    f"{at} has no {name!r}; every {cls} needs one",
+                )
+
+
+#: The `linkml:types` a value is checked against, and how each is read.
+#: Every other type — `string`, `date`, `uri` — takes any scalar, because
+#: what YAML made of `2024-01-01` or `yes` is the parser's reading and not
+#: something the model got wrong. Text is accepted where it spells the
+#: value, as V803 accepts it, since a schema that has been through a JSON
+#: round trip carries every annotation as a string.
+_WHOLE = re.compile(r"[+-]?\d+")
+_NUMBER = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
+
+
+def _type_problem(declared: Declared, item: Any) -> str | None:
+    """Say what is wrong with one scalar for its declared type, if anything."""
+    if isinstance(item, Mapping):
+        return f"is a mapping; it takes a {declared.range}"
+    if isinstance(item, list):
+        return f"is a list inside a list; it takes a {declared.range}"
+    text = str(item).strip()
+    base = declared.base
+    if base == "integer":
+        if isinstance(item, bool) or not _WHOLE.fullmatch(text):
+            return f"is {item!r}, which is not a whole number"
+    elif base == "boolean":
+        if not isinstance(item, bool) and text.lower() not in {
+            "true",
+            "false",
+        }:
+            return f"is {item!r}, which is not true or false"
+    elif base in {"float", "double", "decimal"} and (
+        isinstance(item, bool) or not _NUMBER.fullmatch(text)
+    ):
+        return f"is {item!r}, which is not a number"
+    return None
+
+
+def _subjects(model: Model) -> Iterator[tuple[Table | Column, Target]]:
+    """Walk every table and column, with the target each one is."""
+    for table in model.tables:
+        yield table, "table"
+        for column in table.columns:
+            yield column, "column"
+
+
+@RULES.rule("V006", "error", "Required annotations are present")
+def v006(model: Model) -> Iterator[Finding]:
+    """Flag an annotation, or a field of one, that a profile requires.
+
+    An extension declaring `cost_center` as `required: true` had to write a
+    rule saying so as well, and one that did not was a declaration nobody
+    enforced. Where Varda has a rule of its own for the case — every table
+    and column declares a role — that rule reports it instead.
+    """
+    for subject, target in _subjects(model):
+        for fault in _faults(model, subject, target):
+            if fault.kind == "missing" and fault.key not in REPORTED_ELSEWHERE:
+                yield Finding(subject, fault.message)
+
+
+@RULES.rule("V007", "error", "Annotation values have the declared type")
+def v007(model: Model) -> Iterator[Finding]:
+    """Flag a value its profile's range or `multivalued` does not admit.
+
+    `retention_days: thirty` reached an extension's rule as text where it
+    declared an integer, `grain_statement: [a, b]` was printed as a Python
+    list, and a hierarchy written as a bare name was dropped without a word.
+    Enum values are V002's and the type facets V803's.
+    """
+    for subject, target in _subjects(model):
+        for fault in _faults(model, subject, target):
+            if fault.kind == "type" and fault.key not in REPORTED_ELSEWHERE:
+                yield Finding(subject, fault.message)
+
+
 # -------------------------------------------------------------------------
 # V1xx — roles, and where each one is legal
 #
@@ -429,6 +642,8 @@ def v203(model: Model) -> Iterator[Finding]:
         have = {c.name for c in table.columns}
         seen: set[str] = set()
         for name in (ref.name for ref in table.grain):
+            if name in _structured_grain(table):
+                continue  # V007: an entry that is not a name at all
             if name not in have:
                 yield Finding(
                     table,
@@ -442,6 +657,19 @@ def v203(model: Model) -> Iterator[Finding]:
                     f"identify a row once",
                 )
             seen.add(name)
+
+
+def _structured_grain(table: Table) -> frozenset[str]:
+    """Name the grain entries written as a mapping or list, as read.
+
+    The snapshot reads every grain entry as the text of what was written,
+    so `{a: b}` arrives as a name nobody wrote. V007 reports the entry as
+    the wrong shape; reporting it again as an unknown column would describe
+    a model nobody wrote.
+    """
+    raw = table.annotations.get("varda:grain")
+    entries = raw if isinstance(raw, list) else [raw]
+    return frozenset(str(e) for e in entries if isinstance(e, Mapping | list))
 
 
 @RULES.rule("V204", "error", "Grain columns locate a row")
@@ -1026,6 +1254,8 @@ def v601(model: Model) -> Iterator[Finding]:
     for table in model.tables:
         for hierarchy in table.hierarchies:
             for level in hierarchy.levels:
+                if not level.spec.strip():
+                    continue  # V006: a level naming no column at all
                 message = _level_fault(table, level)
                 if message is None:
                     continue

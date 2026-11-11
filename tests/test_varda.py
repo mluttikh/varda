@@ -98,6 +98,7 @@ from varda.gen_docs import generate as generate_docs
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
 from varda.registry import PROFILE, TYPES, Config, Registry
+from varda.rules import REPORTED_ELSEWHERE
 from varda.snapshot import table_of
 
 if TYPE_CHECKING:
@@ -1497,8 +1498,364 @@ def test_extension_activates(tmp_path: pathlib.Path) -> None:
 def test_extension_rule_fires(tmp_path: pathlib.Path) -> None:
     from acme_ext import EXTENSION  # noqa: PLC0415
 
-    model = build(tmp_path, {"DimThing": dimension()}, extensions=[EXTENSION])
-    assert "ACME101" in codes(model)
+    fact = {
+        "annotations": {"varda:role": "FACT", "acme:cost_center": "CC-1"},
+        "attributes": {"x": {"annotations": {"varda:role": "ATTRIBUTE"}}},
+    }
+    model = build(
+        tmp_path,
+        {"DimThing": dimension(), "FctThing": fact},
+        extensions=[EXTENSION],
+    )
+    fired = [f for f in findings(model) if f.code == "ACME101"]
+    assert [str(f.subject) for f in fired] == ["FctThing"]
+
+
+# --- what a profile declares about a value: V006 and V007 ---
+
+
+def _acme(
+    tmp_path: pathlib.Path, **annotations: Any
+) -> tuple[Model, list[Issue]]:
+    """Load one dimension carrying ``annotations``, under the acme profile."""
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    table = dimension()
+    table["annotations"].update(annotations)
+    model = build(tmp_path, {"DimThing": table}, extensions=[EXTENSION])
+    return model, findings(model)
+
+
+def test_v006_an_extensions_required_annotation_is_enforced(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`required: true` in an extension's profile is a check, not a comment.
+
+    Acme had to write ACME101 to say every table names a cost center, and an
+    extension that did not write the rule had a declaration nobody read.
+    """
+    _, found = _acme(tmp_path)
+    missing = [f for f in found if f.code == "V006"]
+    assert [f.message for f in missing] == [
+        "no acme:cost_center; acme.yaml requires it on every table"
+    ]
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_v006_a_blank_value_is_no_value(
+    tmp_path: pathlib.Path, blank: str
+) -> None:
+    _, found = _acme(tmp_path, **{"acme:cost_center": blank})
+    assert "V006" in {f.code for f in found}
+
+
+def test_v006_a_required_field_inside_a_structure(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A level written as a mapping with no `column` names nothing.
+
+    V601 said `level '' is not a column`, which describes a model nobody
+    wrote; the finding is now the missing field, once.
+    """
+    model = build(
+        tmp_path,
+        {
+            "DimThing": dimension(
+                annotations={
+                    "varda:role": "DIMENSION",
+                    "varda:scd": "TYPE_1",
+                    "varda:hierarchies": [
+                        {"name": "path", "levels": [{"key": "d_id"}, "d_id"]}
+                    ],
+                }
+            )
+        },
+    )
+    found = findings(model)
+    assert [(f.code, f.message) for f in found if f.code == "V006"] == [
+        (
+            "V006",
+            (
+                "varda:hierarchies[0].levels[0] has no 'column'; every Level "
+                "needs one"
+            ),
+        )
+    ]
+    assert "V601" not in {f.code for f in found}
+
+
+@pytest.mark.parametrize(
+    ("value", "problem"),
+    [
+        ("thirty", "'thirty', which is not a whole number"),
+        (True, "True, which is not a whole number"),
+        (3.5, "3.5, which is not a whole number"),
+        ([30, 60], "a list; it takes one integer"),
+    ],
+)
+def test_v007_a_value_its_declared_type_does_not_admit(
+    tmp_path: pathlib.Path, value: object, problem: str
+) -> None:
+    """`retention_days: thirty` reached Acme's rules as text.
+
+    The profile declared an integer, and nothing read the declaration.
+    """
+    _, found = _acme(
+        tmp_path,
+        **{"acme:cost_center": "CC-1", "acme:retention_days": value},
+    )
+    wrong = [f.message for f in found if f.code == "V007"]
+    assert wrong == [f"acme:retention_days is {problem}"]
+
+
+@pytest.mark.parametrize("value", [30, "30", " +30 ", 0])
+def test_v007_a_whole_number_written_as_text_is_one(
+    tmp_path: pathlib.Path, value: object
+) -> None:
+    """Accepted as V803 accepts a facet: a JSON round trip makes it text."""
+    _, found = _acme(
+        tmp_path,
+        **{"acme:cost_center": "CC-1", "acme:retention_days": value},
+    )
+    assert {"V006", "V007"}.isdisjoint(f.code for f in found)
+
+
+def test_v007_one_value_where_several_are_allowed_is_one_of_them(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`grain: order_id` is how a one-column grain is written.
+
+    `multivalued` admits a list and does not demand one; only the reverse
+    is a fault.
+    """
+    fact = {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:fact_type": "FACTLESS",
+            "varda:grain": "d_key",
+            "varda:grain_statement": ["one row per thing", "and more"],
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "required": True,
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            }
+        },
+    }
+    model = build(tmp_path, {"DimThing": dimension(), "FctThing": fact})
+    wrong = [f.message for f in findings(model) if f.code == "V007"]
+    assert wrong == ["varda:grain_statement is a list; it takes one string"]
+
+
+def test_v007_a_structure_written_as_a_bare_name(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A hierarchy written as its name was dropped without a word.
+
+    The snapshot skips an entry that is not a mapping, so the hierarchy
+    reached no rule and no generator, and the model passed. A level may be
+    written bare, because `Level` declares what a bare value stands for;
+    `Hierarchy` declares nothing, so it may not.
+    """
+    model = build(
+        tmp_path,
+        {
+            "DimThing": dimension(
+                annotations={
+                    "varda:role": "DIMENSION",
+                    "varda:scd": "TYPE_1",
+                    "varda:hierarchies": ["geography"],
+                }
+            )
+        },
+    )
+    thing = model.table("DimThing")
+    assert thing is not None
+    assert thing.hierarchies == ()
+    wrong = [f.message for f in findings(model) if f.code == "V007"]
+    assert wrong == [
+        (
+            "varda:hierarchies[0] is 'geography'; a Hierarchy is written as a "
+            "mapping of description, levels, name"
+        )
+    ]
+
+
+def test_v007_a_grain_entry_that_is_not_a_name_is_reported_once(
+    tmp_path: pathlib.Path,
+) -> None:
+    """V203 read `{a: b}` as a column called `{'a': 'b'}`."""
+    fact = {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:grain": ["d_key", {"a": "b"}],
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "required": True,
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            }
+        },
+    }
+    model = build(tmp_path, {"DimThing": dimension(), "FctThing": fact})
+    found = findings(model)
+    assert [f.message for f in found if f.code == "V007"] == [
+        "varda:grain[1] is a mapping; it takes a string"
+    ]
+    assert "V203" not in {f.code for f in found}
+
+
+#: One model per entry in `REPORTED_ELSEWHERE`, provoking what it skips.
+_SKIPPED: list[tuple[str, str, dict[str, Any]]] = [
+    (
+        "table varda:role",
+        "V101",
+        {"DimThing": dimension(annotations={"varda:scd": "TYPE_1"})},
+    ),
+    (
+        "column varda:role",
+        "V102",
+        {
+            "DimThing": dimension(
+                attributes={
+                    **dimension()["attributes"],
+                    "label": {"annotations": {"varda:max_length": 9}},
+                }
+            )
+        },
+    ),
+    *(
+        (
+            f"column varda:{facet}",
+            "V803",
+            {
+                "DimThing": dimension(
+                    attributes={
+                        **dimension()["attributes"],
+                        "amount": {
+                            "range": "decimal",
+                            "annotations": {
+                                "varda:role": "ATTRIBUTE",
+                                f"varda:{facet}": "wide",
+                            },
+                        },
+                    }
+                )
+            },
+        )
+        for facet in ("max_length", "precision", "scale")
+    ),
+    (
+        "varda:Hierarchy.name",
+        "V604",
+        {
+            "DimThing": dimension(
+                annotations={
+                    "varda:role": "DIMENSION",
+                    "varda:scd": "TYPE_1",
+                    "varda:hierarchies": [{"levels": ["d_id", "d_key"]}],
+                }
+            )
+        },
+    ),
+    (
+        "varda:Hierarchy.levels",
+        "V603",
+        {
+            "DimThing": dimension(
+                annotations={
+                    "varda:role": "DIMENSION",
+                    "varda:scd": "TYPE_1",
+                    "varda:hierarchies": [{"name": "path"}],
+                }
+            )
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize(("key", "code", "classes"), _SKIPPED)
+def test_what_v006_and_v007_skip_is_reported_by_the_rule_named(
+    tmp_path: pathlib.Path,
+    key: str,
+    code: str,
+    classes: dict[str, Any],
+) -> None:
+    """A skip is a claim that another rule speaks, and is held to it.
+
+    Without this, removing V803's check of a facet would leave a malformed
+    `max_length` reported by nobody: V007 stood aside on V803's word.
+    """
+    assert REPORTED_ELSEWHERE[key] == code
+    fired = codes(build(tmp_path, classes))
+    assert code in fired
+    assert {"V006", "V007"}.isdisjoint(fired)
+
+
+def test_every_skip_is_held_by_a_case() -> None:
+    """A new entry in `REPORTED_ELSEWHERE` needs a case above."""
+    assert sorted(k for k, _, _ in _SKIPPED) == sorted(REPORTED_ELSEWHERE)
+
+
+def test_a_shorthand_must_name_a_field(tmp_path: pathlib.Path) -> None:
+    """Refused at load, once, rather than at every bare value of the range."""
+    profile = tmp_path / "p.yaml"
+    profile.write_text(
+        textwrap.dedent("""
+        id: https://example.org/p
+        name: p
+        prefixes:
+          linkml: https://w3id.org/linkml/
+          p: https://example.org/p/
+        default_prefix: p
+        imports: [linkml:types]
+        classes:
+          Owner:
+            annotations:
+              p:shorthand: teem
+            attributes:
+              team: {}
+        """),
+        encoding="utf-8",
+    )
+    ext = Extension(name="p", prefix="p", profile=profile)
+    with pytest.raises(ExtensionError, match="shorthand 'teem'"):
+        Registry.of(ext)
+
+
+def test_the_vocabulary_reads_what_a_profile_declares() -> None:
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    declared = vocabulary(EXTENSION)
+    assert declared.required("table") == ("acme:cost_center", "varda:role")
+    assert declared.required("column") == ("varda:role",)
+    days = declared.declaration("table", "acme:retention_days")
+    assert days is not None
+    assert (days.kind, days.base, days.required) == ("type", "integer", False)
+    grain = declared.declaration("table", "varda:grain")
+    assert grain is not None
+    assert grain.multivalued
+    role = declared.declaration("column", "varda:role")
+    assert role is not None
+    assert (role.kind, role.base) == ("enum", None)
+    levels = declared.fields("varda", "Hierarchy")["levels"]
+    assert (levels.kind, levels.range, levels.required) == (
+        "class",
+        "Level",
+        True,
+    )
+    assert declared.shorthand("varda", "Level") == "column"
+    assert declared.shorthand("varda", "Hierarchy") is None
+    assert declared.fields("varda", "Nothing") == {}
+    assert declared.declaration("table", "acme:nothing") is None
 
 
 def test_extension_enum_is_checked(tmp_path: pathlib.Path) -> None:

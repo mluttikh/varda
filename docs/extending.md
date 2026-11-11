@@ -59,15 +59,35 @@ profile = "profiles/acme.yaml"
 ```
 
 From then on `acme:cost_center` is first-class. It is checked for typos, its
-enum values are enforced, and `varda ext` lists it:
+enum values are enforced, what the profile declares about each annotation is
+held to — `required`, the range, `multivalued` — and `varda ext` lists it:
 
 ```console
 $ varda check mart.yaml
 ERROR V001  DimStore
-        unknown table annotation 'acme:cost_center'; declare it in acme.yaml or fix the typo
+        unknown table annotation 'acme:cost_centre'; declare it in acme.yaml or fix the typo
 ERROR V002  DimSegment
         acme:sensitivity is 'secret', which is not a value of Sensitivity;
         expected one of public, internal, restricted
+ERROR V006  DimStore
+        no acme:cost_center; acme.yaml requires it on every table
+ERROR V007  FctSales
+        acme:retention_days is 'thirty', which is not a whole number
+```
+
+A structured annotation — a range that is one of the profile's classes — is
+checked field by field, and written as a mapping. A class may name the one
+field a bare value stands for, as Varda's `Level` does for `column`:
+
+```yaml
+  AcmeOwner:
+    annotations:
+      acme:shorthand: team
+    attributes:
+      team:
+        required: true
+      escalation:
+        range: string
 ```
 
 That is Varda's own validator policing *your* vocabulary — which is what
@@ -91,13 +111,14 @@ HERE = pathlib.Path(__file__).parent
 RULES = RuleSet(tag="ACME")
 
 
-@RULES.rule("ACME101", "error", "Every table names a cost center")
+@RULES.rule("ACME101", "error", "Every fact says how long its rows are kept")
 def acme101(model: Model) -> Iterator[Finding]:
-    for table in model.tables:
-        if not table.annotations.of("acme").get("cost_center"):
+    for table in model.facts:
+        if table.annotations.of("acme").get("retention_days") is None:
             yield Finding(
                 table,
-                "no acme:cost_center; storage has to be billed to someone",
+                "no acme:retention_days; a fact grows until somebody says "
+                "when its rows go",
             )
 
 
@@ -110,6 +131,11 @@ EXTENSION = Extension(
     package="acme_ext",
 )
 ```
+
+Write a rule for what a profile cannot declare. That every table names a
+cost center is `required: true` in `acme.yaml`, and V006 enforces it; that
+only *facts* name a retention period is a condition on the role, which no
+LinkML declaration states.
 
 A rule yields what is wrong and with what: the table, column, hierarchy or
 unique key, and a message. The code and severity are the decorator's, and
@@ -416,7 +442,7 @@ $ varda ext
 varda 0.4.0  [varda:]
     origin      built in
     rule tag    V
-    rules       53
+    rules       55
     table       varda:fact_type, varda:grain, varda:grain_statement, ...
     column      varda:additivity, varda:physical_name, varda:references, ...
     generators  sql, assertions, docs, sqlalchemy

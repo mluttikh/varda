@@ -51,7 +51,7 @@ from .snapshot import (
     UniqueKey,
     Unit,
 )
-from .vocabulary import Vocabulary
+from .vocabulary import Declared, Vocabulary
 
 if TYPE_CHECKING:
     import pathlib
@@ -63,6 +63,7 @@ __all__ = [
     "Column",
     "ColumnRole",
     "Context",
+    "Declared",
     "Element",
     "Enumeration",
     "Extension",
