@@ -48,6 +48,13 @@ each version on its own would need the current row, which only some designs
 mark. Completeness is checked there all the same: a version missing its
 category is as broken as a row.
 
+**A tree is checked where it is stored.** A parent-child hierarchy claims
+no member is its own parent; a longer cycle needs a recursive query, which
+the engines spell differently, and is not checked. A bridged one claims its
+bridge is a closure: every descendant is listed as its own ancestor, and
+the depth is zero there and nowhere else. These are about the bridge, the
+table holding every column they name.
+
 Nulls follow SQL's reading, as in the assertions: a row whose key is null
 is not part of any claim about that key.
 """
@@ -60,9 +67,12 @@ from . import analysis, claims
 from .claims import (
     AtMostOneFlagged,
     Determines,
+    Differs,
+    Distance,
     FlaggedIsLatest,
     PeriodNonEmpty,
     PeriodsDisjoint,
+    Reflexive,
     Requires,
 )
 from .ext import ClaimError
@@ -235,6 +245,45 @@ def _missing(claim: Requires, relation: str) -> list[str]:
     ]
 
 
+def _equal(claim: Differs, relation: str) -> list[str]:
+    """Render the rows holding one value on both sides."""
+    left, right = quoted(claim.left.physical), quoted(claim.right.physical)
+    return [
+        'SELECT count(*) AS "equal"',
+        f"FROM {relation}",
+        f"WHERE {left} = {right};",
+    ]
+
+
+def _unlisted(claim: Reflexive, table: Table, schema: str) -> list[str]:
+    """Render the values of ``right`` with no row pairing them to themselves."""
+    left, right = quoted(claim.left.physical), quoted(claim.right.physical)
+    return [
+        f'SELECT "a".{right}, count(*) AS "unlisted"',
+        f"FROM {_relation(table, schema, 'a')}",
+        f'WHERE "a".{right} IS NOT NULL',
+        "  AND NOT EXISTS (",
+        "    SELECT 1",
+        f"    FROM {_relation(table, schema, 'b')}",
+        f'    WHERE "b".{left} = "a".{right}',
+        f'      AND "b".{right} = "a".{right}',
+        "  )",
+        f'GROUP BY "a".{right};',
+    ]
+
+
+def _misplaced(claim: Distance, relation: str) -> list[str]:
+    """Render the rows whose distance is zero off the diagonal, or not on it."""
+    s, e = quoted(claim.start.physical), quoted(claim.end.physical)
+    d = quoted(claim.distance.physical)
+    return [
+        'SELECT count(*) AS "misplaced"',
+        f"FROM {relation}",
+        f"WHERE ({s} = {e} AND {d} <> 0)",
+        f"   OR ({s} <> {e} AND {d} <= 0);",
+    ]
+
+
 def render(claim: Claim, schema: str = "mart", claimant: str = "") -> str:
     """Render one claim as a labelled query for the rows that break it.
 
@@ -257,6 +306,12 @@ def render(claim: Claim, schema: str = "mart", claimant: str = "") -> str:
             query = _determines(claim, relation)
         case Requires():
             query = _missing(claim, relation)
+        case Differs():
+            query = _equal(claim, relation)
+        case Reflexive():
+            query = _unlisted(claim, table, schema)
+        case Distance():
+            query = _misplaced(claim, relation)
         case _:
             assert_never(claim)
     by = f" (claimed by {claimant})" if claimant else ""

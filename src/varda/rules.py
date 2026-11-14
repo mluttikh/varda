@@ -44,12 +44,13 @@ from .snapshot import (
     ORDERED_AGGREGATES,
     VERSIONING_ROLES,
     ColumnRole,
+    HierarchyKind,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from .snapshot import Column, Element, Level, Model, Table
+    from .snapshot import Column, Element, Hierarchy, Level, Model, Ref, Table
     from .vocabulary import Declared, Target, Vocabulary
 
 RULES = RuleSet(tag="V")
@@ -295,7 +296,6 @@ REPORTED_ELSEWHERE: dict[str, str] = {
     "column varda:precision": "V803",
     "column varda:scale": "V803",
     "varda:Hierarchy.name": "V604",
-    "varda:Hierarchy.levels": "V603",
 }
 
 
@@ -366,7 +366,11 @@ class _Walk:
         reverse, a list where one value is declared, is a fault.
         """
         if declared.kind == "enum":
-            return  # V002 reads the value against the enum, list or not
+            # V002 reads an annotation's own value against its enum. A field
+            # of a structured one reaches no other rule, so it is read here.
+            if where != key.partition(" ")[2]:
+                yield from self.member(declared, value, where, key)
+            return
         if isinstance(value, list) and not declared.multivalued:
             yield _Fault(
                 "type",
@@ -383,6 +387,22 @@ class _Walk:
             problem = _type_problem(declared, item)
             if problem is not None:
                 yield _Fault("type", key, f"{at} {problem}")
+
+    def member(
+        self, declared: Declared, value: Any, where: str, key: str
+    ) -> Iterator[_Fault]:
+        """Read a structured field's value against the enum it ranges over."""
+        allowed = self.vocabulary.permitted(declared.range)
+        items = value if isinstance(value, list) else [value]
+        for item in items:
+            if str(item) in allowed:
+                continue
+            yield _Fault(
+                "type",
+                key,
+                f"{where} is {str(item)!r}, which is not a value of "
+                f"{declared.range}; expected one of {', '.join(allowed)}",
+            )
 
     def entry(self, declared: Declared, item: Any, at: str) -> Iterator[_Fault]:
         """Walk one entry of a structured annotation, field by field."""
@@ -1553,6 +1573,8 @@ def v603(model: Model) -> Iterator[Finding]:
     """
     for table in model.tables:
         for hierarchy in table.hierarchies:
+            if hierarchy.kind != HierarchyKind.LEVELS:
+                continue  # another kind has no levels; V608 says if it does
             if len(hierarchy.levels) >= HIERARCHY_MIN_LEVELS:
                 continue
             yield Finding(
@@ -1707,6 +1729,152 @@ def v607(model: Model) -> Iterator[Finding]:
                         f"level {level.spec!r} is keyed on {name!r}, "
                         f"which is a {column.role} and identifies no member",
                     )
+
+
+#: The fields each kind of hierarchy uses beyond its name and description,
+#: and of those the ones it cannot do without. `levels` is V603's to ask
+#: for, which says how many.
+_USES: dict[HierarchyKind, frozenset[str]] = {
+    HierarchyKind.LEVELS: frozenset({"levels", "strict", "complete"}),
+    HierarchyKind.PARENT_CHILD: frozenset({"parent"}),
+    HierarchyKind.BRIDGED: frozenset(
+        {"bridge", "ancestor", "descendant", "depth"}
+    ),
+}
+_NEEDS: dict[HierarchyKind, tuple[str, ...]] = {
+    HierarchyKind.LEVELS: (),
+    HierarchyKind.PARENT_CHILD: ("parent",),
+    HierarchyKind.BRIDGED: ("bridge", "ancestor", "descendant"),
+}
+_SHARED = frozenset({"name", "description", "kind"})
+
+
+@RULES.rule("V608", "error", "A hierarchy carries the fields its kind uses")
+def v608(model: Model) -> Iterator[Finding]:
+    """Flag a hierarchy missing what its kind needs, or holding another's.
+
+    Each kind is read through its own fields and no other's, so a field
+    written for the wrong kind reaches no rule and no generator: a
+    parent-child path carrying `levels` would pass with drill steps nobody
+    drills, and `strict` on a bridge would claim something nothing checks.
+    A kind that is not one is V007's.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            kind = hierarchy.kind
+            if kind is None:
+                continue
+            for field in _NEEDS[kind]:
+                if field not in hierarchy.written:
+                    yield Finding(
+                        hierarchy,
+                        f"a {kind} hierarchy with no {field}; it says which "
+                        f"column holds the tree",
+                    )
+            stray = sorted(hierarchy.written - _SHARED - _USES[kind])
+            if stray:
+                yield Finding(
+                    hierarchy,
+                    f"{', '.join(stray)} on a {kind} hierarchy, which uses "
+                    f"{', '.join(sorted(_USES[kind]))}",
+                )
+
+
+def _into(ref: Ref[Column] | None, home: Table, what: str) -> str | None:
+    """Say why a field does not name a foreign key into ``home``, if not."""
+    if ref is None:
+        return None  # V608 reports it
+    column = ref.target
+    if column is None:
+        return f"{what} names {ref.name!r}, which is not a column there"
+    if column.role != "FOREIGN_KEY":
+        role = column.role or "column with no role"
+        return (
+            f"{what} names {ref.name!r}, a {role}; it must be a FOREIGN_KEY "
+            f"into {home.name}"
+        )
+    target = column.references.target if column.references else None
+    if target is not home:
+        named = column.references.name if column.references else "nothing"
+        return (
+            f"{what} names {ref.name!r}, which references {named}; it must "
+            f"reference {home.name}, the table the hierarchy is on"
+        )
+    return None
+
+
+@RULES.rule(
+    "V609", "error", "A parent-child hierarchy's parent is a key into its table"
+)
+def v609(model: Model) -> Iterator[Finding]:
+    """Flag a parent that cannot name a row of the hierarchy's own table.
+
+    The tree is the table's rows, each naming another of them. A parent
+    that is not a foreign key, or one into another table, describes a
+    snowflake rather than a tree, and a query walking it walks off the edge.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            if hierarchy.kind != HierarchyKind.PARENT_CHILD:
+                continue
+            problem = _into(hierarchy.parent, table, "parent")
+            if problem is not None:
+                yield Finding(hierarchy, problem)
+
+
+@RULES.rule(
+    "V610", "error", "A bridged hierarchy's bridge relates its table to itself"
+)
+def v610(model: Model) -> Iterator[Finding]:
+    """Flag a bridge that cannot hold this dimension's tree.
+
+    The bridge must be a BRIDGE, and its ancestor and descendant two
+    distinct foreign keys into the dimension the hierarchy is on. The depth,
+    where declared, is a whole number of steps.
+    """
+    for table in model.tables:
+        for hierarchy in table.hierarchies:
+            if hierarchy.kind != HierarchyKind.BRIDGED:
+                continue
+            for problem in _bridge_problems(hierarchy):
+                yield Finding(hierarchy, problem)
+
+
+def _bridge_problems(hierarchy: Hierarchy) -> Iterator[str]:
+    """Say each way a bridged hierarchy's bridge cannot hold its tree."""
+    table = hierarchy.table
+    ref = hierarchy.bridge
+    bridge = ref.target if ref is not None else None
+    if ref is None:
+        return  # V608 reports it
+    if bridge is None or not bridge.is_bridge:
+        what = "nothing" if bridge is None else f"a {bridge.role}"
+        yield f"bridge names {ref.name!r}, {what}; it must be a BRIDGE"
+        return
+    for field, part in (
+        ("ancestor", hierarchy.ancestor),
+        ("descendant", hierarchy.descendant),
+    ):
+        problem = _into(part, table, field)
+        if problem is not None:
+            yield problem
+    up, down = hierarchy.ancestor, hierarchy.descendant
+    same = up is not None and down is not None and up.target is down.target
+    if same and up is not None and up.target is not None:
+        yield "ancestor and descendant name one column; they are two"
+    depth = hierarchy.depth
+    if depth is None:
+        return
+    if depth.target is None:
+        yield (
+            f"depth names {depth.name!r}, which is not a column of "
+            f"{bridge.name}"
+        )
+    elif analysis.storage(depth.target) != "integer":
+        yield (
+            f"depth names {depth.name!r}, whose range is "
+            f"{depth.target.range!r}; a depth is a whole number of steps"
+        )
 
 
 # -------------------------------------------------------------------------

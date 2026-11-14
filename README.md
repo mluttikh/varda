@@ -63,7 +63,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 64 rules (varda 0.4.0): 0 errors, 0 warnings
+8 tables checked against 67 rules (varda 0.4.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -91,7 +91,7 @@ on columns — `role`, `references`, `lands_on`, `previous_of`, `additivity`,
 vocabulary, and it is deliberately the whole core vocabulary. Units are
 LinkML's own `unit`, which Varda reads rather than restates.
 
-**Sixty-four rules** that catch the mistakes worth catching. A code names
+**Sixty-seven rules** that catch the mistakes worth catching. A code names
 its concern, so the band tells you where to look:
 
 | | |
@@ -102,7 +102,7 @@ its concern, so the band tells you where to look:
 | `V301`–`V309` | identity — a dimension with no natural key, a business key that repeats, two identities with nothing to tell them apart, two durable keys |
 | `V401`–`V409` | references — a foreign key pointing at a fact, one naming no target, one typed unlike the key it names, one landing on a durable key its target lacks |
 | `V501`–`V509` | time — a version period on a dimension that keeps no versions, a previous value of nothing |
-| `V601`–`V607` | hierarchies — a level that is not a column, a path of one level |
+| `V601`–`V610` | hierarchies — a level that is not a column, a path of one level, a tree whose parent is not a key into its own table |
 | `V701`–`V710` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross or what it takes instead, a decimal one that never says what it keeps |
 | `V801`–`V804` | physical naming and types — two classes emitting one table, a width on a column that has none, a range naming nothing |
 

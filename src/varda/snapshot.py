@@ -113,6 +113,14 @@ class SlowlyChangingType(StrEnum):
     TYPE_2 = "TYPE_2"
 
 
+class HierarchyKind(StrEnum):
+    """How a drill path is stored."""
+
+    LEVELS = "LEVELS"
+    PARENT_CHILD = "PARENT_CHILD"
+    BRIDGED = "BRIDGED"
+
+
 class FactType(StrEnum):
     """The temporal shape of a fact table."""
 
@@ -502,11 +510,32 @@ class Level:
 
 @dataclass(frozen=True, eq=False)
 class Hierarchy:
-    """One named drill path, its levels from least to most granular."""
+    """One named drill path.
+
+    A ``LEVELS`` path is its levels, least granular first. A
+    ``PARENT_CHILD`` one is a tree each row places itself in through
+    ``parent``, a foreign key into its own table. A ``BRIDGED`` one is the
+    same tree flattened into ``bridge``, a row per ancestor and descendant
+    with the ``depth`` between them, so that a query needs no recursion.
+    Every part a kind does not use is empty, and V608 reports one that is
+    not.
+    """
 
     name: str
     description: str
+    #: ``None`` for a kind that is not one of :class:`HierarchyKind`, which
+    #: V007 reports; ``LEVELS`` where none was written.
+    kind: HierarchyKind | None
     levels: tuple[Level, ...]
+    parent: Ref[Column] | None
+    bridge: Ref[Table] | None
+    #: Columns of :attr:`bridge`, wherever it resolves.
+    ancestor: Ref[Column] | None
+    descendant: Ref[Column] | None
+    depth: Ref[Column] | None
+    #: The fields the model wrote, so a rule can tell one declared for the
+    #: wrong kind from one left to its default.
+    written: frozenset[str]
     #: Whether each level's own key tells its members apart, so every member
     #: has one parent. ``False`` unless declared: a plain level's column
     #: identifies a member only under its parent by default.
