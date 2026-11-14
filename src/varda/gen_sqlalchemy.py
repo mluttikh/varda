@@ -262,7 +262,12 @@ def _parts(
 def _hierarchies(table: Table) -> list[dict[str, object]]:
     """Render the drill paths as plain data a consumer can walk."""
     return [
-        {"name": h.name, "levels": list(h.specs)}
+        {
+            "name": h.name,
+            "levels": list(h.specs),
+            "strict": h.strict,
+            "complete": h.complete,
+        }
         for h in table.hierarchies
         if h.name
     ]

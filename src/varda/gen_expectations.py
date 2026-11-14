@@ -33,10 +33,20 @@ key is different: the key names one row of another dimension, so it can sit
 under one parent and no other. And where a level declares a key apart from
 its name, every row sharing that key must share the name.
 
-**Not for a type-2 dimension's hierarchies.** Its rows are versions, and a
-city moving region is history rather than a contradiction. Checking each
-version on its own would need the current row, which only some designs
-mark; the hierarchy checks wait for a declaration of that.
+A plain level is checked the same way where its hierarchy is declared
+`strict`, which says each level's column identifies a member on its own.
+
+**A hierarchy is complete unless it says otherwise.** A row holding a level
+holds the level above it, or it drops out of every roll-up through that
+level. Not checked where the column above is required, which the DDL
+already states, and not for a hierarchy declared `complete: false`, whose
+rows may skip a level.
+
+**No roll-up for a type-2 dimension's hierarchies.** Its rows are versions,
+and a city moving region is history rather than a contradiction. Checking
+each version on its own would need the current row, which only some designs
+mark. Completeness is checked there all the same: a version missing its
+category is as broken as a row.
 
 Nulls follow SQL's reading, as in the assertions: a row whose key is null
 is not part of any claim about that key.
@@ -53,6 +63,7 @@ from .claims import (
     FlaggedIsLatest,
     PeriodNonEmpty,
     PeriodsDisjoint,
+    Requires,
 )
 from .ext import ClaimError
 from .gen_assertions import LABEL
@@ -211,6 +222,19 @@ def _determines(claim: Determines, relation: str) -> list[str]:
     ]
 
 
+def _missing(claim: Requires, relation: str) -> list[str]:
+    """Render the rows holding what is given and lacking what it requires."""
+    lacking = [f"{quoted(c.physical)} IS NULL" for c in claim.required]
+    return [
+        'SELECT count(*) AS "missing"',
+        f"FROM {relation}",
+        *_present(claim.given),
+        f"  AND ({' OR '.join(lacking)});"
+        if len(lacking) > 1
+        else f"  AND {lacking[0]};",
+    ]
+
+
 def render(claim: Claim, schema: str = "mart", claimant: str = "") -> str:
     """Render one claim as a labelled query for the rows that break it.
 
@@ -231,6 +255,8 @@ def render(claim: Claim, schema: str = "mart", claimant: str = "") -> str:
             query = _latest(claim, table, schema)
         case Determines():
             query = _determines(claim, relation)
+        case Requires():
+            query = _missing(claim, relation)
         case _:
             assert_never(claim)
     by = f" (claimed by {claimant})" if claimant else ""

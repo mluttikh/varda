@@ -364,13 +364,25 @@ and the far one a column of the dimension it points at. A level that names a
 foreign key without reaching through it is an error, because `4718` is not
 something anyone drills into.
 
-A hierarchy makes two claims, and only one of them is checkable. The path —
-offer country, then region, then store — is a declaration, and Varda checks
-that the levels are real columns, distinct, at least two of them, on a
-dimension, and the kind of column that can be a level. The other claim is that
-each level rolls up into exactly one member of the level above it, and that is
-a statement about data. Nothing here can test it, the same way nothing tests
-the grain sentence.
+A hierarchy makes claims of two kinds. The path — offer country, then
+region, then store — is a declaration, and Varda checks that the levels are
+real columns, distinct, at least two of them, on a dimension, and the kind of
+column that can be a level. The rest is about data: that every member has a
+parent, and that it has only one. Those are checked against the data, in
+`sql/expectations.sql`, as far as the hierarchy says they hold:
+
+| Declared | Checked |
+| --- | --- |
+| `complete: true`, the default | A row holding a level holds the level above it. |
+| `complete: false` | Nothing: rows may skip a level — an online store sells to its country, with no region. |
+| `strict: true` | Each member of a level is in one member of the level above. |
+| `strict: false`, the default | Only for a level reached through a foreign key, which names one row on its own. |
+
+`strict` is off by default for the reason the next section gives: a plain
+level's column usually names a member only under its parent. Say it where
+each level's values stand alone — a month written `2024-03` is one month, in
+one year — and every level is then identified by its own key. Neither roll-up
+is checked on a type-2 dimension, whose rows are versions; completeness is.
 
 Three things go wrong often enough to be worth naming.
 

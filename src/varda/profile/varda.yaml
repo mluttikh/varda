@@ -632,6 +632,31 @@ classes:
         required: true
         inlined_as_list: true
 
+      strict:
+        description: >-
+          Whether each level's own key tells its members apart, so that every
+          member sits under exactly one parent — brand "Acme" is one brand,
+          in one category. False by default, because a plain level's column
+          usually names a member only under its parent: several states have
+          a Springfield, and a city is identified by its state and its name
+          together.
+
+          Declared, it is checked: `sql/expectations.sql` reports every
+          member found under two parents. Not for a type-2 dimension, whose
+          rows are versions; a city moving region there is history.
+        range: boolean
+
+      complete:
+        description: >-
+          Whether every row holding a level holds the level above it. True by
+          default, and checked in `sql/expectations.sql`: a product with a
+          brand and no category drops out of every roll-up by category.
+
+          False for a path that may skip levels — a store reporting straight
+          to its country, with no region — which says so instead of being
+          reported for it.
+        range: boolean
+
   Level:
     description: >-
       One step of a drill path.

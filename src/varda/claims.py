@@ -38,7 +38,7 @@ from .gen_sql import quoted
 from .snapshot import VERSIONING_ROLES, SlowlyChangingType, table_of
 
 if TYPE_CHECKING:
-    from .snapshot import Column, Element, Hierarchy, Model, Table
+    from .snapshot import Column, Element, Hierarchy, Level, Model, Table
 
 
 @dataclass(frozen=True, eq=False)
@@ -107,6 +107,21 @@ class FlaggedIsLatest:
     order: Column
 
 
+@dataclass(frozen=True, eq=False)
+class Requires:
+    """Every row holding each column of ``given`` holds each of ``required``.
+
+    What a `NOT NULL` would say, for a column the model leaves nullable on
+    purpose: a level of a drill path is absent for nobody, though the
+    column holding it may be absent in a row that holds no level below it.
+    """
+
+    subject: Element
+    statement: str
+    given: tuple[Column, ...]
+    required: tuple[Column, ...]
+
+
 #: Every shape a claim may take. A renderer matches on this and ends in
 #: `assert_never`, so a shape added here is a type error until handled.
 Claim = (
@@ -115,6 +130,7 @@ Claim = (
     | PeriodsDisjoint
     | AtMostOneFlagged
     | FlaggedIsLatest
+    | Requires
 )
 
 
@@ -131,6 +147,8 @@ def columns(claim: Claim) -> tuple[Column, ...]:
             return (*claim.key, claim.flag)
         case FlaggedIsLatest():
             return (*claim.key, claim.flag, claim.order)
+        case Requires():
+            return (*claim.given, *claim.required)
 
 
 def fault(claim: Claim, model: Model) -> str | None:
@@ -152,9 +170,16 @@ def fault(claim: Claim, model: Model) -> str | None:
             f"names {stray[0]}, which is not a column of {table.name}; a "
             "claim is about one table"
         )
+    return _empty(claim)
+
+
+def _empty(claim: Claim) -> str | None:
+    """Say which of a claim's column sets is empty, if one is."""
     match claim:
         case Determines() if not claim.determinant or not claim.dependent:
             return "determines nothing, or by nothing"
+        case Requires() if not claim.given or not claim.required:
+            return "requires nothing, or of nothing"
         case PeriodsDisjoint() | AtMostOneFlagged() | FlaggedIsLatest() if (
             not claim.key
         ):
@@ -255,22 +280,29 @@ def _history(table: Table) -> list[Claim]:
 
 
 def _roll_up(hierarchy: Hierarchy, i: int) -> Claim | None:
-    """Claim one level reached through a foreign key rolls up, or nothing.
+    """Claim one level whose key identifies on its own rolls up, or nothing.
 
-    The foreign key names one row of another dimension, so it is a whole
+    A foreign key names one row of another dimension, so it is a whole
     identity on its own and can sit under one parent only. A plain level's
     column identifies a member only under its parent — several states have
-    a Springfield — so it claims nothing here. A level declaring its own key
+    a Springfield — so it claims this only where the hierarchy is declared
+    strict. A level reached through a foreign key that declares its own key
     is identified in the table it reaches, which this table's rows cannot
     see, and is left alone.
     """
     table = hierarchy.table
     level = hierarchy.levels[i]
-    via = level.via
-    if not level.is_reference or level.key is not None or via is None:
+    key = analysis.level_key(level)
+    if key is None or key.table is not table:
         return None
-    if analysis.reference(via) is None:
-        return None  # V402, V403 or V406 says why
+    if level.is_reference:
+        via = level.via
+        if level.key is not None or via is None:
+            return None
+        if analysis.reference(via) is None:
+            return None  # V402, V403 or V406 says why
+    elif not hierarchy.strict:
+        return None
     parent = analysis.identities(hierarchy)[i - 1]
     if not parent or any(c.table is not table for c in parent):
         return None
@@ -278,7 +310,7 @@ def _roll_up(hierarchy: Hierarchy, i: int) -> Claim | None:
     return Determines(
         hierarchy,
         f"each {level.spec} is in one {above.spec}",
-        (via,),
+        (key,),
         parent,
     )
 
@@ -309,24 +341,60 @@ def _named_once(hierarchy: Hierarchy, i: int) -> Claim | None:
     )
 
 
-def _hierarchies(table: Table) -> list[Claim]:
-    """Every roll-up claim a table's hierarchies make that rows can show.
+def _here(level: Level) -> Column | None:
+    """Name the column of the hierarchy's own table that holds a level.
 
-    None for a type-2 dimension. Its rows are versions, and a city moving
-    region is history rather than a contradiction; checking each version
-    alone needs the current row, which only some designs mark.
+    The level's own column for a plain level, and the foreign key for one
+    reached through it: the row holds the key, and the name is the other
+    table's.
     """
-    if table.scd == SlowlyChangingType.TYPE_2:
-        return []
+    return level.via if level.is_reference else level.column
+
+
+def _covered(hierarchy: Hierarchy, i: int) -> Claim | None:
+    """Claim a row holding one level holds the level above, or nothing.
+
+    Nothing where the column above is required, which the DDL states
+    already, and where both levels are held by one column — two levels
+    reached through one foreign key are present together or not at all.
+    """
+    table = hierarchy.table
+    child, parent = _here(hierarchy.levels[i]), _here(hierarchy.levels[i - 1])
+    if child is None or parent is None or child is parent:
+        return None
+    if child.table is not table or parent.table is not table:
+        return None
+    if parent.required:
+        return None
+    level, above = hierarchy.levels[i], hierarchy.levels[i - 1]
+    return Requires(
+        hierarchy,
+        f"every {level.spec} has a {above.spec}",
+        (child,),
+        (parent,),
+    )
+
+
+def _hierarchies(table: Table) -> list[Claim]:
+    """Every claim a table's hierarchies make that rows can show.
+
+    Completeness for every dimension: a version with a brand and no
+    category is as broken as a row. Roll-up and naming not for a type-2
+    dimension. Its rows are versions, and a city moving region is history
+    rather than a contradiction; checking each version alone needs the
+    current row, which only some designs mark.
+    """
+    versioned = table.scd == SlowlyChangingType.TYPE_2
     out: list[Claim] = []
     for hierarchy in table.hierarchies:
         for i in range(len(hierarchy.levels)):
-            found = _roll_up(hierarchy, i) if i > 0 else None
-            if found is not None:
-                out.append(found)
-            named = _named_once(hierarchy, i)
-            if named is not None:
-                out.append(named)
+            found: list[Claim | None] = []
+            if i > 0 and hierarchy.complete:
+                found.append(_covered(hierarchy, i))
+            if not versioned:
+                found.append(_roll_up(hierarchy, i) if i > 0 else None)
+                found.append(_named_once(hierarchy, i))
+            out += [c for c in found if c is not None]
     return out
 
 

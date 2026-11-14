@@ -183,11 +183,18 @@ def identities(hierarchy: Hierarchy) -> tuple[tuple[Column, ...], ...]:
     city together hold one of them. That path is what a hierarchy already
     asserts, so it is derived rather than written down. A level whose key
     resolves to nothing adds nothing to the path.
+
+    A strict hierarchy says otherwise, and each level is its own key alone:
+    brand "Acme" is one brand wherever it appears. Empty for a level whose
+    key resolves to nothing.
     """
     out: list[tuple[Column, ...]] = []
     path: tuple[Column, ...] = ()
     for level in hierarchy.levels:
         key = level_key(level)
+        if hierarchy.strict:
+            out.append(() if key is None else (key,))
+            continue
         if key is not None:
             path = (*path, key)
         out.append(path)

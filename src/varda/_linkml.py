@@ -538,6 +538,9 @@ def _hierarchies(model: Model, table: Table) -> tuple[Hierarchy, ...]:
             name=str(entry.get("name") or ""),
             description=str(entry.get("description") or "").strip(),
             levels=tuple(_level(model, table, v) for v in specs or ()),
+            # Anything but a boolean is V007's, and reads as the default.
+            strict=entry.get("strict") is True,
+            complete=entry.get("complete") is not False,
         )
         _set(hierarchy, table=table)
         for level in hierarchy.levels:

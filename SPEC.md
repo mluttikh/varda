@@ -50,13 +50,13 @@ reason the core can stay small enough to be correct.
 | `gen_docs.py` | ~190 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
-| `claims.py` | ~340 | What a model says about its data, as data: the closed claim shapes, and `implied`, what Varda reads a model as claiming. Public; `implied` on `analysis`'s weaker promise. |
-| `gen_expectations.py` | ~300 | Renders every active extension's claims, Varda's included, as queries over the data. |
+| `claims.py` | ~410 | What a model says about its data, as data: the closed claim shapes, and `implied`, what Varda reads a model as claiming. Public; `implied` on `analysis`'s weaker promise. |
+| `gen_expectations.py` | ~330 | Renders every active extension's claims, Varda's included, as queries over the data. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~520 | Six commands, each a call into `api` and the printing around it. |
 
-**8,546 lines of source**: 4,780 of code, 1,855 of docstrings, 585 of
-comment, 1,326 blank. The prose share is deliberate and is house style —
+**8,670 lines of source**: 4,850 of code, 1,886 of docstrings, 591 of
+comment, 1,343 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -64,7 +64,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 18 annotations,
 7 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 515 tests in 8,557 lines.
+importable is kept to what is meant to be imported. And 521 tests in 8,747 lines.
 
 ### The five seams
 
@@ -430,6 +430,25 @@ the SQLAlchemy `info` mapping carry it. History is still declared per
 table: this names a column's meaning, not a second slowly-changing type.
 The retail example's products keep their prior category.
 *`test_v507_a_chain_of_previous_values_that_comes_back`*
+
+**Unreleased — a hierarchy says what it guarantees.** A hierarchy declares
+`strict` and `complete`, after Lenz and Shoshani's summarizability
+conditions, and `sql/expectations.sql` checks both. `complete`, true by
+default, claims every row holding a level holds the one above it — a brand
+with no category drops out of every roll-up by category — through a sixth
+claim shape, `Requires`; not where the parent column is required, which the
+DDL states, and not for `complete: false`, which a path that may skip a
+level says instead. `strict`, false by default because a plain level names a
+member only under its parent, says each level's own key identifies it:
+`analysis.identities` then gives each level its key alone, and every level
+is held to one parent, as only a level reached through a foreign key was
+before. Roll-up stays unchecked on a type-2 dimension, whose rows are
+versions; completeness is checked there too. The snapshot's `Hierarchy`
+gains both, the docs page marks a strict path and one that may skip levels,
+and the SQLAlchemy `info` mapping carries both for every hierarchy, which
+committed output will show as drift. Retail's date paths are strict and its
+store geography may skip a region; its expectations gain ten queries.
+*`test_a_strict_hierarchy_holds_each_member_to_one_parent`*
 
 ### Next, in the order it is worth doing
 
