@@ -38,14 +38,14 @@ reason the core can stay small enough to be correct.
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
-| `snapshot.py` | ~520 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, and the closed vocabularies as `StrEnum`s. **The public read API.** |
+| `snapshot.py` | ~710 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, what a model says an element means (`Mappings`, `Unit`, `Enumeration`), and the closed vocabularies as `StrEnum`s. **The public read API.** |
 | `analysis.py` | ~305 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, what a column stores, creation order, level identity. Public, on a weaker promise. |
-| `_linkml.py` | ~465 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
-| `ext.py` | ~470 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
-| `vocabulary.py` | ~145 | What the active profiles declare, read once. |
-| `registry.py` | ~795 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
+| `_linkml.py` | ~565 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
+| `ext.py` | ~475 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
+| `vocabulary.py` | ~260 | What the active profiles declare, read once: each annotation's range, `required` and `multivalued`, as V006 and V007 enforce them. |
+| `registry.py` | ~805 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
 | `api.py` | ~410 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
-| `rules.py` | ~1625 | The 53 core rules. |
+| `rules.py` | ~1850 | The 55 core rules. |
 | `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~190 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
@@ -53,8 +53,8 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~510 | Six commands, each a call into `api` and the printing around it. |
 
-**6,693 lines of source**: 3,657 of code, 1,484 of docstrings, 488 of
-comment, 1,064 blank. The prose share is deliberate and is house style —
+**7,345 lines of source**: 4,057 of code, 1,583 of docstrings, 553 of
+comment, 1,152 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -62,7 +62,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 427 tests in 6,786 lines.
+importable is kept to what is meant to be imported. And 459 tests in 7,396 lines.
 
 ### The four seams
 
@@ -308,6 +308,39 @@ in `varda.toml`, checked at load for unknown tables, unknown keys and wrong
 types, and handed over read-only on `Context.settings`. A file rather than
 a flag, so `generate` and `verify` cannot disagree about it.
 
+**Unreleased — the snapshot carries what a model says it means.** A model
+could give every table a `class_uri` and every measure a QUDT unit, pass
+`check`, and reach every rule and generator with none of it: the snapshot
+held Varda's annotations and a unit reduced to one label. It now holds
+LinkML's own metaslots as written — `uri` (`class_uri`, `slot_uri`),
+`title`, `aliases` and `mappings` on `Table` and `Column`,
+`Column.unit_of_measure` with `unit` still its label, and `Model.enums`
+with the `meaning` of each value — plus `Model.prefixes` and
+`Model.expand`, and `Vocabulary.meaning` for the profile's own values.
+Additive, and no vocabulary: nothing is annotated differently, no rule
+reads any of it yet, and no generator's output changes. An undeclared IRI
+is `None` rather than the one LinkML would mint, which is the same for a
+`date_key` in every table; what such a column is called in RDF is the
+generator's to decide. *`test_what_a_model_says_an_element_means_reaches_the_snapshot`*
+
+**Unreleased — a profile's declarations are enforced.** A profile declares
+each annotation as a LinkML attribute, and LinkML enforces none of it on an
+annotation, so `required`, the range and `multivalued` were documentation:
+an extension wanting `cost_center` on every table wrote the declaration and
+a rule saying it again. V006 reports a required annotation, or a required
+field of a structured one, that is missing or blank; V007 a value its range
+does not admit — a whole number, true or false, a number, a mapping where
+one is declared, one value where a list is not. Enums stay V002's and the
+type facets V803's, and every case a dedicated rule already reports is
+skipped, named in `REPORTED_ELSEWHERE` and provoked by a test, so one
+mistake is one finding. A scalar where `multivalued` allows a list is one
+value of it, as `grain: order_id` always was. A profile class may name the
+field a bare value stands for with `<prefix>:shorthand`, which is how a
+`Level` is written as a column name, and the registry refuses one naming no
+field. Two findings Varda did not make before: a hierarchy written as a
+bare name was silently dropped, and `grain_statement: [a, b]` reached the
+docs as a Python list. *`test_v006_an_extensions_required_annotation_is_enforced`*
+
 ### Next, in the order it is worth doing
 
 **Finish the drift gate when something needs it.** `verify` compares text,
@@ -333,10 +366,8 @@ public, is settled: it is `varda.snapshot`.
 **What the settled interface makes small.** Each follows from it and was
 kept out of it so the interface broke once: `varda check --format
 json|sarif`, now a formatter over `Report` rather than a parser; exemptions
-for one table or column rather than a whole rule; validating annotations
-against the profile's own `required`, `range` and `multivalued`, which today
-are declared and never enforced; and dialects an extension registers rather
-than names.
+for one table or column rather than a whole rule; and dialects an extension
+registers rather than names.
 
 **Finish the SQLAlchemy generator.** The generator and its equivalence check
 have shipped; two things from `design/sqlalchemy-generator.md` have not.

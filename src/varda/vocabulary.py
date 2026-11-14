@@ -8,6 +8,7 @@ never changed — so nothing here needs a cache cleared.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from . import _linkml
@@ -19,6 +20,30 @@ if TYPE_CHECKING:
 
 Target = Literal["table", "column"]
 TARGETS: tuple[Target, ...] = get_args(Target)
+
+#: What a declared range turned out to be.
+RangeKind = Literal["type", "enum", "class"]
+
+
+@dataclass(frozen=True)
+class Declared:
+    """One annotation, or one field of a structured one, as a profile says.
+
+    What LinkML would enforce on a slot and does not on an annotation,
+    because an annotation's value is opaque to it: the range, whether a
+    value is required, and whether several are allowed.
+    """
+
+    name: str
+    #: The range as the profile wrote it — `integer`, `TableRole`, `Level`.
+    range: str
+    kind: RangeKind
+    #: For a type, the `linkml:types` type it is declared in terms of:
+    #: `integer` for a profile's own `days: {typeof: integer}`. ``None`` for
+    #: an enum or a class, and for a type whose root is not one of LinkML's.
+    base: str | None
+    required: bool
+    multivalued: bool
 
 
 class Vocabulary:
@@ -112,6 +137,58 @@ class Vocabulary:
             for field, attr in (cls.attributes or {}).items()
         }
 
+    def declaration(self, target: Target, tag: str) -> Declared | None:
+        """Read what a profile declares about one annotation, or ``None``."""
+        attr = self._attribute(target, tag)
+        if attr is None:
+            return None
+        prefix, _, name = tag.partition(":")
+        return self._declared(prefix, name, attr)
+
+    def required(self, target: Target) -> tuple[str, ...]:
+        """Every annotation tag a profile requires on ``target``, sorted."""
+        return tuple(
+            sorted(
+                f"{prefix}:{name}"
+                for prefix, cls in self._classes[target]
+                for name, attr in (cls.attributes or {}).items()
+                if attr.required
+            )
+        )
+
+    def fields(self, prefix: str, name: str) -> dict[str, Declared]:
+        """Read what a profile declares about each field of a structured range.
+
+        Empty when ``name`` is not a class of that profile. The fuller
+        reading of :meth:`shape`, which names only each field's range.
+        """
+        _, view = self._profiles.get(prefix, (None, None))
+        if view is None:
+            return {}
+        cls = view.schema.classes.get(name)
+        if cls is None:
+            return {}
+        return {
+            str(field): self._declared(prefix, str(field), attr)
+            for field, attr in (cls.attributes or {}).items()
+        }
+
+    def shorthand(self, prefix: str, name: str) -> str | None:
+        """Name the field a bare scalar stands for, where a class allows one.
+
+        A profile class declares it with ``<prefix>:shorthand: <field>``.
+        Varda's `Level` does, which is why a level may be written as
+        `city_name` rather than `{column: city_name}`; a class declaring
+        none must be written as a mapping.
+        """
+        _, view = self._profiles.get(prefix, (None, None))
+        if view is None:
+            return None
+        cls = view.schema.classes.get(name)
+        if cls is None:
+            return None
+        return _linkml.text(cls, f"{prefix}:shorthand")
+
     def permitted(self, enum_name: str) -> tuple[str, ...]:
         """Return an enum's permissible values, from its own profile."""
         for _, view in self._profiles.values():
@@ -120,6 +197,26 @@ class Vocabulary:
             enum = view.schema.enums[enum_name]
             return tuple(str(v) for v in (enum.permissible_values or {}))
         return ()
+
+    def meaning(self, enum_name: str, value: str) -> str | None:
+        """Name the concept one value of a profile's enum stands for.
+
+        LinkML's ``meaning`` on the permissible value, as a full IRI — a
+        profile's prefixes are its own, and a caller holding a CURIE written
+        against them would have nothing to expand it with. ``None`` where
+        the value declares none, names a prefix its profile does not, or is
+        not a value of that enum at all.
+        """
+        for _, view in self._profiles.values():
+            if view is None or enum_name not in view.schema.enums:
+                continue
+            found = (view.schema.enums[enum_name].permissible_values or {}).get(
+                value
+            )
+            if found is None or not found.meaning:
+                return None
+            return _linkml.expand(view, str(found.meaning))
+        return None
 
     def profile_filename(self, prefix: str) -> str:
         """Name the file an annotation of this prefix belongs in."""
@@ -137,6 +234,27 @@ class Vocabulary:
             if attr is not None:
                 return attr
         return None
+
+    def _declared(self, prefix: str, name: str, attr: Any) -> Declared:
+        """Read one declared attribute, classifying its range."""
+        rng = str(attr.range or "string")
+        _, view = self._profiles[prefix]
+        kind: RangeKind = "type"
+        base: str | None = None
+        if rng in view.schema.enums:
+            kind = "enum"
+        elif rng in view.schema.classes:
+            kind = "class"
+        else:
+            base = _linkml.type_root(view, rng)
+        return Declared(
+            name=name,
+            range=rng,
+            kind=kind,
+            base=base,
+            required=bool(attr.required),
+            multivalued=bool(attr.multivalued),
+        )
 
     def _enums(self, prefix: str) -> frozenset[str]:
         _, view = self._profiles.get(prefix, (None, None))

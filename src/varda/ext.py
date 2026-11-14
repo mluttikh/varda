@@ -37,17 +37,21 @@ from .snapshot import (
     Column,
     ColumnRole,
     Element,
+    Enumeration,
     FactType,
     Hierarchy,
     Level,
+    Mappings,
     Model,
+    PermissibleValue,
     Ref,
     SlowlyChangingType,
     Table,
     TableRole,
     UniqueKey,
+    Unit,
 )
-from .vocabulary import Vocabulary
+from .vocabulary import Declared, Vocabulary
 
 if TYPE_CHECKING:
     import pathlib
@@ -59,7 +63,9 @@ __all__ = [
     "Column",
     "ColumnRole",
     "Context",
+    "Declared",
     "Element",
+    "Enumeration",
     "Extension",
     "ExtensionError",
     "FactType",
@@ -68,8 +74,10 @@ __all__ = [
     "Hierarchy",
     "Issue",
     "Level",
+    "Mappings",
     "Model",
     "Options",
+    "PermissibleValue",
     "Ref",
     "Report",
     "Rule",
@@ -81,6 +89,7 @@ __all__ = [
     "Table",
     "TableRole",
     "UniqueKey",
+    "Unit",
     "Vocabulary",
     "analysis",
 ]

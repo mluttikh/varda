@@ -28,14 +28,22 @@ HERE = pathlib.Path(__file__).parent
 RULES = RuleSet(tag="ACME")
 
 
-@RULES.rule("ACME101", "error", "Every table names a cost center")
+@RULES.rule("ACME101", "error", "Every fact says how long its rows are kept")
 def acme101(model: Model) -> Iterator[Finding]:
-    for table in model.tables:
+    """Flag a fact with no retention period.
+
+    A requirement the profile cannot state: `required: true` means every
+    table, and a dimension's rows are kept as long as a fact points at
+    them. That every table names a cost center *is* declared, in
+    `acme.yaml`, and Varda's V006 enforces it with no rule here.
+    """
+    for table in model.facts:
         # Acme reads its own annotations, and only those, by its prefix.
-        if not table.annotations.of("acme").get("cost_center"):
+        if table.annotations.of("acme").get("retention_days") is None:
             yield Finding(
                 table,
-                "no acme:cost_center; storage has to be billed to someone",
+                "no acme:retention_days; a fact grows until somebody says "
+                "when its rows go",
             )
 
 
