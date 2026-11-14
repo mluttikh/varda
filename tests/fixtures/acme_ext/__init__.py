@@ -13,15 +13,16 @@ prove they are satisfiable.
 
 from __future__ import annotations
 
+import itertools
 import pathlib
 from typing import TYPE_CHECKING
 
-from varda.ext import Extension, Finding, RuleSet
+from varda.ext import Determines, Extension, Finding, RuleSet
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from varda.ext import Model
+    from varda.ext import Claim, Model
 
 HERE = pathlib.Path(__file__).parent
 
@@ -68,6 +69,34 @@ def acme102(model: Model) -> Iterator[Finding]:
             )
 
 
+def claims(model: Model) -> Iterator[Claim]:
+    """Hold a dimension marked `acme:strict_hierarchies` to strict roll-up.
+
+    Varda reads a plain level's column as naming a member only under its
+    parent — several states have a Springfield — and so claims nothing
+    about it. Acme's dimensions say otherwise when they are marked, and
+    this is where it says so: each level's column determines the column of
+    the level above, checked by Varda's expectations beside its own.
+    """
+    for table in model.dimensions:
+        marked = table.annotations.of("acme").get("strict_hierarchies")
+        if str(marked).lower() != "true":
+            continue
+        for hierarchy in table.hierarchies:
+            levels = hierarchy.levels
+            for parent, child in itertools.pairwise(levels):
+                if parent.is_reference or child.is_reference:
+                    continue  # Varda claims these already
+                if parent.column is None or child.column is None:
+                    continue  # V601 says why
+                yield Determines(
+                    hierarchy,
+                    f"each {child.spec} is in one {parent.spec}",
+                    (child.column,),
+                    (parent.column,),
+                )
+
+
 EXTENSION = Extension(
     name="acme",
     prefix="acme",
@@ -76,4 +105,5 @@ EXTENSION = Extension(
     rules=RULES,
     package="acme_ext",
     severity_defaults={"V705": "error"},
+    claims=claims,
 )

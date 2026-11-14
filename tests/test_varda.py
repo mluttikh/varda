@@ -72,11 +72,11 @@ from varda import (
     analysis,
     api,
     cli,
-    gen_expectations,
     gen_sql,
     gen_sqlalchemy,
     registry,
 )
+from varda import claims as varda_claims
 from varda import ext as ext_module
 from varda import snapshot as varda_snapshot
 from varda.analysis import physical_name
@@ -2034,7 +2034,11 @@ def test_registries_share_nothing() -> None:
 
     assert vocabulary().shape("acme", "AcmeTableAnnotations") is None
     shape = vocabulary(EXTENSION).shape("acme", "AcmeTableAnnotations")
-    assert shape == {"cost_center": "string", "retention_days": "integer"}
+    assert shape == {
+        "cost_center": "string",
+        "retention_days": "integer",
+        "strict_hierarchies": "boolean",
+    }
     assert vocabulary().shape("acme", "AcmeTableAnnotations") is None
 
 
@@ -5695,7 +5699,7 @@ def test_every_business_key_of_a_type_2_dimension_is_checked() -> None:
     model = load(SNOWFLAKE)
     product = model.table("DimProduct")
     assert product is not None
-    keys = gen_expectations.business_keys(product)
+    keys = varda_claims.business_keys(product)
     assert [[c.name for c in key] for key in keys] == [
         ["gtin"],
         ["supplier_code", "supplier_part"],
@@ -5746,6 +5750,217 @@ def test_the_expectations_are_a_file_apart_from_the_assertions() -> None:
     found = {g.name: g.artifacts for g in Registry.of().generators}
     assert found["assertions"] == ("sql/assertions.sql",)
     assert found["expectations"] == ("sql/expectations.sql",)
+
+
+# --- claims: what an extension adds to the expectations ----------------------
+
+
+def test_varda_reads_its_examples_as_claiming_these() -> None:
+    """The expectations are a rendering of `claims.implied`, and nothing else.
+
+    Moving the derivation out of the generator changed one byte of output:
+    the count column of a dependency, which cannot know whether it counts
+    parents or names.
+    """
+    retail = varda_claims.implied(load(RETAIL))
+    assert [type(c).__name__ for c in retail] == [
+        "PeriodNonEmpty",
+        "PeriodsDisjoint",
+        "AtMostOneFlagged",
+        "FlaggedIsLatest",
+    ]
+    snowflake = varda_claims.implied(load(SNOWFLAKE))
+    assert [(type(c).__name__, str(c.subject)) for c in snowflake] == [
+        ("AtMostOneFlagged", "DimProduct"),
+        ("FlaggedIsLatest", "DimProduct"),
+        ("AtMostOneFlagged", "DimProduct"),
+        ("FlaggedIsLatest", "DimProduct"),
+        ("Determines", "DimCity.geography"),
+    ]
+
+
+def _merchandise(tmp_path: pathlib.Path, *extensions: Extension) -> Model:
+    """Build a product dimension Acme marks as rolling up strictly."""
+    table = dimension(
+        annotations={
+            "varda:role": "DIMENSION",
+            "varda:scd": "TYPE_1",
+            "acme:cost_center": "CC-1",
+            "acme:strict_hierarchies": True,
+            "varda:hierarchies": [
+                {"name": "merchandise", "levels": ["category", "brand", "d_id"]}
+            ],
+        }
+    )
+    for name in ("category", "brand"):
+        table["attributes"][name] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    return build(tmp_path, {"DimProduct": table}, extensions=extensions)
+
+
+def test_an_extensions_claim_is_rendered_and_says_who_made_it(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Acme holds a marked dimension to the roll-up Varda does not claim.
+
+    Varda reads `brand` under two categories as two brands; Acme says its
+    marked dimensions mean one brand, and the label says it was Acme that
+    said so, which is who a violation should be taken to.
+    """
+    from acme_ext import EXTENSION  # noqa: PLC0415
+
+    model = _merchandise(tmp_path, EXTENSION)
+    sql = generate_expectations(model)
+    label = (
+        "-- dim_product.merchandise: each brand is in one category "
+        "(claimed by acme)"
+    )
+    assert label in sql
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_product" ("d_key", "d_id", "category", '
+        '"brand") VALUES '
+        "(1, 'p1', 'Food', 'Acme'), (2, 'p2', 'Food', 'Acme')"
+    )
+    assert _fired(con, sql) == []
+    con.execute(
+        'INSERT INTO "mart"."dim_product" ("d_key", "d_id", "category", '
+        "\"brand\") VALUES (3, 'p3', 'Toys', 'Acme')"
+    )
+    assert _fired(con, sql) == [label]
+    assert "claimed by" not in generate_expectations(_merchandise(tmp_path))
+
+
+def _claiming(*made: ext_module.Claim, name: str = "b") -> Extension:
+    """Build an extension whose claims are exactly ``made``."""
+    return Extension(name=name, prefix=name, claims=lambda _: made)
+
+
+def test_a_claim_about_another_table_is_refused_naming_the_extension(
+    tmp_path: pathlib.Path,
+) -> None:
+    """One table per claim: a column of another is a join nobody wrote."""
+
+    def stray(model: Model) -> list[ext_module.Claim]:
+        dim, fact = model.table("DimThing"), model.table("FctThing")
+        assert dim is not None
+        assert fact is not None
+        d_id, d_key = dim.column("d_id"), fact.column("d_key")
+        assert d_id is not None
+        assert d_key is not None
+        return [
+            ext_module.Determines(dim, "each d_id has one", (d_id,), (d_key,))
+        ]
+
+    model = build(
+        tmp_path,
+        {"DimThing": dimension(), "FctThing": _star_fact()},
+        extensions=[Extension(name="b", prefix="b", claims=stray)],
+    )
+    with pytest.raises(
+        ext_module.ClaimError, match="b made a claim that names"
+    ):
+        generate_expectations(model)
+
+
+def _star_fact() -> dict[str, Any]:
+    """Build a fact referencing `DimThing`, as `_star` does."""
+    return {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:grain": ["d_key"],
+            "varda:grain_statement": "one row per thing",
+        },
+        "attributes": {
+            "d_key": {
+                "range": "integer",
+                "required": True,
+                "annotations": {
+                    "varda:role": "FOREIGN_KEY",
+                    "varda:references": "DimThing",
+                },
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("make", "fault"),
+    [
+        (
+            lambda t: ext_module.Determines(
+                t, " ", (t.columns[0],), (t.columns[1],)
+            ),
+            "has no statement",
+        ),
+        (
+            lambda t: ext_module.Determines(t, "x", (), (t.columns[1],)),
+            "determines nothing",
+        ),
+        (
+            lambda t: ext_module.AtMostOneFlagged(t, "x", (), t.columns[0]),
+            "has no key",
+        ),
+    ],
+)
+def test_a_claim_that_cannot_be_rendered_is_refused(
+    tmp_path: pathlib.Path, make: Any, fault: str
+) -> None:
+    holder: list[ext_module.Claim] = []
+    ext = Extension(name="b", prefix="b", claims=lambda _: holder)
+    model = build(tmp_path, {"DimThing": dimension()}, extensions=[ext])
+    table = model.table("DimThing")
+    assert table is not None
+    holder.append(make(table))
+    with pytest.raises(ext_module.ClaimError, match=fault):
+        generate_expectations(model)
+
+
+def test_a_claim_about_another_models_table_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A claim built from a different load names tables this one lacks."""
+    other = load(RETAIL)
+    customer = other.table("DimCustomer")
+    assert customer is not None
+    claim = ext_module.AtMostOneFlagged(
+        customer, "x", (customer.columns[1],), customer.columns[-1]
+    )
+    model = build(
+        tmp_path, {"DimCustomer": dimension()}, extensions=[_claiming(claim)]
+    )
+    with pytest.raises(
+        ext_module.ClaimError, match="not a table of this model"
+    ):
+        generate_expectations(model)
+
+
+def test_claims_that_raise_stop_the_run_naming_the_extension(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Somebody else's code failing inside the run says whose it was."""
+
+    def broken(model: Model) -> list[ext_module.Claim]:
+        raise KeyError(model.schema_id)
+
+    ext = Extension(name="b", prefix="b", claims=broken)
+    model = build(tmp_path, {"DimThing": dimension()}, extensions=[ext])
+    with pytest.raises(
+        ext_module.ClaimError, match="b's claims raised KeyError"
+    ):
+        generate_expectations(model)
+    with pytest.raises(api.GeneratorFailedError, match="b's claims raised"):
+        api.generate(model, only=["expectations"], force=True)
+
+
+def test_an_extension_lists_that_it_claims(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert cli.main(["ext", "varda"]) == 0
+    assert (
+        "claims      rendered in sql/expectations.sql"
+        in capsys.readouterr().out
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -41,21 +41,22 @@ reason the core can stay small enough to be correct.
 | `snapshot.py` | ~710 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, what a model says an element means (`Mappings`, `Unit`, `Enumeration`), and the closed vocabularies as `StrEnum`s. **The public read API.** |
 | `analysis.py` | ~305 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, what a column stores, creation order, level identity. Public, on a weaker promise. |
 | `_linkml.py` | ~565 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
-| `ext.py` | ~475 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
+| `ext.py` | ~510 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
 | `vocabulary.py` | ~260 | What the active profiles declare, read once: each annotation's range, `required` and `multivalued`, as V006 and V007 enforce them. |
-| `registry.py` | ~805 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
+| `registry.py` | ~810 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
 | `api.py` | ~410 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
 | `rules.py` | ~1850 | The 55 core rules. |
 | `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~190 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
-| `gen_expectations.py` | ~380 | What the model claims about its data that no constraint can state — a sound type-2 history, a level rolling up — as queries of the same kind. |
+| `claims.py` | ~340 | What a model says about its data, as data: the closed claim shapes, and `implied`, what Varda reads a model as claiming. Public; `implied` on `analysis`'s weaker promise. |
+| `gen_expectations.py` | ~300 | Renders every active extension's claims, Varda's included, as queries over the data. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
-| `cli.py` | ~510 | Six commands, each a call into `api` and the printing around it. |
+| `cli.py` | ~520 | Six commands, each a call into `api` and the printing around it. |
 
-**7,746 lines of source**: 4,305 of code, 1,658 of docstrings, 570 of
-comment, 1,213 blank. The prose share is deliberate and is house style —
+**8,044 lines of source**: 4,460 of code, 1,742 of docstrings, 580 of
+comment, 1,262 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -63,11 +64,11 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 469 tests in 7,648 lines.
+importable is kept to what is meant to be imported. And 478 tests in 7,863 lines.
 
-### The four seams
+### The five seams
 
-An extension plugs in at exactly four places. Everything else is internal.
+An extension plugs in at exactly five places. Everything else is internal.
 
 1. **Vocabulary** — a LinkML schema declaring annotations under the
    extension's prefix. Read into `Vocabulary`, enforced by rules `V001` and
@@ -79,7 +80,12 @@ An extension plugs in at exactly four places. Everything else is internal.
    claims a directory, for output named by the model. `settings` declares
    what the generator reads from its `[generator.<name>]` table in
    `varda.toml`.
-4. **Distribution** — a `varda.extensions` entry point, or a `varda.toml`
+4. **Claims** — a function from the model to what it claims about its
+   data, built from the closed shapes in `varda.claims` and rendered beside
+   Varda's own in `sql/expectations.sql`. A claim is about one table of the
+   model being generated from, and one that is not stops the run with a
+   `ClaimError` naming the extension.
+5. **Distribution** — a `varda.extensions` entry point, or a `varda.toml`
    entry, or `[[extension]]` inline in TOML for the no-Python case.
 
 ## 3. Invariants
@@ -357,6 +363,24 @@ level's strict roll-up is not checked, because its column identifies a
 member only under its parent; that needs a declaration, which is the next
 step's. See `docs/design.md`, *Why expectations are a file of their own*.
 *`test_the_expectations_find_a_broken_history`*
+
+**Unreleased — claims are a seam.** What `expectations.sql` checks is now
+data: `varda.claims` holds five closed shapes — `Determines`,
+`PeriodNonEmpty`, `PeriodsDisjoint`, `AtMostOneFlagged`, `FlaggedIsLatest`
+— each with the element it is about and the sentence that labels it.
+`claims.implied` is what Varda reads a model as claiming, public on
+`analysis`'s weaker promise, and the generator only renders, dispatching
+exhaustively. An extension adds claims through `Extension.claims`, rendered
+beside Varda's and labelled `(claimed by <name>)`; a claim about a table
+of another model, naming a column of another table, or with no statement
+or no key is refused with `ClaimError`, as is a claims function that
+raises. Data rather than SQL, so `varda.ext` stays free of SQL and another
+renderer — a dbt test, a quality suite — reads the same claims without
+deciding again what the model meant. Output is unchanged but for one
+column alias: a dependency counts `"dependents"`, not `"parents"` or
+`"names"`. The worked extension shows the seam doing what Varda does not:
+Acme holds a dimension marked `acme:strict_hierarchies` to strict roll-up.
+*`test_an_extensions_claim_is_rendered_and_says_who_made_it`*
 
 ### Next, in the order it is worth doing
 
