@@ -1179,6 +1179,226 @@ def test_v202_semi_additive_without_exception(
     assert "V702" in codes(model)
 
 
+def _snapshot_fact(**measure: Any) -> dict[str, Any]:
+    """Build a periodic snapshot with two dimensions and one balance.
+
+    ``measure`` overrides the balance's annotations.
+    """
+    keys = {
+        name: {
+            "range": "integer",
+            "required": True,
+            "annotations": {
+                "varda:role": "FOREIGN_KEY",
+                "varda:references": "DimThing",
+            },
+        }
+        for name in ("date_key", "scenario_key")
+    }
+    return {
+        "annotations": {
+            "varda:role": "FACT",
+            "varda:fact_type": "PERIODIC_SNAPSHOT",
+            "varda:grain": ["date_key", "scenario_key"],
+            "varda:grain_statement": "one row per day per scenario",
+        },
+        "attributes": {
+            **keys,
+            "balance": {
+                "range": "integer",
+                "required": True,
+                "unit": {"symbol": "EUR"},
+                "annotations": {
+                    "varda:role": "MEASURE",
+                    "varda:additivity": "SEMI_ADDITIVE",
+                    **measure,
+                },
+            },
+        },
+    }
+
+
+def _balance(tmp_path: pathlib.Path, **measure: Any) -> tuple[Model, Any]:
+    """Load the snapshot and return it with the findings on its balance."""
+    model = build(
+        tmp_path,
+        {"DimThing": dimension(), "FctBalance": _snapshot_fact(**measure)},
+    )
+    on = [f for f in findings(model) if str(f.subject) == "FctBalance.balance"]
+    return model, on
+
+
+def test_a_measure_may_be_semi_additive_over_several_keys(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A headcount per month and per scenario sums across neither.
+
+    One name written alone is one of them, which is how every model before
+    this wrote it, and `semi_additive_over` still answers with the first.
+    """
+    model, on = _balance(
+        tmp_path,
+        **{
+            "varda:semi_additive_over": ["date_key", "scenario_key"],
+            "varda:semi_additive_aggregate": "AVERAGE",
+        },
+    )
+    assert on == []
+    fact = model.table("FctBalance")
+    assert fact is not None
+    balance = fact.column("balance")
+    assert balance is not None
+    assert [r.name for r in balance.semi_additive_keys] == [
+        "date_key",
+        "scenario_key",
+    ]
+    assert all(r.target is not None for r in balance.semi_additive_keys)
+    assert balance.semi_additive_over is balance.semi_additive_keys[0]
+    assert balance.semi_additive_aggregate == "AVERAGE"
+    _, alone = _balance(
+        tmp_path,
+        **{
+            "varda:semi_additive_over": "date_key",
+            "varda:semi_additive_aggregate": "LAST",
+        },
+    )
+    assert alone == []
+
+
+def test_v703_each_key_is_checked_and_named_once(
+    tmp_path: pathlib.Path,
+) -> None:
+    _, on = _balance(
+        tmp_path,
+        **{
+            "varda:semi_additive_over": ["date_key", "store_key", "date_key"],
+            "varda:semi_additive_aggregate": "MAX",
+        },
+    )
+    assert [(f.code, f.message) for f in on] == [
+        (
+            "V703",
+            (
+                "semi_additive_over names 'store_key', which is not a foreign "
+                "key of FctBalance (has: date_key, scenario_key)"
+            ),
+        ),
+        ("V703", "semi_additive_over names 'date_key' twice"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("additivity", "what"),
+    [("ADDITIVE", "ADDITIVE"), ("NON_ADDITIVE", "NON_ADDITIVE")],
+)
+def test_v708_an_aggregate_on_a_measure_with_no_exception(
+    tmp_path: pathlib.Path, additivity: str, what: str
+) -> None:
+    """A sum is what an additive measure takes everywhere.
+
+    And on a ratio, `LAST` reads as permission to take the last ratio across
+    days — still a ratio nobody recomputed.
+    """
+    _, on = _balance(
+        tmp_path,
+        **{
+            "varda:additivity": additivity,
+            "varda:semi_additive_aggregate": "LAST",
+        },
+    )
+    assert [(f.code, f.message) for f in on] == [
+        (
+            "V708",
+            (
+                f"varda:semi_additive_aggregate on {what}; it says what a "
+                "SEMI_ADDITIVE measure takes in place of the sum"
+            ),
+        )
+    ]
+
+
+def test_v708_an_aggregate_on_a_column_that_is_no_measure(
+    tmp_path: pathlib.Path,
+) -> None:
+    table = dimension()
+    table["attributes"]["d_id"]["annotations"][
+        "varda:semi_additive_aggregate"
+    ] = "MIN"
+    fired = list(findings(build(tmp_path, {"DimThing": table})))
+    assert [(f.code, f.message) for f in fired if f.code == "V708"] == [
+        (
+            "V708",
+            (
+                "varda:semi_additive_aggregate on a NATURAL_KEY; it says "
+                "what a SEMI_ADDITIVE measure takes in place of the sum"
+            ),
+        )
+    ]
+
+
+@pytest.mark.parametrize("aggregate", ["LAST", "FIRST"])
+def test_v709_a_first_or_last_across_two_orders(
+    tmp_path: pathlib.Path, aggregate: str
+) -> None:
+    """The last across days and scenarios has no order to be last in."""
+    _, on = _balance(
+        tmp_path,
+        **{
+            "varda:semi_additive_over": ["date_key", "scenario_key"],
+            "varda:semi_additive_aggregate": aggregate,
+        },
+    )
+    assert [f.code for f in on] == ["V709"]
+    assert on[0].message.startswith(f"{aggregate} across 2 dimensions")
+
+
+def test_v710_a_semi_additive_measure_that_leaves_the_answer_open(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Half an answer: not the sum, and not saying what instead."""
+    _, on = _balance(tmp_path, **{"varda:semi_additive_over": "date_key"})
+    assert [(f.code, f.severity, f.message) for f in on] == [
+        (
+            "V710",
+            Severity.WARNING,
+            (
+                "SEMI_ADDITIVE with no varda:semi_additive_aggregate; say "
+                "what it takes across date_key instead of the sum: LAST, "
+                "FIRST, MIN, MAX or AVERAGE"
+            ),
+        )
+    ]
+
+
+def test_v710_is_quiet_where_v002_has_spoken(tmp_path: pathlib.Path) -> None:
+    """A value outside the enum is wrong, not missing."""
+    _, on = _balance(
+        tmp_path,
+        **{
+            "varda:semi_additive_over": "date_key",
+            "varda:semi_additive_aggregate": "CLOSING",
+        },
+    )
+    assert [f.code for f in on] == ["V002"]
+
+
+def test_the_docs_say_what_a_semi_additive_measure_takes(
+    tmp_path: pathlib.Path,
+) -> None:
+    model, _ = _balance(
+        tmp_path,
+        **{
+            "varda:semi_additive_over": ["date_key", "scenario_key"],
+            "varda:semi_additive_aggregate": "AVERAGE",
+        },
+    )
+    page = generate_docs(model)
+    assert (
+        "does not sum across `date_key`, `scenario_key`; take the average"
+        in page
+    )
+
+
 def test_v203_semi_additive_over_is_not_a_key(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -5990,6 +6210,7 @@ VOCABULARY = (
     "ColumnRole",
     "Additivity",
     "SlowlyChangingType",
+    "SemiAdditiveAggregate",
     "FactType",
 )
 
@@ -6408,7 +6629,8 @@ def test_the_annotations_reach_runtime(tmp_path: pathlib.Path) -> None:
     assert fact.info["grain_statement"].startswith("one row per")
     measure = fact.c["quantity_on_hand"]
     assert measure.info["additivity"] == "SEMI_ADDITIVE"
-    assert measure.info["semi_additive_over"] == "date_key"
+    assert measure.info["semi_additive_over"] == ["date_key"]
+    assert measure.info["semi_additive_aggregate"] == "LAST"
 
     date = module.metadata.tables["mart.dim_date"]
     assert [h["name"] for h in date.info["hierarchies"]] == [
@@ -7448,6 +7670,7 @@ def test_the_library_generates_what_the_command_line_does(
         (varda_snapshot.ColumnRole, "ColumnRole"),
         (varda_snapshot.Additivity, "Additivity"),
         (varda_snapshot.SlowlyChangingType, "SlowlyChangingType"),
+        (varda_snapshot.SemiAdditiveAggregate, "SemiAdditiveAggregate"),
         (varda_snapshot.FactType, "FactType"),
     ],
 )

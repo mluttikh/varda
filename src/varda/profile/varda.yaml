@@ -47,7 +47,7 @@ description: >-
   here would otherwise appear in every generator's output as though it were
   part of the model.
 
-  **Scope.** This is the deliberately small core: fifteen annotations that
+  **Scope.** This is the deliberately small core: sixteen annotations that
   describe a standard star schema and nothing else. Anything specific to one
   organization — cost centers, retention, data classification, ownership —
   belongs in an extension under that organization's own prefix. See
@@ -221,11 +221,49 @@ enums:
         description: >-
           May be summed across some dimensions but not others — almost always
           not across time. Account balance, inventory level, headcount. Must
-          declare `varda:semi_additive_over`.
+          declare `varda:semi_additive_over`, and should declare
+          `varda:semi_additive_aggregate`.
       NON_ADDITIVE:
         description: >-
           May not be summed across any dimension. Ratios, percentages, unit
           prices, temperatures. Aggregate the components and recompute.
+
+  SemiAdditiveAggregate:
+    description: >-
+      What a semi-additive measure takes across the dimensions it may not be
+      summed over, in place of the sum. Stock on hand across a month is not
+      thirty days of stock added up; it is the stock on the last day, or the
+      average day, and which one is a decision the model makes once rather
+      than one every report makes again.
+
+      Across the other dimensions the measure still sums. Total stock on the
+      last day of the month is the sum across stores of each store's stock
+      on that day.
+    permissible_values:
+      LAST:
+        description: >-
+          The value at the latest member in range — a closing balance, stock
+          at the end of the period. Latest by the dimension's own order,
+          which for a date is the calendar; needs exactly one dimension to
+          order by.
+      FIRST:
+        description: >-
+          The value at the earliest member in range — an opening balance.
+          Needs exactly one dimension to order by.
+      MIN:
+        description: >-
+          The lowest value across the members in range — the low point of a
+          balance over a month.
+      MAX:
+        description: >-
+          The highest value across the members in range — peak headcount,
+          the most stock held.
+      AVERAGE:
+        description: >-
+          The mean across the members in range — an average daily balance.
+          Over the members present in the rows: a day with no row is not a
+          day with zero, and a fact that skips days averages over the days
+          it has.
 
   SlowlyChangingType:
     description: >-
@@ -428,12 +466,27 @@ classes:
 
       semi_additive_over:
         description: >-
-          The foreign key across which this measure may NOT be summed —
-          almost always the date. Required when additivity is
-          `SEMI_ADDITIVE`, and checked against the table's actual foreign
-          keys, because naming a dimension the fact does not have is a
-          constraint that silently never applies.
+          The foreign keys across which this measure may NOT be summed —
+          almost always the date alone, written as one name. Required when
+          additivity is `SEMI_ADDITIVE`, and checked against the table's
+          actual foreign keys, because naming a dimension the fact does not
+          have is a constraint that silently never applies.
+
+          Several where several apply: a headcount snapshot taken per month
+          and per scenario sums across neither.
         range: string
+        multivalued: true
+
+      semi_additive_aggregate:
+        description: >-
+          What this measure takes across `varda:semi_additive_over` in place
+          of the sum: the last value, the first, the lowest, the highest or
+          the average. Semi-additive measures only.
+
+          Not required, and asked for: without it every consumer decides for
+          itself whether a month of balances is the closing one or the
+          average, and two reports answer one question two ways.
+        range: SemiAdditiveAggregate
 
       physical_name:
         description: >-

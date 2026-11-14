@@ -37,6 +37,7 @@ from .snapshot import (
     Model,
     PermissibleValue,
     Ref,
+    SemiAdditiveAggregate,
     SlowlyChangingType,
     Table,
     TableRole,
@@ -377,7 +378,11 @@ def _column(view: SchemaView, name: str, slot: Any, table: Table) -> Column:
         required=bool(slot.required),
         references=None,
         additivity=_member(Additivity, text(slot, "varda:additivity")),
-        semi_additive_over=None,
+        semi_additive_keys=(),
+        semi_additive_aggregate=_member(
+            SemiAdditiveAggregate,
+            text(slot, "varda:semi_additive_aggregate"),
+        ),
         unit_of_measure=_unit(slot),
         max_length=None,
         precision=None,
@@ -400,10 +405,13 @@ def _resolve_references(model: Model, table: Table, column: Column) -> None:
     if target is not None:
         name = target.strip()
         _set(column, references=Ref(name, model.table(name)))
-    over = column.annotations.text("varda:semi_additive_over")
-    if over is not None:
-        name = over.strip()
-        _set(column, semi_additive_over=Ref(name, table.column(name)))
+    over = _strings(column.annotations.get("varda:semi_additive_over"))
+    _set(
+        column,
+        semi_additive_keys=tuple(
+            Ref(n.strip(), table.column(n.strip())) for n in over
+        ),
+    )
 
 
 def _member(enum: type[E], value: str | None) -> E | None:

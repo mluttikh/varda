@@ -44,7 +44,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 55 rules (varda 0.4.0): 0 errors, 0 warnings
+8 tables checked against 58 rules (varda 0.4.0): 0 errors, 0 warnings
 ```
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -67,11 +67,11 @@ That is the whole reason for choosing annotations over a new format.
 
 ## The core is small on purpose
 
-**Fifteen annotations.** Seven on tables, eight on columns. That is the entire
+**Sixteen annotations.** Seven on tables, nine on columns. That is the entire
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 
-**Fifty-five rules**, in nine bands. A code names its concern:
+**Fifty-eight rules**, in nine bands. A code names its concern:
 
 | | |
 | --- | --- |
@@ -82,10 +82,11 @@ core vocabulary, and it is deliberately the entire core vocabulary — see the
 | `V401`–`V408` | References — a foreign key pointing at a fact, one naming no target, one typed unlike the key it names |
 | `V501`–`V506` | Time — a version period on a dimension that keeps no versions |
 | `V601`–`V607` | Hierarchies — a level that is not a column, a path of one level |
-| `V701`–`V707` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross, a decimal one that never says what it keeps |
+| `V701`–`V710` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross or what it takes instead, a decimal one that never says what it keeps |
 | `V801`–`V804` | Physical naming and types — two classes emitting one table, a width on a column that has none, a range naming nothing |
 
-**Four generators** — `sql`, `docs`, `assertions` and `sqlalchemy`. All
+**Five generators** — `sql`, `docs`, `assertions`, `expectations` and
+`sqlalchemy`. All
 deterministic: no timestamps, no environment, same model in and same bytes
 out, so output can be committed and diffed.
 

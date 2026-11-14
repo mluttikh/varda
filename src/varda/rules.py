@@ -41,6 +41,7 @@ from .ext import Finding, RuleSet
 from .snapshot import (
     FACET_MINIMUM,
     FACETS,
+    ORDERED_AGGREGATES,
     VERSIONING_ROLES,
     ColumnRole,
 )
@@ -1511,8 +1512,7 @@ def v702(model: Model) -> Iterator[Finding]:
         for column in table.measures:
             if column.additivity != "SEMI_ADDITIVE":
                 continue
-            over = column.semi_additive_over
-            if over is not None and over.name:
+            if any(ref.name for ref in column.semi_additive_keys):
                 continue
             yield Finding(
                 column,
@@ -1531,17 +1531,22 @@ def v703(model: Model) -> Iterator[Finding]:
     """
     for table in model.tables:
         keys = {c.name for c in table.foreign_keys}
+        found = ", ".join(sorted(keys)) or "none"
         for column in table.measures:
-            ref = column.semi_additive_over
-            over = ref.name if ref is not None else ""
-            if not over or over in keys:
-                continue
-            found = ", ".join(sorted(keys)) or "none"
-            yield Finding(
-                column,
-                f"semi_additive_over names {over!r}, which is not a foreign "
-                f"key of {table.name} (has: {found})",
-            )
+            seen: set[str] = set()
+            for over in (ref.name for ref in column.semi_additive_keys):
+                if over in seen:
+                    yield Finding(
+                        column,
+                        f"semi_additive_over names {over!r} twice",
+                    )
+                elif over and over not in keys:
+                    yield Finding(
+                        column,
+                        f"semi_additive_over names {over!r}, which is not a "
+                        f"foreign key of {table.name} (has: {found})",
+                    )
+                seen.add(over)
 
 
 @RULES.rule("V704", "error", "Measures live on facts and bridges")
@@ -1619,6 +1624,91 @@ def v707(model: Model) -> Iterator[Finding]:
                 f"on PostgreSQL and DECIMAL(18, 3) on DuckDB, so what this "
                 f"measure keeps depends on where it lands",
             )
+
+
+@RULES.rule(
+    "V708",
+    "error",
+    "A semi-additive aggregate belongs to a semi-additive measure",
+)
+def v708(model: Model) -> Iterator[Finding]:
+    """Flag `semi_additive_aggregate` where there is no exception to take.
+
+    On an additive measure it contradicts the additivity — a sum is what
+    the measure takes everywhere — and on a non-additive one it reads as
+    permission to take the last ratio across days, which is still a ratio
+    nobody recomputed.
+    """
+    for table in model.tables:
+        for column in table.columns:
+            if not _declares(column, "semi_additive_aggregate"):
+                continue
+            if column.additivity == "SEMI_ADDITIVE":
+                continue
+            what = column.additivity or (
+                "a measure with no additivity"
+                if column.is_measure
+                else f"a {column.role or 'column with no role'}"
+            )
+            yield Finding(
+                column,
+                f"varda:semi_additive_aggregate on {what}; it says what a "
+                "SEMI_ADDITIVE measure takes in place of the sum",
+            )
+
+
+@RULES.rule("V709", "error", "FIRST and LAST order by one dimension")
+def v709(model: Model) -> Iterator[Finding]:
+    """Flag a first or last value taken across several dimensions at once.
+
+    The last balance across days is the balance on the last day. The last
+    across days and scenarios has no meaning until somebody says which of
+    the two orders, and the second one is a decision the model has not
+    made. MIN, MAX and AVERAGE need no order and are left alone.
+    """
+    for table in model.tables:
+        for column in table.measures:
+            chosen = column.semi_additive_aggregate
+            n = len(column.semi_additive_keys)
+            if chosen not in ORDERED_AGGREGATES or n <= 1:
+                continue
+            yield Finding(
+                column,
+                f"{chosen} across {n} dimensions; it takes one member by its "
+                "place in an order, so name one dimension, or take MIN, MAX "
+                "or AVERAGE",
+            )
+
+
+@RULES.rule("V710", "warning", "A semi-additive measure says what it takes")
+def v710(model: Model) -> Iterator[Finding]:
+    """Flag a semi-additive measure that names no aggregate.
+
+    Knowing a balance must not be summed across days is half the answer.
+    Without the other half every consumer decides alone whether a month of
+    balances is the closing one or the average, and two reports answer one
+    question two ways. A warning, because a model that leaves it to the
+    reader is not wrong — only unfinished.
+    """
+    for table in model.tables:
+        for column in table.measures:
+            if column.additivity != "SEMI_ADDITIVE":
+                continue
+            if _declares(column, "semi_additive_aggregate"):
+                continue  # V002 if the value is not one of the enum's
+            yield Finding(
+                column,
+                "SEMI_ADDITIVE with no varda:semi_additive_aggregate; say "
+                "what it takes across "
+                f"{_keys_named(column)} instead of the sum: LAST, FIRST, "
+                "MIN, MAX or AVERAGE",
+            )
+
+
+def _keys_named(column: Column) -> str:
+    """Name a measure's semi-additive exception the way a message does."""
+    names = [ref.name for ref in column.semi_additive_keys if ref.name]
+    return ", ".join(names) or "its exception"
 
 
 # -------------------------------------------------------------------------

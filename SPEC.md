@@ -45,7 +45,7 @@ reason the core can stay small enough to be correct.
 | `vocabulary.py` | ~260 | What the active profiles declare, read once: each annotation's range, `required` and `multivalued`, as V006 and V007 enforce them. |
 | `registry.py` | ~810 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
 | `api.py` | ~410 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
-| `rules.py` | ~1850 | The 55 core rules. |
+| `rules.py` | ~1940 | The 58 core rules. |
 | `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
 | `gen_docs.py` | ~190 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
@@ -55,16 +55,16 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~520 | Six commands, each a call into `api` and the printing around it. |
 
-**8,044 lines of source**: 4,460 of code, 1,742 of docstrings, 580 of
-comment, 1,262 blank. The prose share is deliberate and is house style —
+**8,200 lines of source**: 4,559 of code, 1,770 of docstrings, 587 of
+comment, 1,284 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
-5 enums — which the registry reads off disk and no model imports.
+Plus two schemas. `profile/varda.yaml` is the vocabulary — 16 annotations,
+6 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 478 tests in 7,863 lines.
+importable is kept to what is meant to be imported. And 489 tests in 8,086 lines.
 
 ### The five seams
 
@@ -381,6 +381,24 @@ column alias: a dependency counts `"dependents"`, not `"parents"` or
 `"names"`. The worked extension shows the seam doing what Varda does not:
 Acme holds a dimension marked `acme:strict_hierarchies` to strict roll-up.
 *`test_an_extensions_claim_is_rendered_and_says_who_made_it`*
+
+**Unreleased — what a semi-additive measure takes instead.** Two gaps the
+semantic layers had closed and Varda had not. `varda:semi_additive_over` is
+multivalued, so a headcount snapshot per month and per scenario sums across
+neither; one name written alone is one of them, as every model before this
+wrote it. And `varda:semi_additive_aggregate` — `LAST`, `FIRST`, `MIN`,
+`MAX`, `AVERAGE` — says what the measure takes across those keys in place
+of the sum, which is the half of the answer every report otherwise supplies
+for itself. V703 checks each key and refuses one named twice; V708 refuses
+an aggregate on anything but a semi-additive measure, V709 a first or last
+across more than one order, and V710 warns on a semi-additive measure that
+names none. The snapshot gains `Column.semi_additive_keys` and
+`Column.semi_additive_aggregate`, with `semi_additive_over` kept as a
+property answering the first key. The docs page names every key and the
+aggregate; the SQLAlchemy `info` mapping carries `semi_additive_over` as a
+list of names, always, and `semi_additive_aggregate` beside it. The retail
+example's stock on hand takes `LAST`.
+*`test_a_measure_may_be_semi_additive_over_several_keys`*
 
 ### Next, in the order it is worth doing
 

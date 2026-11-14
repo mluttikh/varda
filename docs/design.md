@@ -347,7 +347,7 @@ LinkML's and roles are Varda's*, not on this.
 
 ## Why the vocabulary is this small
 
-Fifteen annotations is not a first cut on the way to forty. It is the
+Sixteen annotations is not a first cut on the way to forty. It is the
 deliberate size.
 
 Every annotation in the core is one a newcomer has to read before they can
@@ -879,7 +879,7 @@ The [vocabulary](reference/vocabulary.md), [rules](reference/rules.md) and
 [command line](reference/cli.md) pages are built from the package at
 docs-build time and never committed.
 
-A hand-written table of fifty-five rules disagrees with the code within two
+A hand-written table of fifty-eight rules disagrees with the code within two
 releases, and the disagreement is invisible because both halves look
 authoritative. Reading the same registry `varda check` reads means the docs
 and the tool cannot give different answers.

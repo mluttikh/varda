@@ -356,7 +356,9 @@ classes:
       quantity_on_hand:
         description: >-
           Units in stock at close of business. Semi-additive: summing across
-          stores gives total stock, summing across days gives nonsense.
+          stores gives total stock, summing across days gives nonsense. Across
+          days it is the stock on the last one, so a month's figure is the
+          month-end position.
         range: integer
         required: true
         unit:
@@ -365,3 +367,4 @@ classes:
           varda:role: MEASURE
           varda:additivity: SEMI_ADDITIVE
           varda:semi_additive_over: date_key
+          varda:semi_additive_aggregate: LAST

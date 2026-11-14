@@ -91,10 +91,40 @@ Every measure declares `varda:additivity`.
 | `NON_ADDITIVE` | Never sum. Ratios, percentages, unit prices, temperatures. Aggregate the components and recompute. |
 
 A semi-additive measure must also declare `varda:semi_additive_over`, naming
-the foreign key it may not be summed across, and
-[`V703`](reference/rules.md#v703) checks that column actually exists on the
-table. A constraint naming a dimension the fact does not have is a constraint
-that silently never applies, and it looks exactly like one that does.
+the foreign keys it may not be summed across — one name, almost always the
+date, or a list — and [`V703`](reference/rules.md#v703) checks each is
+actually a foreign key of the table. A constraint naming a dimension the fact
+does not have is a constraint that silently never applies, and it looks
+exactly like one that does.
+
+It should also say what it takes across them instead of the sum, because
+"not the sum" is half an answer and every report would otherwise supply the
+other half for itself:
+
+```yaml
+quantity_on_hand:
+  annotations:
+    varda:role: MEASURE
+    varda:additivity: SEMI_ADDITIVE
+    varda:semi_additive_over: date_key
+    varda:semi_additive_aggregate: LAST
+```
+
+| `varda:semi_additive_aggregate` | Across the exception, take | For |
+| --- | --- | --- |
+| `LAST` | the value at the latest member | a closing balance, month-end stock |
+| `FIRST` | the value at the earliest member | an opening balance |
+| `MIN` | the lowest value | the low point of a balance |
+| `MAX` | the highest value | peak headcount |
+| `AVERAGE` | the mean over the members present | an average daily balance |
+
+Across every other dimension the measure still sums: month-end stock for all
+stores is each store's month-end stock, added up. `LAST` and `FIRST` pick a
+member by its place in an order, so they take one dimension to order by
+([`V709`](reference/rules.md#v709)); a measure semi-additive over two
+dimensions takes `MIN`, `MAX` or `AVERAGE`. Leaving the aggregate out is a
+warning ([`V710`](reference/rules.md#v710)) rather than an error: the model
+is not wrong, only unfinished.
 
 !!! warning "Why this family is `error` and not `warning`"
     Summing something that must not be summed produces a number that looks

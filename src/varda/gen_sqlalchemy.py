@@ -101,6 +101,7 @@ COLUMN_INFO = (
     "references",
     "additivity",
     "semi_additive_over",
+    "semi_additive_aggregate",
     "unit",
 )
 
@@ -116,7 +117,11 @@ def _column_info(column: Column) -> list[tuple[str, object]]:
         "role": column.role,
         "references": _name(column.references),
         "additivity": column.additivity,
-        "semi_additive_over": _name(column.semi_additive_over),
+        # Always a list, one name or several, so a consumer reads one type.
+        "semi_additive_over": [
+            ref.name for ref in column.semi_additive_keys if ref.name
+        ],
+        "semi_additive_aggregate": column.semi_additive_aggregate,
         "unit": column.unit,
     }
     return [(key, values[key]) for key in COLUMN_INFO]
