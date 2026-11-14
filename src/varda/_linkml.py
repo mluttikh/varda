@@ -12,6 +12,7 @@ change in any release.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 from collections.abc import Iterable, Mapping
 from functools import cache
@@ -25,6 +26,7 @@ from .analysis import physical_name
 from .snapshot import (
     FACET_MINIMUM,
     FACETS,
+    MAPPING_KINDS,
     Additivity,
     Annotations,
     Column,
@@ -244,8 +246,13 @@ def _prefixes(view: SchemaView) -> dict[str, str]:
 
 def expand(view: SchemaView, uri: str) -> str | None:
     """Expand a CURIE written in a profile, against that profile's prefixes."""
+    return expand_iri(uri, _prefixes_of(view))
+
+
+def _prefixes_of(view: SchemaView) -> dict[str, str]:
+    """Map every prefix a profile can see, its imports walked first."""
     view.imports_closure()
-    return expand_iri(uri, _prefixes(view))
+    return _prefixes(view)
 
 
 def type_root(view: SchemaView, name: str) -> str | None:
@@ -266,27 +273,70 @@ def type_root(view: SchemaView, name: str) -> str | None:
     return root if origin.startswith("https://w3id.org/linkml/") else None
 
 
+def _enumeration(name: str, enum: Any) -> Enumeration:
+    """Read one enum definition, its CURIEs as written."""
+    return Enumeration(
+        name=str(name),
+        description=(enum.description or "").strip(),
+        uri=_optional(enum.enum_uri),
+        values=tuple(
+            PermissibleValue(
+                text=str(text),
+                description=(value.description or "").strip(),
+                title=_optional(value.title),
+                meaning=_optional(value.meaning),
+                mappings=_mappings(value),
+            )
+            for text, value in (enum.permissible_values or {}).items()
+        ),
+    )
+
+
 def _enums(view: SchemaView) -> tuple[Enumeration, ...]:
     """Read every enum the schema can see, sorted by name."""
-    out = [
-        Enumeration(
-            name=str(name),
-            description=(enum.description or "").strip(),
-            uri=_optional(enum.enum_uri),
-            values=tuple(
-                PermissibleValue(
-                    text=str(text),
-                    description=(value.description or "").strip(),
-                    title=_optional(value.title),
-                    meaning=_optional(value.meaning),
-                    mappings=_mappings(value),
-                )
-                for text, value in (enum.permissible_values or {}).items()
-            ),
-        )
-        for name, enum in view.all_enums().items()
-    ]
+    out = [_enumeration(n, e) for n, e in view.all_enums().items()]
     return tuple(sorted(out, key=lambda e: e.name))
+
+
+def enumeration(view: SchemaView, name: str) -> Enumeration | None:
+    """Read one enum a profile declares, with every CURIE in it expanded.
+
+    A profile's prefixes are its own, so a caller handed its CURIEs would
+    have nothing to expand them with. One naming a prefix the profile does
+    not declare is kept as written rather than dropped, so that what is
+    wrong with it stays visible.
+    """
+    enum = view.schema.enums.get(name)
+    if enum is None:
+        return None
+    prefixes = _prefixes_of(view)
+
+    def iri(uri: str | None) -> str | None:
+        if uri is None:
+            return None
+        return expand_iri(uri, prefixes) or uri
+
+    def mapped(found: Mappings) -> Mappings:
+        return Mappings(
+            **{
+                kind: tuple(iri(t) or t for t in getattr(found, kind))
+                for kind in MAPPING_KINDS
+            }
+        )
+
+    written = _enumeration(name, enum)
+    return dataclasses.replace(
+        written,
+        uri=iri(written.uri),
+        values=tuple(
+            dataclasses.replace(
+                value,
+                meaning=iri(value.meaning),
+                mappings=mapped(value.mappings),
+            )
+            for value in written.values
+        ),
+    )
 
 
 def _optional(value: Any) -> str | None:

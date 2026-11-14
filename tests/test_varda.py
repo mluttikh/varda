@@ -7183,6 +7183,7 @@ VOCABULARY = (
     "SlowlyChangingType",
     "SemiAdditiveAggregate",
     "ReferencedKey",
+    "HierarchyKind",
     "FactType",
 )
 
@@ -8499,23 +8500,89 @@ def test_the_linked_snapshot_holds_nothing_linkml_made(
     assert not leaks, leaks[:5]
 
 
-def test_the_profile_says_what_its_own_values_mean() -> None:
-    """A `meaning` in the profile is answered as a full IRI.
+def _varda_enums() -> list[str]:
+    """Name every enum Varda's own profile declares."""
+    view = SchemaView(str(registry.PROFILE))
+    return sorted(str(name) for name in view.schema.enums)
 
-    The profile's prefixes are its own: a caller handed `time:hasBeginning`
-    would have nothing to expand it with, since a model need not declare
-    `time` to use `VERSION_START`.
+
+def test_the_profile_says_what_its_own_values_mean() -> None:
+    """A `meaning` in the profile is answered as a full IRI, Varda's own.
+
+    The profile's prefixes are its own: a caller handed a CURIE would have
+    nothing to expand it with, since a model need not declare any of them
+    to use `MEASURE`.
     """
     declared = vocabulary()
-    assert declared.meaning("ColumnRole", "VERSION_START") == (
-        "http://www.w3.org/2006/time#hasBeginning"
+    assert declared.meaning("ColumnRole", "MEASURE") == (
+        "https://w3id.org/varda/ColumnRole/MEASURE"
     )
-    assert declared.meaning("ColumnRole", "VERSION_END") == (
-        "http://www.w3.org/2006/time#hasEnd"
+    assert declared.meaning("ReferencedKey", "SURROGATE_KEY") == (
+        "https://w3id.org/varda/ReferencedKey/SURROGATE_KEY"
     )
-    assert declared.meaning("ColumnRole", "MEASURE") is None
     assert declared.meaning("ColumnRole", "NOT_A_ROLE") is None
     assert declared.meaning("NotAnEnum", "MEASURE") is None
+
+
+@pytest.mark.parametrize("name", _varda_enums())
+def test_every_value_of_the_profile_is_a_term_of_its_own(name: str) -> None:
+    """Each value's `meaning` is `varda:<Enum>/<VALUE>`, and nothing else.
+
+    Not an outside term. `meaning` says what a value *is*, and a measure
+    with an additivity is not `qb:MeasureProperty` — that is a close match,
+    which is what the mappings are for. Keyed by the enum as well as the
+    value, because `SURROGATE_KEY` is a role in one and a target in the
+    other, and the two claims are different.
+    """
+    found = vocabulary().enumeration(name)
+    assert found is not None
+    assert found.values
+    for value in found.values:
+        assert value.meaning == (
+            f"https://w3id.org/varda/{name}/{value.text}"
+        ), value.text
+
+
+def test_every_enum_of_the_profile_has_a_mirror() -> None:
+    """An enum the profile adds is one `MIRRORS` must list.
+
+    Otherwise a value added to it is checked and never dispatched on, and
+    nothing notices.
+    """
+    assert sorted(declared for _, declared in MIRRORS) == _varda_enums()
+
+
+def test_an_alignment_is_a_mapping_and_expands() -> None:
+    """What an outside vocabulary says is graded, and is a full IRI.
+
+    OWL-Time's beginning is related to a version's start column, not the
+    same thing: the column is where the beginning is written down. And
+    QB4OLAP's minimum is exactly what a semi-additive `MIN` takes.
+    """
+    declared = vocabulary()
+    roles = declared.enumeration("ColumnRole")
+    assert roles is not None
+    start = roles.value("VERSION_START")
+    assert start is not None
+    assert list(start.mappings.items()) == [
+        ("related", "http://www.w3.org/2006/time#hasBeginning")
+    ]
+    taken = declared.enumeration("SemiAdditiveAggregate")
+    assert taken is not None
+    lowest = taken.value("MIN")
+    assert lowest is not None
+    assert lowest.mappings.exact == ("http://purl.org/qb4olap/cubes#Min",)
+    assert declared.enumeration("NotAnEnum") is None
+
+
+@pytest.mark.parametrize("name", _varda_enums())
+def test_no_alignment_names_a_prefix_the_profile_lacks(name: str) -> None:
+    """A CURIE that does not expand is kept as written, and so is caught."""
+    found = vocabulary().enumeration(name)
+    assert found is not None
+    for value in found.values:
+        for kind, target in value.mappings.items():
+            assert target.startswith("http"), (value.text, kind, target)
 
 
 def test_a_value_outside_its_enum_is_reported_once(
@@ -8635,18 +8702,20 @@ def test_the_library_generates_what_the_command_line_does(
         assert lib == (tmp_path / "cli" / rel).read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize(
-    ("enum", "declared"),
-    [
-        (varda_snapshot.TableRole, "TableRole"),
-        (varda_snapshot.ColumnRole, "ColumnRole"),
-        (varda_snapshot.Additivity, "Additivity"),
-        (varda_snapshot.SlowlyChangingType, "SlowlyChangingType"),
-        (varda_snapshot.SemiAdditiveAggregate, "SemiAdditiveAggregate"),
-        (varda_snapshot.ReferencedKey, "ReferencedKey"),
-        (varda_snapshot.FactType, "FactType"),
-    ],
+#: Each of the profile's enums beside the Python enum that mirrors it.
+MIRRORS = (
+    (varda_snapshot.TableRole, "TableRole"),
+    (varda_snapshot.ColumnRole, "ColumnRole"),
+    (varda_snapshot.Additivity, "Additivity"),
+    (varda_snapshot.SlowlyChangingType, "SlowlyChangingType"),
+    (varda_snapshot.SemiAdditiveAggregate, "SemiAdditiveAggregate"),
+    (varda_snapshot.ReferencedKey, "ReferencedKey"),
+    (varda_snapshot.HierarchyKind, "HierarchyKind"),
+    (varda_snapshot.FactType, "FactType"),
 )
+
+
+@pytest.mark.parametrize(("enum", "declared"), MIRRORS)
 def test_the_closed_vocabularies_are_the_profiles(
     enum: type[enum_module.StrEnum], declared: str
 ) -> None:

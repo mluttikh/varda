@@ -57,11 +57,21 @@ license: https://creativecommons.org/publicdomain/zero/1.0/
 prefixes:
   linkml: https://w3id.org/linkml/
   varda: https://w3id.org/varda/
-  # OWL-Time, for the `meaning:` mappings on the versioning column
-  # roles. A version's period is a temporal interval, and saying so in
-  # the vocabulary is what lets a model built on this profile join a
-  # knowledge graph instead of only a warehouse.
+  # Every permissible value below is a term of Varda's own: its `meaning`
+  # is `varda:<Enum>/<VALUE>`, a stable IRI that says exactly what Varda
+  # means and nothing more. What an outside vocabulary says about the same
+  # thing goes in the mappings, graded by how close it is — because
+  # `qb:MeasureProperty` is not the same claim as `MEASURE` with an
+  # additivity, and a `meaning` pointing at it would say it was.
+  #
+  # OWL-Time, related to the versioning column roles. A version's period
+  # is a temporal interval; its start and end columns are where one is
+  # written down, not the interval's beginning itself.
   time: http://www.w3.org/2006/time#
+  # The RDF Data Cube and its OLAP extension, the two vocabularies that
+  # describe the same structures for statistics and for cubes.
+  qb: http://purl.org/linked-data/cube#
+  qb4o: http://purl.org/qb4olap/cubes#
 default_prefix: varda
 default_range: string
 imports:
@@ -99,16 +109,21 @@ enums:
           A measurement event table. Has a declared grain, foreign keys to
           dimensions, and zero or more measures. Never the target of another
           table's foreign key.
+        meaning: varda:TableRole/FACT
+        close_mappings: [qb:DataSet]
       DIMENSION:
         description: >-
           Descriptive context. Has one surrogate key, one or more natural key
           columns, and attributes that are almost always textual or
           categorical. Referenced by facts.
+        meaning: varda:TableRole/DIMENSION
+        close_mappings: [qb:DimensionProperty]
       BRIDGE:
         description: >-
           Resolves a many-to-many between a fact and a dimension, or a
           multi-valued dimension attribute. Carries an allocation factor when
           the many-to-many is weighted.
+        meaning: varda:TableRole/BRIDGE
 
   ColumnRole:
     description: >-
@@ -123,11 +138,13 @@ enums:
         description: >-
           The meaningless integer or hash primary key of a dimension. Exactly
           one per dimension.
+        meaning: varda:ColumnRole/SURROGATE_KEY
       NATURAL_KEY:
         description: >-
           A column carrying the business identity of a dimension row. Together
           the natural key columns — plus, for a type-2 dimension, the validity
           window — must be unique.
+        meaning: varda:ColumnRole/NATURAL_KEY
       DURABLE_KEY:
         description: >-
           The identity of an entity that outlives every version of it: one
@@ -142,6 +159,7 @@ enums:
           the current flag gives every event today's attributes. Unique
           version for version, as a natural key is, and Varda derives that
           uniqueness the same way.
+        meaning: varda:ColumnRole/DURABLE_KEY
       FOREIGN_KEY:
         description: >-
           A reference to the surrogate key of a dimension, or to its durable
@@ -163,18 +181,26 @@ enums:
           Required on a fact, as a warning. A fact row with no key for a
           dimension drops out of every inner join to it; point it at an
           unknown-member row instead.
+        meaning: varda:ColumnRole/FOREIGN_KEY
+        related_mappings: [qb:DimensionProperty]
       MEASURE:
         description: >-
           A numeric quantity that is aggregated. Must declare
           `varda:additivity`. Lives on a fact or a bridge, never a dimension.
+        meaning: varda:ColumnRole/MEASURE
+        close_mappings: [qb:MeasureProperty]
       ATTRIBUTE:
         description: >-
           Descriptive context, grouped and filtered on but not summed. The
           default role for a dimension column.
+        meaning: varda:ColumnRole/ATTRIBUTE
+        close_mappings: [qb4o:LevelAttribute]
       DEGENERATE_DIMENSION:
         description: >-
           An identifier that lives on the fact with no dimension table of its
           own — an order number, a ticket reference. Fact tables only.
+        meaning: varda:ColumnRole/DEGENERATE_DIMENSION
+        close_mappings: [qb:DimensionProperty]
 
       VERSION_START:
         description: >-
@@ -193,7 +219,8 @@ enums:
           SQL:2011: a row is in force from this instant up to but not
           including `VERSION_END`. That convention is what stops consecutive
           versions overlapping at their boundary.
-        meaning: time:hasBeginning
+        meaning: varda:ColumnRole/VERSION_START
+        related_mappings: [time:hasBeginning]
 
       VERSION_END:
         description: >-
@@ -204,7 +231,8 @@ enums:
           only the start and derive the end from the next version's start;
           Data Vault virtualizes it as a view over an insert-only satellite.
           Requiring it would reject correct designs, so nothing does.
-        meaning: time:hasEnd
+        meaning: varda:ColumnRole/VERSION_END
+        related_mappings: [time:hasEnd]
 
       IS_CURRENT:
         description: >-
@@ -214,12 +242,14 @@ enums:
           Derivable from the period, and materialized anyway almost
           everywhere, because the alternative is a null test or a
           far-future sentinel in every query that wants today's row.
+        meaning: varda:ColumnRole/IS_CURRENT
 
       VERSION_NUMBER:
         description: >-
           A monotonic counter distinguishing versions of one natural key,
           for dimensions that version without timestamps at all. The current
           version is the highest. Dimensions with `varda:scd: TYPE_2` only.
+        meaning: varda:ColumnRole/VERSION_NUMBER
 
   ReferencedKey:
     description: >-
@@ -230,12 +260,14 @@ enums:
           The target's surrogate key: one row, the version in force when the
           referencing row was written. What every foreign key lands on unless
           it says otherwise.
+        meaning: varda:ReferencedKey/SURROGATE_KEY
       DURABLE_KEY:
         description: >-
           The target's durable key: one entity, whichever of its versions
           is asked for. Repeated once per version of a type-2 dimension, so
           no `FOREIGN KEY` constraint can name it; the assertions check that
           every value names some row.
+        meaning: varda:ReferencedKey/DURABLE_KEY
 
   Additivity:
     description: >-
@@ -248,16 +280,20 @@ enums:
         description: >-
           May be summed across every dimension of its fact. Sales amount,
           quantity, cost.
+        meaning: varda:Additivity/ADDITIVE
+        related_mappings: [qb4o:Sum]
       SEMI_ADDITIVE:
         description: >-
           May be summed across some dimensions but not others — almost always
           not across time. Account balance, inventory level, headcount. Must
           declare `varda:semi_additive_over`, and should declare
           `varda:semi_additive_aggregate`.
+        meaning: varda:Additivity/SEMI_ADDITIVE
       NON_ADDITIVE:
         description: >-
           May not be summed across any dimension. Ratios, percentages, unit
           prices, temperatures. Aggregate the components and recompute.
+        meaning: varda:Additivity/NON_ADDITIVE
 
   SemiAdditiveAggregate:
     description: >-
@@ -277,24 +313,32 @@ enums:
           at the end of the period. Latest by the dimension's own order,
           which for a date is the calendar; needs exactly one dimension to
           order by.
+        meaning: varda:SemiAdditiveAggregate/LAST
       FIRST:
         description: >-
           The value at the earliest member in range — an opening balance.
           Needs exactly one dimension to order by.
+        meaning: varda:SemiAdditiveAggregate/FIRST
       MIN:
         description: >-
           The lowest value across the members in range — the low point of a
           balance over a month.
+        meaning: varda:SemiAdditiveAggregate/MIN
+        exact_mappings: [qb4o:Min]
       MAX:
         description: >-
           The highest value across the members in range — peak headcount,
           the most stock held.
+        meaning: varda:SemiAdditiveAggregate/MAX
+        exact_mappings: [qb4o:Max]
       AVERAGE:
         description: >-
           The mean across the members in range — an average daily balance.
           Over the members present in the rows: a day with no row is not a
           day with zero, and a fact that skips days averages over the days
           it has.
+        meaning: varda:SemiAdditiveAggregate/AVERAGE
+        exact_mappings: [qb4o:Avg]
 
   HierarchyKind:
     description: >-
@@ -306,11 +350,14 @@ enums:
         description: >-
           A fixed number of levels, one column each — country, region, store.
           The default.
+        meaning: varda:HierarchyKind/LEVELS
+        close_mappings: [qb4o:Hierarchy]
       PARENT_CHILD:
         description: >-
           A tree of any depth, each row naming its parent through a foreign
           key into its own table — an employee and their manager. Declares
           `parent`.
+        meaning: varda:HierarchyKind/PARENT_CHILD
       BRIDGED:
         description: >-
           The same tree flattened into a bridge holding a row for every
@@ -318,6 +365,7 @@ enums:
           query reaches every descendant with one join rather than a
           recursion. Declares `bridge`, `ancestor` and `descendant`, and
           should declare `depth`.
+        meaning: varda:HierarchyKind/BRIDGED
 
   SlowlyChangingType:
     description: >-
@@ -329,13 +377,16 @@ enums:
         description: >-
           Retain original. The value is written once at first load and never
           updated, whatever the source says afterwards.
+        meaning: varda:SlowlyChangingType/TYPE_0
       TYPE_1:
         description: >-
           Overwrite. No history is kept; the row shows the current value.
+        meaning: varda:SlowlyChangingType/TYPE_1
       TYPE_2:
         description: >-
           Add a row. History is preserved by versioning: a new row per change,
           bounded by a validity window and marked with a current flag.
+        meaning: varda:SlowlyChangingType/TYPE_2
 
   FactType:
     description: >-
@@ -345,14 +396,17 @@ enums:
       TRANSACTION:
         description: >-
           One row per event, at the moment the event occurs. Insert-only.
+        meaning: varda:FactType/TRANSACTION
       PERIODIC_SNAPSHOT:
         description: >-
           One row per entity per regular interval, whether or not anything
           happened. Insert-only, predictable size.
+        meaning: varda:FactType/PERIODIC_SNAPSHOT
       ACCUMULATING_SNAPSHOT:
         description: >-
           One row per tracked item, updated in place as it passes milestones.
           The only fact shape that is routinely updated after insert.
+        meaning: varda:FactType/ACCUMULATING_SNAPSHOT
       FACTLESS:
         description: >-
           One row per event or condition, carrying no measure — coverage,
@@ -370,6 +424,7 @@ enums:
 # `varda:applies_to` names which kind of object the annotations may appear on.
 # The registry reads it to decide whether `varda:grain` is legal on a slot.
 # ---------------------------------------------------------------------------
+        meaning: varda:FactType/FACTLESS
 
 classes:
 
