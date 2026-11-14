@@ -72,6 +72,7 @@ from varda import (
     analysis,
     api,
     cli,
+    gen_expectations,
     gen_sql,
     gen_sqlalchemy,
     registry,
@@ -95,6 +96,7 @@ from varda.ext import (
 )
 from varda.gen_assertions import generate as generate_assertions
 from varda.gen_docs import generate as generate_docs
+from varda.gen_expectations import generate as generate_expectations
 from varda.gen_sql import GenerationError
 from varda.gen_sql import generate as generate_sql
 from varda.registry import PROFILE, TYPES, Config, Registry
@@ -2460,7 +2462,7 @@ def test_verify_passes_on_what_generate_wrote(
     args, _ = _committed(tmp_path)
     capsys.readouterr()
     assert cli.main(["verify", *args]) == 0
-    assert "4 artifacts from 4 generators up to date" in capsys.readouterr().out
+    assert "5 artifacts from 5 generators up to date" in capsys.readouterr().out
 
 
 def test_verify_fails_on_a_file_that_drifted(
@@ -2475,7 +2477,7 @@ def test_verify_fails_on_a_file_that_drifted(
     assert cli.main(["verify", *args]) == 1
     printed = capsys.readouterr().out
     assert f"{ddl} differs" in printed
-    assert "1 of 4 artifacts" in printed
+    assert "1 of 5 artifacts" in printed
     assert "-- edited" not in printed  # no diff unless asked
 
 
@@ -5494,6 +5496,256 @@ def test_the_assertions_say_so_when_a_model_claims_nothing(
     }
     sql = generate_assertions(build(tmp_path, {"DimBare": bare}))
     assert "no claim that a database enforces" in sql
+
+
+# --- the expectations: what the model claims that no constraint can ---------
+
+
+def _customers(rows: str) -> duckdb.DuckDBPyConnection:
+    """Build the retail mart and load ``rows`` into its type-2 customers."""
+    con = duckdb.connect()
+    con.execute(generate_sql(load(RETAIL), "mart", "duckdb", "none"))
+    # The rows are this file's own literals, not input from anywhere.
+    con.execute(
+        'INSERT INTO "mart"."dim_customer" ("customer_key", "customer_id", '  # noqa: S608
+        '"valid_from", "valid_to", "is_current") VALUES ' + rows
+    )
+    return con
+
+
+#: Three customers, A to C, as UUIDs.
+_A = "'00000000-0000-0000-0000-00000000000a'"
+_B = "'00000000-0000-0000-0000-00000000000b'"
+_C = "'00000000-0000-0000-0000-00000000000c'"
+
+
+def test_the_expectations_find_a_broken_history() -> None:
+    """Each way a type-2 history goes wrong, caught by the claim it breaks.
+
+    A version in force for no instant, two versions in force at once, two
+    current versions, and a current version something later supersedes.
+    No constraint states any of them, and each follows from the versioning
+    roles alone.
+    """
+    con = _customers(
+        f"(1, {_A}, '2024-01-01', '2024-01-01', false), "
+        f"(2, {_B}, '2024-01-01', '2024-06-01', false), "
+        f"(3, {_B}, '2024-03-01', NULL, true), "
+        f"(4, {_C}, '2024-01-01', '2024-02-01', true), "
+        f"(5, {_C}, '2024-02-01', NULL, true)"
+    )
+    assert _fired(con, generate_expectations(load(RETAIL))) == [
+        (
+            "-- dim_customer: every version is in force for a while "
+            '("valid_from" < "valid_to")'
+        ),
+        '-- dim_customer: versions of ("customer_id") do not overlap',
+        '-- dim_customer: at most one version of ("customer_id") is current',
+        '-- dim_customer: the current version of ("customer_id") is its latest',
+    ]
+
+
+def test_the_expectations_are_quiet_on_a_sound_history() -> None:
+    """No false positives, which is what decides whether they get run.
+
+    Versions meeting at a boundary do not overlap, because the period is
+    open at its end. A customer with no current version is one the source
+    deleted, which type 2 records rather than forbids.
+    """
+    con = _customers(
+        f"(1, {_A}, '2024-01-01', '2024-03-01', false), "
+        f"(2, {_A}, '2024-03-01', NULL, true), "
+        f"(3, {_B}, '2024-01-01', '2024-02-01', false)"
+    )
+    assert _fired(con, generate_expectations(load(RETAIL))) == []
+
+
+def test_a_level_reached_through_a_foreign_key_rolls_up_into_one_parent() -> (
+    None
+):
+    """`region_key` names one region, so it can be in one country only.
+
+    The foreign key is an identity that stands alone, unlike a plain
+    level's column, and the dimension holding both keys is where a copy of
+    the roll-up can contradict itself.
+    """
+    model = load(SNOWFLAKE)
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_city" ("city_key", "city_code", '
+        '"region_key", "country_key") VALUES '
+        "(1, 'AMS', 7, 1), (2, 'RTM', 7, 1), (3, 'UTR', 8, 1)"
+    )
+    sql = generate_expectations(model)
+    label = (
+        "-- dim_city.geography: each region_key.region_name is in one "
+        "country_key.country_name"
+    )
+    assert _fired(con, sql) == []
+    con.execute(
+        'INSERT INTO "mart"."dim_city" ("city_key", "city_code", '
+        '"region_key", "country_key") VALUES (4, \'EIN\', 7, 2)'
+    )
+    assert _fired(con, sql) == [label]
+
+
+def test_a_null_business_key_belongs_to_no_history() -> None:
+    """Two current products with no barcode are not one product twice.
+
+    A product sourced by supplier part has no `gtin`, and SQL's reading of
+    a null — the one the unique keys use — makes it no barcode at all,
+    rather than one barcode shared by every such product.
+    """
+    model = load(SNOWFLAKE)
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_product" ("product_key", "gtin", '
+        '"supplier_code", "supplier_part", "valid_from", "is_current") VALUES '
+        "(1, NULL, 'S1', 'P1', '2024-01-01', true), "
+        "(2, NULL, 'S1', 'P2', '2024-01-01', true)"
+    )
+    assert _fired(con, generate_expectations(model)) == []
+
+
+def _calendar(tmp_path: pathlib.Path, scd: str = "TYPE_1") -> Model:
+    """Build a dimension whose month is named by one column, keyed apart."""
+    table = dimension(
+        annotations={
+            "varda:role": "DIMENSION",
+            "varda:scd": scd,
+            "varda:hierarchies": [
+                {
+                    "name": "calendar",
+                    "levels": [
+                        "year",
+                        {"column": "month_name", "key": "year_month"},
+                        "d_id",
+                    ],
+                }
+            ],
+        }
+    )
+    for name in ("year", "month_name", "year_month"):
+        table["attributes"][name] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    return build(tmp_path, {"DimDay": table})
+
+
+def test_a_declared_level_key_names_one_member(tmp_path: pathlib.Path) -> None:
+    """Every day of one month says the same month name.
+
+    The key says which member a row belongs to and the column what it is
+    called, so one key with two names is two members the key cannot tell
+    apart.
+    """
+    model = _calendar(tmp_path)
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_day" ("d_key", "d_id", "year", '
+        '"month_name", "year_month") VALUES '
+        "(1, 'd1', '2024', 'January', '2024-01'), "
+        "(2, 'd2', '2024', 'January', '2024-01'), "
+        "(3, 'd3', '2025', 'January', '2025-01')"
+    )
+    sql = generate_expectations(model)
+    assert _fired(con, sql) == []
+    con.execute(
+        'INSERT INTO "mart"."dim_day" ("d_key", "d_id", "year", '
+        '"month_name", "year_month") VALUES '
+        "(4, 'd4', '2024', 'Januari', '2024-01')"
+    )
+    assert _fired(con, sql) == [
+        (
+            '-- dim_day.calendar: each ("year", "year_month") is named one '
+            '"month_name"'
+        )
+    ]
+
+
+def test_what_identifies_only_under_a_parent_claims_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A plain level is not held to one parent, nor a type-2 hierarchy.
+
+    `brand` under two categories is two brands under Varda's reading of a
+    level, so a query reporting it would report a model's own semantics as
+    a fault. A type-2 dimension's rows are versions, and a level moving is
+    history.
+    """
+    retail = generate_expectations(load(RETAIL))
+    assert ".calendar:" not in retail
+    assert ".merchandise:" not in retail
+    assert ".geography:" not in retail
+    assert "dim_product.merchandise" not in generate_expectations(
+        load(SNOWFLAKE)
+    )
+    assert "dim_day.calendar" not in generate_expectations(
+        _calendar(tmp_path, "TYPE_2")
+    )
+
+
+def test_every_business_key_of_a_type_2_dimension_is_checked() -> None:
+    """Two sources identifying a product two ways give two histories.
+
+    Each unique claim holding a versioning column, less that column, is one
+    business key, so the barcode and the supplier part are checked apart.
+    """
+    model = load(SNOWFLAKE)
+    product = model.table("DimProduct")
+    assert product is not None
+    keys = gen_expectations.business_keys(product)
+    assert [[c.name for c in key] for key in keys] == [
+        ["gtin"],
+        ["supplier_code", "supplier_part"],
+    ]
+
+
+def test_the_expectations_parse_everywhere_including_the_absent_dialects() -> (
+    None
+):
+    """Plain SQL, as the assertions are, the flag cast included."""
+    for example in (RETAIL, SNOWFLAKE):
+        blocks = [
+            block[block.index("SELECT") :]
+            for block in generate_expectations(load(example)).split("\n\n")
+            if "SELECT" in block
+        ]
+        assert blocks
+        for read in (
+            "postgres",
+            "duckdb",
+            "snowflake",
+            "tsql",
+            "bigquery",
+            "oracle",
+            "databricks",
+        ):
+            for block in blocks:
+                sqlglot.parse_one(block, read=read)
+
+
+def test_the_expectations_say_so_when_a_model_claims_nothing(
+    tmp_path: pathlib.Path,
+) -> None:
+    sql = generate_expectations(build(tmp_path, {"DimThing": dimension()}))
+    assert "no claim about its data that a constraint cannot" in sql
+
+
+def test_the_expectations_are_a_file_apart_from_the_assertions() -> None:
+    """`assertions.sql` returns nothing exactly when the constraints held.
+
+    A history check there would return rows for data every constraint
+    accepted, and the file would lose the meaning that makes it safe to
+    wire into a pipeline.
+    """
+    model = load(RETAIL)
+    assert "overlap" not in generate_assertions(model)
+    assert "UNIQUE" not in generate_expectations(model)
+    found = {g.name: g.artifacts for g in Registry.of().generators}
+    assert found["assertions"] == ("sql/assertions.sql",)
+    assert found["expectations"] == ("sql/expectations.sql",)
 
 
 # ---------------------------------------------------------------------------

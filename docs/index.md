@@ -102,6 +102,8 @@ each other by building both in a real database and comparing catalogs.
 the database to check it on every write; the checking is most of the cost of
 a bulk load, and a lakehouse cannot do it at all. The weaker levels stop the
 checking without losing the claim, which moves into `sql/assertions.sql`.
+What no constraint can state — a type-2 history that is sound, a hierarchy
+that rolls up — is in `sql/expectations.sql`, as queries of the same kind.
 
 **Four dialects** for the DDL — `postgres` (the default), `duckdb`,
 `snowflake`, `sqlserver`. Named rather than assumed, because there is no

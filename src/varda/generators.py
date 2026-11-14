@@ -7,7 +7,13 @@ would be a facade and nobody would find out until they tried to use it.
 
 from __future__ import annotations
 
-from . import gen_assertions, gen_docs, gen_sql, gen_sqlalchemy
+from . import (
+    gen_assertions,
+    gen_docs,
+    gen_expectations,
+    gen_sql,
+    gen_sqlalchemy,
+)
 from .ext import Generator
 
 BUILTIN: tuple[Generator, ...] = (
@@ -26,6 +32,16 @@ BUILTIN: tuple[Generator, ...] = (
         name="assertions",
         artifacts=("sql/assertions.sql",),
         run=gen_assertions.run,
+    ),
+    # Beside the assertions rather than inside them. Those return nothing
+    # exactly when the dropped constraints would have held; these are the
+    # claims no constraint can state — a type-2 history that is sound, a
+    # hierarchy that rolls up — and mixing the two would cost the first
+    # file the one meaning it has.
+    Generator(
+        name="expectations",
+        artifacts=(gen_expectations.ARTIFACT,),
+        run=gen_expectations.run,
     ),
     Generator(
         name="docs",

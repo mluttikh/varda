@@ -69,6 +69,7 @@ $ varda generate model.yaml --out out/
 wrote out/docs/model.md
 wrote out/python/mart.py
 wrote out/sql/assertions.sql
+wrote out/sql/expectations.sql
 wrote out/sql/mart.sql
 ```
 
@@ -137,6 +138,11 @@ some warehouses cannot do it at all, so the two can be separated. What the
 database stops policing does not stop being checked — it moves into
 `sql/assertions.sql`, which runs once per load and reports what it finds
 instead of aborting a transaction.
+
+**Expectations** — what the model says about its data that no constraint
+can: a type-2 dimension's versions do not overlap and only the latest is
+current, and a level reached through a foreign key rolls up into one parent.
+Each is a query in `sql/expectations.sql` returning the rows that break it.
 
 **Four dialects** — `varda generate mart.yaml --dialect sqlserver`. Named
 rather than assumed: there is no neutral SQL, and a `TIMESTAMP` emitted for
