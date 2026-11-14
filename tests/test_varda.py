@@ -1090,6 +1090,272 @@ def test_v408_leaves_a_snowflaked_dimension_alone(
     assert "V408" not in codes(model)
 
 
+# --- durable keys: one entity across its versions ---------------------------
+
+
+def _durable(required: bool = True, **extra: Any) -> dict[str, Any]:
+    """Build a column playing DURABLE_KEY."""
+    return {
+        "range": "integer",
+        "required": required,
+        "annotations": {"varda:role": "DURABLE_KEY"},
+        **extra,
+    }
+
+
+def _customer(**columns: Any) -> dict[str, Any]:
+    """Build a type-2 dimension versioned by a start, with a durable key."""
+    return versioned(
+        valid_from={
+            "range": "datetime",
+            "required": True,
+            "annotations": {"varda:role": "VERSION_START"},
+        },
+        is_current={
+            "range": "boolean",
+            "required": True,
+            "annotations": {"varda:role": "IS_CURRENT"},
+        },
+        **{"d_durable": _durable(), **columns},
+    )
+
+
+def _as_is(target: str = "DimThing", **annotations: Any) -> dict[str, Any]:
+    """Build a fact reaching ``target`` both as it was and as it is."""
+    fact = _referring(target)
+    fact["attributes"]["x_durable"] = {
+        "range": "integer",
+        "required": True,
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": target,
+            "varda:lands_on": "DURABLE_KEY",
+            **annotations,
+        },
+    }
+    return fact
+
+
+def test_the_durable_key_fixture_is_clean(tmp_path: pathlib.Path) -> None:
+    """The baseline the durable-key tests vary, so a finding is theirs."""
+    model = build(tmp_path, {"FctX": _as_is(), "DimThing": _customer()})
+    assert findings(model) == []
+
+
+def test_a_durable_reference_lands_on_the_durable_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Resolved in one place, and marked as no constraint's to state."""
+    model = build(tmp_path, {"FctX": _as_is(), "DimThing": _customer()})
+    fact = model.table("FctX")
+    assert fact is not None
+    by_surrogate, by_durable = fact.column("x_key"), fact.column("x_durable")
+    assert by_surrogate is not None
+    assert by_durable is not None
+    plain = analysis.reference(by_surrogate)
+    durable = analysis.reference(by_durable)
+    assert plain is not None
+    assert durable is not None
+    assert (plain.key.name, plain.enforceable) == ("d_key", True)
+    assert (durable.key.name, durable.enforceable) == ("d_durable", False)
+    assert by_durable.lands_on == "DURABLE_KEY"
+    assert by_surrogate.lands_on is None
+
+
+@pytest.mark.parametrize(
+    ("scd", "claimed"),
+    [("TYPE_2", ["d_durable", "valid_from"]), ("TYPE_1", ["d_durable"])],
+)
+def test_a_durable_key_is_unique_version_for_version(
+    tmp_path: pathlib.Path, scd: str, claimed: list[str]
+) -> None:
+    """The same uniqueness a natural key implies, derived the same way.
+
+    A second identity of one entity, and a claim of its own beside the
+    natural key's rather than merged into it: merged, two customers could
+    share a durable key as long as their ids differed.
+    """
+    table = _customer()
+    table["annotations"]["varda:scd"] = scd
+    if scd != "TYPE_2":
+        del table["attributes"]["valid_from"]
+        del table["attributes"]["is_current"]
+    model = build(tmp_path, {"DimThing": table})
+    dim = model.table("DimThing")
+    assert dim is not None
+    assert [[c.name for c in u] for u in analysis.unique_claims(dim)][
+        -1
+    ] == claimed
+
+
+def test_a_durable_reference_has_no_foreign_key_and_says_why(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The durable key repeats per version, so no constraint can land on it.
+
+    The DDL still runs, says in a comment why the reference has no
+    constraint, and the SQLAlchemy module agrees with it. The reference is
+    not dropped: it keeps its orphan check.
+    """
+    model = build(tmp_path, {"FctX": _as_is(), "DimThing": _customer()})
+    ddl = generate_sql(model)
+    executes(ddl)
+    fact_ddl = ddl.split('"mart"."fct_x"')[1]
+    assert fact_ddl.count("FOREIGN KEY (") == 1
+    assert "x_durable references dim_thing.d_durable, a durable key" in (
+        " ".join(line.removeprefix("-- ") for line in fact_ddl.splitlines())
+    )
+    assert "durable key" not in generate_sql(model, level="none")
+    source = gen_sqlalchemy.generate(model)
+    assert source.count("sa.ForeignKey(") == 1
+    assert '"lands_on": "DURABLE_KEY"' in source
+    assert "-- fct_x.x_durable -> dim_thing.d_durable" in generate_assertions(
+        model
+    )
+    assert "→ `DimThing`, by its durable key" in generate_docs(model)
+
+
+def test_a_durable_reference_finds_its_orphans(tmp_path: pathlib.Path) -> None:
+    """Every value names some version, though none names one alone."""
+    model = build(tmp_path, {"FctX": _as_is(), "DimThing": _customer()})
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_thing" '
+        '("d_key", "d_id", "valid_from", "is_current", "d_durable") VALUES '
+        "(1, 'a', '2024-01-01', false, 7), (2, 'a', '2024-02-01', true, 7)"
+    )
+    fact = 'INSERT INTO "mart"."fct_x" ("x_key", "x_durable") VALUES '
+    con.execute(fact + "(1, 7)")
+    assert _fired(con, generate_assertions(model)) == []
+    con.execute(fact + "(2, 8)")
+    assert _fired(con, generate_assertions(model)) == [
+        "-- fct_x.x_durable -> dim_thing.d_durable"
+    ]
+
+
+def test_v103_a_durable_key_on_a_fact(tmp_path: pathlib.Path) -> None:
+    fact = _referring("DimThing")
+    fact["attributes"]["x_durable"] = _durable()
+    model = build(tmp_path, {"FctX": fact, "DimThing": dimension()})
+    found = [f for f in findings(model) if f.code == "V103"]
+    assert [str(f.subject) for f in found] == ["FctX.x_durable"]
+
+
+def test_v308_two_durable_keys(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _customer(d_other=_durable())})
+    found = [f for f in findings(model) if f.code == "V308"]
+    assert [(str(f.subject), f.message) for f in found] == [
+        (
+            "DimThing",
+            (
+                "2 columns claim role 'DURABLE_KEY' (d_durable, d_other); "
+                "an entity has one identity that outlives its versions"
+            ),
+        )
+    ]
+    dim = model.table("DimThing")
+    assert dim is not None
+    assert all(  # and no uniqueness is derived from either
+        "d_other" not in [c.name for c in u]
+        and "d_durable" not in [c.name for c in u]
+        for u in analysis.unique_claims(dim)
+    )
+
+
+def test_v309_a_durable_key_that_may_be_absent(tmp_path: pathlib.Path) -> None:
+    model = build(
+        tmp_path, {"DimThing": _customer(d_durable=_durable(required=False))}
+    )
+    found = [f for f in findings(model) if f.code == "V309"]
+    assert [str(f.subject) for f in found] == ["DimThing.d_durable"]
+    assert found[0].severity == "warning"
+
+
+def test_v304_a_durable_unique_key_without_its_version(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The durable key repeats once per version, as the natural key does."""
+    table = _customer()
+    table["unique_keys"] = {
+        "by_id": {"unique_key_slots": ["d_id", "valid_from"]},
+        "by_durable": {"unique_key_slots": ["d_durable"]},
+    }
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in findings(model) if f.code == "V304"]
+    assert [str(f.subject) for f in found] == ["DimThing.by_durable"]
+
+
+def test_v305_a_durable_key_no_unique_key_covers(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A declared key replaces the derived ones, the durable key's too."""
+    table = _customer()
+    table["unique_keys"] = {
+        "by_id": {"unique_key_slots": ["d_id", "valid_from"]}
+    }
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in findings(model) if f.code == "V305"]
+    assert [str(f.subject) for f in found] == ["DimThing.d_durable"]
+    assert "a durable key in none" in found[0].message
+
+
+def test_v409_lands_on_a_column_that_is_not_a_foreign_key(
+    tmp_path: pathlib.Path,
+) -> None:
+    table = _customer()
+    table["attributes"]["d_id"]["annotations"]["varda:lands_on"] = "DURABLE_KEY"
+    model = build(tmp_path, {"DimThing": table})
+    found = [f for f in findings(model) if f.code == "V409"]
+    assert [(str(f.subject), f.message) for f in found] == [
+        (
+            "DimThing.d_id",
+            (
+                "varda:lands_on on a NATURAL_KEY; it says which key of its "
+                "target a FOREIGN_KEY holds"
+            ),
+        )
+    ]
+
+
+def test_v409_lands_on_a_durable_key_the_target_lacks(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Every generator would drop the reference, its orphan check with it."""
+    model = build(tmp_path, {"FctX": _as_is(), "DimThing": dimension()})
+    found = [f for f in findings(model) if f.code == "V409"]
+    assert [str(f.subject) for f in found] == ["FctX.x_durable"]
+    assert "fct_x.x_durable ->" not in generate_assertions(model)
+
+
+def test_v407_compares_against_the_durable_key(tmp_path: pathlib.Path) -> None:
+    """A durable reference holds the durable key's value, so its type."""
+    fact = _as_is()
+    fact["attributes"]["x_durable"]["range"] = "string"
+    model = build(tmp_path, {"FctX": fact, "DimThing": _customer()})
+    found = [f for f in findings(model) if f.code == "V407"]
+    assert [str(f.subject) for f in found] == ["FctX.x_durable"]
+    assert "DimThing.d_durable" in found[0].message
+
+
+def test_v605_a_durable_key_is_not_a_level(tmp_path: pathlib.Path) -> None:
+    """Nobody drills into `4718`, however long it lasts."""
+    table = _customer()
+    table["annotations"]["varda:hierarchies"] = [
+        {"name": "who", "levels": ["d_durable", "d_id"]}
+    ]
+    model = build(tmp_path, {"DimThing": table})
+    assert [(f.code, f.message) for f in findings(model)] == [
+        (
+            "V605",
+            (
+                "level 'd_durable' is named by a DURABLE_KEY, which a reader "
+                "cannot drill; a level is an ATTRIBUTE or a NATURAL_KEY"
+            ),
+        )
+    ]
+
+
 def test_v111_fact_without_type(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,
@@ -5726,13 +5992,19 @@ def test_the_assertions_say_so_when_a_model_claims_nothing(
 
 
 def _customers(rows: str) -> duckdb.DuckDBPyConnection:
-    """Build the retail mart and load ``rows`` into its type-2 customers."""
+    """Build the retail mart and load ``rows`` into its type-2 customers.
+
+    Each customer's durable key is numbered from its `customer_id`, so the
+    two identities agree and every history claim holds or breaks for both.
+    """
     con = duckdb.connect()
     con.execute(generate_sql(load(RETAIL), "mart", "duckdb", "none"))
     # The rows are this file's own literals, not input from anywhere.
     con.execute(
         'INSERT INTO "mart"."dim_customer" ("customer_key", "customer_id", '  # noqa: S608
-        '"valid_from", "valid_to", "is_current") VALUES ' + rows
+        '"valid_from", "valid_to", "is_current", "customer_durable_key") '
+        "SELECT *, dense_rank() OVER (ORDER BY v.id) "
+        f"FROM (VALUES {rows}) AS v(k, id, f, t, cur)"
     )
     return con
 
@@ -5766,6 +6038,18 @@ def test_the_expectations_find_a_broken_history() -> None:
         '-- dim_customer: versions of ("customer_id") do not overlap',
         '-- dim_customer: at most one version of ("customer_id") is current',
         '-- dim_customer: the current version of ("customer_id") is its latest',
+        (
+            '-- dim_customer: versions of ("customer_durable_key") do not '
+            "overlap"
+        ),
+        (
+            '-- dim_customer: at most one version of ("customer_durable_key") '
+            "is current"
+        ),
+        (
+            '-- dim_customer: the current version of ("customer_durable_key") '
+            "is its latest"
+        ),
     ]
 
 
@@ -5985,9 +6269,9 @@ def test_varda_reads_its_examples_as_claiming_these() -> None:
     retail = varda_claims.implied(load(RETAIL))
     assert [type(c).__name__ for c in retail] == [
         "PeriodNonEmpty",
-        "PeriodsDisjoint",
-        "AtMostOneFlagged",
-        "FlaggedIsLatest",
+        # Once by `customer_id`, once by `customer_durable_key`: two
+        # identities of one customer, each with a history of its own.
+        *("PeriodsDisjoint", "AtMostOneFlagged", "FlaggedIsLatest") * 2,
     ]
     snowflake = varda_claims.implied(load(SNOWFLAKE))
     assert [(type(c).__name__, str(c.subject)) for c in snowflake] == [
@@ -6211,6 +6495,7 @@ VOCABULARY = (
     "Additivity",
     "SlowlyChangingType",
     "SemiAdditiveAggregate",
+    "ReferencedKey",
     "FactType",
 )
 
@@ -7671,6 +7956,7 @@ def test_the_library_generates_what_the_command_line_does(
         (varda_snapshot.Additivity, "Additivity"),
         (varda_snapshot.SlowlyChangingType, "SlowlyChangingType"),
         (varda_snapshot.SemiAdditiveAggregate, "SemiAdditiveAggregate"),
+        (varda_snapshot.ReferencedKey, "ReferencedKey"),
         (varda_snapshot.FactType, "FactType"),
     ],
 )

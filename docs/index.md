@@ -44,7 +44,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 58 rules (varda 0.4.0): 0 errors, 0 warnings
+8 tables checked against 61 rules (varda 0.4.0): 0 errors, 0 warnings
 ```
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -67,19 +67,19 @@ That is the whole reason for choosing annotations over a new format.
 
 ## The core is small on purpose
 
-**Sixteen annotations.** Seven on tables, nine on columns. That is the entire
+**Seventeen annotations.** Seven on tables, ten on columns. That is the entire
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 
-**Fifty-eight rules**, in nine bands. A code names its concern:
+**Sixty-one rules**, in nine bands. A code names its concern:
 
 | | |
 | --- | --- |
 | `V001`–`V007` | The annotations themselves — typos, bad enum values, unknown prefixes, unknown fields, missing or mistyped values |
 | `V101`–`V104` | Roles — what a table is, what a column is, and where each role is legal |
 | `V201`–`V207` | Grain — a fact with no grain, a grain naming a column that does not exist, or one that may be absent |
-| `V301`–`V307` | Identity — a dimension with no natural key, a business key that repeats, two identities with nothing to tell them apart |
-| `V401`–`V408` | References — a foreign key pointing at a fact, one naming no target, one typed unlike the key it names |
+| `V301`–`V309` | Identity — a dimension with no natural key, a business key that repeats, two identities with nothing to tell them apart, two durable keys |
+| `V401`–`V409` | References — a foreign key pointing at a fact, one naming no target, one typed unlike the key it names, one landing on a durable key its target lacks |
 | `V501`–`V506` | Time — a version period on a dimension that keeps no versions |
 | `V601`–`V607` | Hierarchies — a level that is not a column, a path of one level |
 | `V701`–`V710` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross or what it takes instead, a decimal one that never says what it keeps |

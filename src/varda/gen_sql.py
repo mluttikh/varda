@@ -414,7 +414,9 @@ def _reference_line(fk: Column, schema: str, rule: Enforcement) -> str | None:
     """
     found = analysis.reference(fk)
     if found is None:
-        return None  # V402, V403 or V301 reports why
+        return None  # V402, V403, V301 or V409 reports why
+    if not found.enforceable:
+        return None  # a durable key; _unenforceable says so beneath
     return (
         f"FOREIGN KEY ({quoted(fk.physical)})\n"
         f"        REFERENCES {quoted(schema)}."
@@ -465,6 +467,31 @@ def _dropped(table: Table, schema: str, rule: Enforcement) -> list[str]:
     ]
 
 
+def _unenforceable(table: Table, rule: Enforcement) -> list[str]:
+    """Say, in the file, which references no constraint can state.
+
+    A reference landing on a durable key names an entity rather than a row,
+    and a type-2 dimension holds several rows for it, so there is nothing
+    unique for a `FOREIGN KEY` to point at at any level. Silent under `none`
+    with the rest; otherwise said, because a reference the model states and
+    the DDL omits without a word looks like one somebody forgot.
+    """
+    if not rule.keys:
+        return []
+    out: list[str] = []
+    for fk in table.foreign_keys:
+        found = analysis.reference(fk)
+        if found is None or found.enforceable:
+            continue
+        out += _comment(
+            f"{fk.physical} references {found.table.physical}."
+            f"{found.key.physical}, a durable key: it names an entity "
+            "rather than one row, so no FOREIGN KEY can name it, and "
+            "assertions.sql checks it instead."
+        )
+    return out
+
+
 def _table(table: Table, schema: str, sql: Dialect, rule: Enforcement) -> str:
     """Render one CREATE TABLE, with its grain as a comment."""
     lines: list[str] = []
@@ -482,6 +509,7 @@ def _table(table: Table, schema: str, sql: Dialect, rule: Enforcement) -> str:
     lines.append(",\n".join(body))
     lines.append(");")
     lines += _dropped(table, schema, rule)
+    lines += _unenforceable(table, rule)
     return "\n".join(lines)
 
 

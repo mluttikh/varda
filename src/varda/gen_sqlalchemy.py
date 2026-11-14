@@ -99,6 +99,7 @@ BOUND = frozenset({"sa", "metadata"})
 COLUMN_INFO = (
     "role",
     "references",
+    "lands_on",
     "additivity",
     "semi_additive_over",
     "semi_additive_aggregate",
@@ -116,6 +117,7 @@ def _column_info(column: Column) -> list[tuple[str, object]]:
     values: dict[str, object] = {
         "role": column.role,
         "references": _name(column.references),
+        "lands_on": column.lands_on,
         "additivity": column.additivity,
         # Always a list, one name or several, so a consumer reads one type.
         "semi_additive_over": [
@@ -272,7 +274,7 @@ def _column(column: Column, rule: Enforcement) -> str:
         f"        {sa_type(column)},",
     ]
     found = analysis.reference(column)
-    if rule.references and found is not None:
+    if rule.references and found is not None and found.enforceable:
         ref = _quote(f"{found.table.physical}.{found.key.physical}")
         lines.append(f"        sa.ForeignKey({ref}),")
     if column.role == ColumnRole.SURROGATE_KEY and rule.keys:

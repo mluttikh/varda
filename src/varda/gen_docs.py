@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from . import analysis
-from .snapshot import Additivity, SemiAdditiveAggregate
+from .snapshot import Additivity, ReferencedKey, SemiAdditiveAggregate
 
 if TYPE_CHECKING:
     from .ext import Context
@@ -68,6 +68,14 @@ def _semi_additive(column: Column, phrase: str) -> str:
     return phrase
 
 
+def _target(column: Column) -> str:
+    """Name what a foreign key reaches, and by which key if not the usual."""
+    target = f"→ `{column.references}`"
+    if column.lands_on == ReferencedKey.DURABLE_KEY:
+        target = f"{target}, by its durable key"
+    return target
+
+
 def _columns(table: Table) -> list[str]:
     rows = [
         "| Column | Role | Type | Notes |",
@@ -76,7 +84,7 @@ def _columns(table: Table) -> list[str]:
     for column in table.columns:
         notes: list[str] = []
         if column.references is not None and column.references.name:
-            notes.append(f"→ `{column.references}`")
+            notes.append(_target(column))
         if column.additivity:
             phrase = ADDITIVITY[column.additivity]
             if column.additivity == Additivity.SEMI_ADDITIVE:

@@ -99,6 +99,15 @@ classes:
         required: true
         annotations:
           varda:role: NATURAL_KEY
+      customer_durable_key:
+        description: >-
+          One value per customer across every version, assigned by the
+          warehouse. Survives a change to `customer_id` itself — two
+          accounts merged into one keep the survivor's durable key.
+        range: integer
+        required: true
+        annotations:
+          varda:role: DURABLE_KEY
       customer_name:
         annotations:
           varda:role: ATTRIBUTE
@@ -270,6 +279,17 @@ classes:
         annotations:
           varda:role: FOREIGN_KEY
           varda:references: DimCustomer
+      customer_durable_key:
+        description: >-
+          The same customer as `customer_key`, by their durable key: join
+          on this and the current flag to report a sale by the customer's
+          attributes now rather than at the time of the sale.
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimCustomer
+          varda:lands_on: DURABLE_KEY
       product_key:
         range: integer
         required: true
