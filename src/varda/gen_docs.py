@@ -11,11 +11,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from . import analysis
-from .snapshot import Additivity
+from .snapshot import Additivity, SemiAdditiveAggregate
 
 if TYPE_CHECKING:
     from .ext import Context
-    from .snapshot import Hierarchy, Level, Model, Table
+    from .snapshot import Column, Hierarchy, Level, Model, Table
 
 #: Below this, a level identifies itself and there is nothing to qualify.
 IDENTITY_IS_COMPOUND = 2
@@ -28,6 +28,16 @@ ADDITIVITY = {
     Additivity.ADDITIVE: "sums across every dimension",
     Additivity.SEMI_ADDITIVE: "does not sum across",
     Additivity.NON_ADDITIVE: "never sum; recompute from components",
+}
+
+#: What a semi-additive measure takes across its exception, as the phrase
+#: that follows the keys it names. Read by subscript, as above.
+AGGREGATE = {
+    SemiAdditiveAggregate.LAST: "take the last",
+    SemiAdditiveAggregate.FIRST: "take the first",
+    SemiAdditiveAggregate.MIN: "take the lowest",
+    SemiAdditiveAggregate.MAX: "take the highest",
+    SemiAdditiveAggregate.AVERAGE: "take the average",
 }
 
 
@@ -43,6 +53,21 @@ def _cell(text: str) -> str:
     return " ".join(text.split()).replace("|", "\\|")
 
 
+def _semi_additive(column: Column, phrase: str) -> str:
+    """Finish a semi-additive measure's phrase with what it cannot cross.
+
+    `does not sum across `date_key`; take the last` — the keys as written,
+    and the aggregate where the model gave one.
+    """
+    names = [f"`{ref.name}`" for ref in column.semi_additive_keys if ref.name]
+    if names:
+        phrase = f"{phrase} {', '.join(names)}"
+    chosen = column.semi_additive_aggregate
+    if chosen is not None:
+        phrase = f"{phrase}; {AGGREGATE[chosen]}"
+    return phrase
+
+
 def _columns(table: Table) -> list[str]:
     rows = [
         "| Column | Role | Type | Notes |",
@@ -54,11 +79,8 @@ def _columns(table: Table) -> list[str]:
             notes.append(f"→ `{column.references}`")
         if column.additivity:
             phrase = ADDITIVITY[column.additivity]
-            over = column.semi_additive_over
-            if column.additivity == Additivity.SEMI_ADDITIVE and (
-                over is not None and over.name
-            ):
-                phrase = f"{phrase} `{over}`"
+            if column.additivity == Additivity.SEMI_ADDITIVE:
+                phrase = _semi_additive(column, phrase)
             notes.append(phrase)
         if column.unit:
             notes.append(f"unit: `{column.unit}`")

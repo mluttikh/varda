@@ -80,6 +80,23 @@ class Additivity(StrEnum):
     NON_ADDITIVE = "NON_ADDITIVE"
 
 
+class SemiAdditiveAggregate(StrEnum):
+    """What a semi-additive measure takes in place of the sum."""
+
+    LAST = "LAST"
+    FIRST = "FIRST"
+    MIN = "MIN"
+    MAX = "MAX"
+    AVERAGE = "AVERAGE"
+
+
+#: The aggregates that pick one member by its place in an order, and so need
+#: exactly one dimension to order by.
+ORDERED_AGGREGATES = frozenset(
+    {SemiAdditiveAggregate.LAST, SemiAdditiveAggregate.FIRST}
+)
+
+
 class SlowlyChangingType(StrEnum):
     """How a dimension responds when a source attribute changes."""
 
@@ -372,7 +389,10 @@ class Column:
     required: bool
     references: Ref[Table] | None
     additivity: Additivity | None
-    semi_additive_over: Ref[Column] | None
+    #: The foreign keys ``varda:semi_additive_over`` names, in the order
+    #: written; one name written alone is one of them.
+    semi_additive_keys: tuple[Ref[Column], ...]
+    semi_additive_aggregate: SemiAdditiveAggregate | None
     #: LinkML's own ``unit``, every part the model gave. :attr:`unit` is
     #: the same thing as one label.
     unit_of_measure: Unit | None
@@ -395,6 +415,15 @@ class Column:
     instantiates: tuple[str, ...]
     annotations: Annotations
     table: Table = field(init=False, repr=False)
+
+    @property
+    def semi_additive_over(self) -> Ref[Column] | None:
+        """The first of :attr:`semi_additive_keys`, or ``None``.
+
+        Kept for readers written when a measure named one key at most.
+        """
+        keys = self.semi_additive_keys
+        return keys[0] if keys else None
 
     @property
     def unit(self) -> str | None:

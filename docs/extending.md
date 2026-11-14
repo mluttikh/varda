@@ -505,7 +505,7 @@ $ varda ext
 varda 0.4.0  [varda:]
     origin      built in
     rule tag    V
-    rules       55
+    rules       58
     table       varda:fact_type, varda:grain, varda:grain_statement, ...
     column      varda:additivity, varda:physical_name, varda:references, ...
     generators  sql, assertions, expectations, docs, sqlalchemy
