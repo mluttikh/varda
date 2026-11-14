@@ -445,7 +445,7 @@ varda 0.4.0  [varda:]
     rules       55
     table       varda:fact_type, varda:grain, varda:grain_statement, ...
     column      varda:additivity, varda:physical_name, varda:references, ...
-    generators  sql, assertions, docs, sqlalchemy
+    generators  sql, assertions, expectations, docs, sqlalchemy
 
 acme 1.2.0  [acme:]
     origin      varda.toml (/srv/mart/varda.toml)

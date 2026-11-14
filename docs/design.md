@@ -787,6 +787,39 @@ would be this file starting to say things the model did not. Both generators
 read `analysis.unique_claims` for the same reason: one claim computed in two
 places is one claim that eventually disagrees with itself.
 
+## Why expectations are a file of their own
+
+Some of what a model says about its data no constraint can state. A type-2
+dimension's versions of one entity must not be in force at once, and only
+the latest may be current; a level reached through a foreign key must sit
+under one parent. These follow from roles and hierarchies the model already
+declares, so checking them is not Varda making claims of its own — but they
+are not claims the DDL could have enforced either, and `assertions.sql` is
+defined by that. It returns nothing exactly when the dropped constraints
+would have held, and a file that also returned rows for a sound history
+would lose the one meaning that makes it safe to wire into a pipeline. So
+the second kind of claim is `sql/expectations.sql`, written the same way:
+plain SQL, one query per claim, nothing returned when it holds.
+
+What it checks is decided by what the model's own semantics make checkable,
+and they make less checkable than a first reading suggests. A plain level's
+column identifies a member only under its parent — Springfield is a city in
+several states, and the path names one of them — so a brand appearing under
+two categories is two brands, not a fault, and the file says nothing about
+it. Only an identity that stands alone can be held to one parent: a foreign
+key, which names one row of another dimension. A flat dimension whose
+levels are meant to roll up strictly needs a declaration saying so, and that
+is a vocabulary change rather than a query.
+
+A type-2 dimension's hierarchies are not checked at all yet. Its rows are
+versions, and a city moving region is history rather than a contradiction.
+Checking each version alone needs the current row, which only some designs
+mark, and the history checks themselves are as narrow: the current row is
+checked only where a flag names it, because a window closed by a far-future
+sentinel has no current row a query could find without guessing the
+sentinel. The overlap check still catches two open versions, sentinel or
+null.
+
 ## Why the grain sentence is not checked against the columns
 
 A fact declares its grain twice — as columns and as a sentence — and nothing

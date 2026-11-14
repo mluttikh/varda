@@ -50,11 +50,12 @@ reason the core can stay small enough to be correct.
 | `gen_docs.py` | ~190 | Markdown reference. |
 | `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
+| `gen_expectations.py` | ~380 | What the model claims about its data that no constraint can state — a sound type-2 history, a level rolling up — as queries of the same kind. |
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~510 | Six commands, each a call into `api` and the printing around it. |
 
-**7,345 lines of source**: 4,057 of code, 1,583 of docstrings, 553 of
-comment, 1,152 blank. The prose share is deliberate and is house style —
+**7,746 lines of source**: 4,305 of code, 1,658 of docstrings, 570 of
+comment, 1,213 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -62,7 +63,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 15 annotations,
 5 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 459 tests in 7,396 lines.
+importable is kept to what is meant to be imported. And 469 tests in 7,648 lines.
 
 ### The four seams
 
@@ -340,6 +341,22 @@ field a bare value stands for with `<prefix>:shorthand`, which is how a
 field. Two findings Varda did not make before: a hierarchy written as a
 bare name was silently dropped, and `grain_statement: [a, b]` reached the
 docs as a Python list. *`test_v006_an_extensions_required_annotation_is_enforced`*
+
+**Unreleased — the claims no constraint can state.** `sql/expectations.sql`,
+from a fifth built-in generator, holds what a model says about its data
+that DDL cannot: a type-2 dimension's versions are each in force for some
+time and do not overlap, at most one is current, and the current one is the
+latest — per business key, each claim holding a versioning column less that
+column; and in a dimension that is not type 2, a level reached through a
+foreign key sits under one parent, and a level declaring a key apart from
+its name is named one way per key. A file of its own because
+`assertions.sql` returns nothing exactly when the dropped constraints would
+have held. Plain SQL, a flag read as `CAST(flag AS INTEGER) = 1`, executed
+against DuckDB and parsed for every engine the assertions are. A plain
+level's strict roll-up is not checked, because its column identifies a
+member only under its parent; that needs a declaration, which is the next
+step's. See `docs/design.md`, *Why expectations are a file of their own*.
+*`test_the_expectations_find_a_broken_history`*
 
 ### Next, in the order it is worth doing
 

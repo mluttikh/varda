@@ -204,7 +204,7 @@ a run that no longer produces it:
 $ varda verify mart.yaml --out out/
 out/sql/mart.sql differs
 
-1 of 4 artifacts from 4 generators out of date; run `varda generate` with the same options to update them
+1 of 5 artifacts from 5 generators out of date; run `varda generate` with the same options to update them
 ```
 
 `--diff` prints how each file would change. Line endings are not compared,
