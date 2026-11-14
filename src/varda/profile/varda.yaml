@@ -296,6 +296,29 @@ enums:
           day with zero, and a fact that skips days averages over the days
           it has.
 
+  HierarchyKind:
+    description: >-
+      How a drill path is stored. Each has one relational form, after
+      Malinowski and Zimányi's classification, and a generator or a query
+      tool needs to know which one it is reading.
+    permissible_values:
+      LEVELS:
+        description: >-
+          A fixed number of levels, one column each — country, region, store.
+          The default.
+      PARENT_CHILD:
+        description: >-
+          A tree of any depth, each row naming its parent through a foreign
+          key into its own table — an employee and their manager. Declares
+          `parent`.
+      BRIDGED:
+        description: >-
+          The same tree flattened into a bridge holding a row for every
+          ancestor and descendant, with the depth between them, so that a
+          query reaches every descendant with one join rather than a
+          recursion. Declares `bridge`, `ancestor` and `descendant`, and
+          should declare `depth`.
+
   SlowlyChangingType:
     description: >-
       How a dimension responds when a source attribute changes. Kimball's
@@ -617,9 +640,16 @@ classes:
           the names.
         range: string
 
+      kind:
+        description: >-
+          How this path is stored: `LEVELS`, the default, `PARENT_CHILD` or
+          `BRIDGED`. Each kind uses its own fields and no other's.
+        range: HierarchyKind
+
       levels:
         description: >-
-          The levels, from least to most granular.
+          The levels, from least to most granular. `LEVELS` only, and
+          required there.
 
           At least two: one level is not a hierarchy, it is a column.
 
@@ -629,7 +659,6 @@ classes:
           not what tells its members apart.
         range: Level
         multivalued: true
-        required: true
         inlined_as_list: true
 
       strict:
@@ -656,6 +685,37 @@ classes:
           to its country, with no region — which says so instead of being
           reported for it.
         range: boolean
+
+      parent:
+        description: >-
+          The foreign key into this same table naming each row's parent.
+          `PARENT_CHILD` only, and required there. Null for a root.
+        range: string
+
+      bridge:
+        description: >-
+          The bridge holding this tree flattened, a row per ancestor and
+          descendant. `BRIDGED` only, and required there.
+        range: string
+
+      ancestor:
+        description: >-
+          The bridge's foreign key to the ancestor, into this dimension.
+          `BRIDGED` only, and required there.
+        range: string
+
+      descendant:
+        description: >-
+          The bridge's foreign key to the descendant, into this dimension.
+          `BRIDGED` only, and required there.
+        range: string
+
+      depth:
+        description: >-
+          The bridge's column counting the steps from ancestor to
+          descendant: 0 for a member and itself, 1 for its parent. `BRIDGED`
+          only. Optional, and checked where declared.
+        range: string
 
   Level:
     description: >-

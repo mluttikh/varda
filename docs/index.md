@@ -44,7 +44,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 64 rules (varda 0.4.0): 0 errors, 0 warnings
+8 tables checked against 67 rules (varda 0.4.0): 0 errors, 0 warnings
 ```
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -71,7 +71,7 @@ That is the whole reason for choosing annotations over a new format.
 core vocabulary, and it is deliberately the entire core vocabulary — see the
 [vocabulary reference](reference/vocabulary.md).
 
-**Sixty-four rules**, in nine bands. A code names its concern:
+**Sixty-seven rules**, in nine bands. A code names its concern:
 
 | | |
 | --- | --- |
@@ -81,7 +81,7 @@ core vocabulary, and it is deliberately the entire core vocabulary — see the
 | `V301`–`V309` | Identity — a dimension with no natural key, a business key that repeats, two identities with nothing to tell them apart, two durable keys |
 | `V401`–`V409` | References — a foreign key pointing at a fact, one naming no target, one typed unlike the key it names, one landing on a durable key its target lacks |
 | `V501`–`V509` | Time — a version period on a dimension that keeps no versions, a previous value of nothing |
-| `V601`–`V607` | Hierarchies — a level that is not a column, a path of one level |
+| `V601`–`V610` | Hierarchies — a level that is not a column, a path of one level, a tree whose parent is not a key into its own table |
 | `V701`–`V710` | Measures — an unclassified measure, a semi-additive one that never says what it cannot cross or what it takes instead, a decimal one that never says what it keeps |
 | `V801`–`V804` | Physical naming and types — two classes emitting one table, a width on a column that has none, a range naming nothing |
 

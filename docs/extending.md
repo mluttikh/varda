@@ -264,8 +264,8 @@ carries who claimed it:
 ```
 
 The shapes are closed, as the vocabulary is: `Determines`,
-`PeriodNonEmpty`, `PeriodsDisjoint`, `AtMostOneFlagged`, `FlaggedIsLatest`
-and `Requires`, each carrying its `subject` — the table, column or
+`PeriodNonEmpty`, `PeriodsDisjoint`, `AtMostOneFlagged`, `FlaggedIsLatest`,
+`Requires`, `Differs`, `Reflexive` and `Distance`, each carrying its `subject` — the table, column or
 hierarchy it is about — and a `statement`, the sentence a report shows. A
 renderer dispatches on them exhaustively, so a shape only one renderer knew
 would be a claim the others skip without a word. Every claim is about one

@@ -6,7 +6,8 @@ description: >-
   This one carries the forms a flat star has no use for: dimensions that
   reference other dimensions, hierarchy levels that reach through a foreign
   key to reach something readable, a level whose name is not what tells its
-  members apart, and a dimension two sources identify differently.
+  members apart, a dimension two sources identify differently, and a
+  reporting line of any depth, stored both as a tree and as its closure.
 
   The geography is snowflaked and the fact still joins every level directly.
   That is deliberate, and it is the arrangement the reference form of a level
@@ -185,6 +186,78 @@ classes:
         description: Rows from the sources that identify a part by supplier.
         unique_key_slots: [supplier_code, supplier_part, valid_from]
 
+  DimEmployee:
+    description: >-
+      A salesperson, and who they report to. The line is as deep as the
+      organization is, so it is no fixed set of levels: each row names its
+      manager, and the bridge below holds the same tree flattened, so that
+      "every sale in this manager's organization" is one join.
+    annotations:
+      varda:role: DIMENSION
+      varda:scd: TYPE_1
+      varda:hierarchies:
+        - name: reporting_line
+          description: Who each salesperson reports to.
+          kind: PARENT_CHILD
+          parent: manager_key
+        - name: organization
+          description: Everyone each manager is responsible for, at any depth.
+          kind: BRIDGED
+          bridge: BridgeReporting
+          ancestor: manager_key
+          descendant: employee_key
+          depth: depth
+    attributes:
+      employee_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: SURROGATE_KEY
+      employee_number:
+        required: true
+        annotations:
+          varda:role: NATURAL_KEY
+          varda:max_length: 10
+      employee_name:
+        annotations:
+          varda:role: ATTRIBUTE
+          varda:max_length: 120
+      manager_key:
+        description: The salesperson's manager; null for the head of sales.
+        range: integer
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimEmployee
+
+  BridgeReporting:
+    description: >-
+      The reporting line flattened: a row for every manager and everyone
+      below them, at any depth, and one for each salesperson and themselves.
+    annotations:
+      varda:role: BRIDGE
+      varda:grain: [manager_key, employee_key]
+      varda:grain_statement: >-
+        one row per salesperson per manager above them, themselves included
+    attributes:
+      manager_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimEmployee
+      employee_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimEmployee
+      depth:
+        description: Steps from the manager down to the salesperson; 0 for themselves.
+        range: integer
+        required: true
+        annotations:
+          varda:role: ATTRIBUTE
+
   FctSale:
     description: >-
       Joins every geography level directly, not only the city. The dimensions
@@ -225,6 +298,12 @@ classes:
         annotations:
           varda:role: FOREIGN_KEY
           varda:references: DimProduct
+      employee_key:
+        range: integer
+        required: true
+        annotations:
+          varda:role: FOREIGN_KEY
+          varda:references: DimEmployee
       net_amount:
         range: decimal
         required: true

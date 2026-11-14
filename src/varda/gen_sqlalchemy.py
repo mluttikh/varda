@@ -38,12 +38,12 @@ from typing import TYPE_CHECKING
 
 from . import analysis
 from .gen_sql import DEFAULT_LEVEL, Dialect, GenerationError, enforcement
-from .snapshot import ColumnRole
+from .snapshot import ColumnRole, HierarchyKind
 
 if TYPE_CHECKING:
     from .ext import Context
     from .gen_sql import Enforcement
-    from .snapshot import Column, Model, Table
+    from .snapshot import Column, Hierarchy, Model, Table
 
 #: LinkML range to the SQLAlchemy type that renders it. The keys are
 #: :data:`varda.gen_sql.TYPES`'s keys and a test says so, because two lists of
@@ -261,16 +261,32 @@ def _parts(
 
 def _hierarchies(table: Table) -> list[dict[str, object]]:
     """Render the drill paths as plain data a consumer can walk."""
-    return [
-        {
-            "name": h.name,
-            "levels": list(h.specs),
-            "strict": h.strict,
-            "complete": h.complete,
-        }
-        for h in table.hierarchies
-        if h.name
-    ]
+    return [_hierarchy(h) for h in table.hierarchies if h.name]
+
+
+def _hierarchy(hierarchy: Hierarchy) -> dict[str, object]:
+    """Render one drill path as the fields its kind uses, by name.
+
+    Each kind its own fields and no other's, as the profile declares them,
+    so a consumer dispatches on `kind` and reads what it finds.
+    """
+    out: dict[str, object] = {
+        "name": hierarchy.name,
+        "kind": hierarchy.kind,
+    }
+    match hierarchy.kind:
+        case HierarchyKind.PARENT_CHILD:
+            out["parent"] = _name(hierarchy.parent)
+        case HierarchyKind.BRIDGED:
+            out["bridge"] = _name(hierarchy.bridge)
+            out["ancestor"] = _name(hierarchy.ancestor)
+            out["descendant"] = _name(hierarchy.descendant)
+            out["depth"] = _name(hierarchy.depth)
+        case _:
+            out["levels"] = list(hierarchy.specs)
+            out["strict"] = hierarchy.strict
+            out["complete"] = hierarchy.complete
+    return out
 
 
 def _column(column: Column, rule: Enforcement) -> str:
