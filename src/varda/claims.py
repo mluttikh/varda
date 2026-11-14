@@ -31,11 +31,16 @@ in a minor release while its signature holds.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 from . import analysis
 from .gen_sql import quoted
-from .snapshot import VERSIONING_ROLES, SlowlyChangingType, table_of
+from .snapshot import (
+    VERSIONING_ROLES,
+    HierarchyKind,
+    SlowlyChangingType,
+    table_of,
+)
 
 if TYPE_CHECKING:
     from .snapshot import Column, Element, Hierarchy, Level, Model, Table
@@ -122,6 +127,48 @@ class Requires:
     required: tuple[Column, ...]
 
 
+@dataclass(frozen=True, eq=False)
+class Differs:
+    """No row holds equal values in ``left`` and ``right``.
+
+    A member that is its own parent, read through a self-referencing key.
+    """
+
+    subject: Element
+    statement: str
+    left: Column
+    right: Column
+
+
+@dataclass(frozen=True, eq=False)
+class Reflexive:
+    """Every value of ``right`` is in a row whose ``left`` is the same value.
+
+    A closure lists every member as its own ancestor, so a descendant with
+    no such row is one the closure lost.
+    """
+
+    subject: Element
+    statement: str
+    left: Column
+    right: Column
+
+
+@dataclass(frozen=True, eq=False)
+class Distance:
+    """``distance`` is zero exactly in the rows where ``start`` is ``end``.
+
+    The depth of a closure: none from a member to itself, at least one step
+    to anything else.
+    """
+
+    subject: Element
+    statement: str
+    start: Column
+    end: Column
+    distance: Column
+
+
 #: Every shape a claim may take. A renderer matches on this and ends in
 #: `assert_never`, so a shape added here is a type error until handled.
 Claim = (
@@ -131,6 +178,9 @@ Claim = (
     | AtMostOneFlagged
     | FlaggedIsLatest
     | Requires
+    | Differs
+    | Reflexive
+    | Distance
 )
 
 
@@ -138,17 +188,24 @@ def columns(claim: Claim) -> tuple[Column, ...]:
     """Every column a claim names, in the order its fields name them."""
     match claim:
         case Determines():
-            return (*claim.determinant, *claim.dependent)
+            named = (*claim.determinant, *claim.dependent)
         case PeriodNonEmpty():
-            return (claim.start, claim.end)
+            named = (claim.start, claim.end)
         case PeriodsDisjoint():
-            return (*claim.key, claim.start, claim.end)
+            named = (*claim.key, claim.start, claim.end)
         case AtMostOneFlagged():
-            return (*claim.key, claim.flag)
+            named = (*claim.key, claim.flag)
         case FlaggedIsLatest():
-            return (*claim.key, claim.flag, claim.order)
+            named = (*claim.key, claim.flag, claim.order)
         case Requires():
-            return (*claim.given, *claim.required)
+            named = (*claim.given, *claim.required)
+        case Differs() | Reflexive():
+            named = (claim.left, claim.right)
+        case Distance():
+            named = (claim.start, claim.end, claim.distance)
+        case _:
+            assert_never(claim)
+    return named
 
 
 def fault(claim: Claim, model: Model) -> str | None:
@@ -375,6 +432,83 @@ def _covered(hierarchy: Hierarchy, i: int) -> Claim | None:
     )
 
 
+def _levels(hierarchy: Hierarchy, *, versioned: bool) -> list[Claim]:
+    """Every claim a path of levels makes that rows can show."""
+    out: list[Claim] = []
+    for i in range(len(hierarchy.levels)):
+        found: list[Claim | None] = []
+        if i > 0 and hierarchy.complete:
+            found.append(_covered(hierarchy, i))
+        if not versioned:
+            found.append(_roll_up(hierarchy, i) if i > 0 else None)
+            found.append(_named_once(hierarchy, i))
+        out += [c for c in found if c is not None]
+    return out
+
+
+def _parent_child(hierarchy: Hierarchy) -> list[Claim]:
+    """Claim no member is its own parent, where the parent resolves.
+
+    A longer cycle needs a recursive query, which the engines spell
+    differently; the one-step cycle is the one a load produces, by copying
+    a row's own key into its parent.
+    """
+    table = hierarchy.table
+    ref = hierarchy.parent
+    parent = ref.target if ref is not None else None
+    found = analysis.reference(parent) if parent is not None else None
+    if parent is None or found is None or found.table is not table:
+        return []  # V609 says why
+    return [
+        Differs(
+            hierarchy,
+            "no member is its own parent "
+            f"({quoted(parent.physical)} <> {quoted(found.key.physical)})",
+            parent,
+            found.key,
+        )
+    ]
+
+
+def _bridged(hierarchy: Hierarchy) -> list[Claim]:
+    """Claim the bridge is a closure of the tree, where its parts resolve.
+
+    About the bridge, which holds every column the claims name: every
+    descendant is its own ancestor, and the depth is zero there and nowhere
+    else. That every member of the dimension is in the bridge at all is a
+    claim across two tables, which a claim is not.
+    """
+    ref = hierarchy.bridge
+    bridge = ref.target if ref is not None else None
+    up = hierarchy.ancestor.target if hierarchy.ancestor else None
+    down = hierarchy.descendant.target if hierarchy.descendant else None
+    if bridge is None or not bridge.is_bridge or up is None or down is None:
+        return []  # V608 or V610 says why
+    if up is down or up.table is not bridge or down.table is not bridge:
+        return []
+    a, d = quoted(up.physical), quoted(down.physical)
+    out: list[Claim] = [
+        Reflexive(
+            bridge,
+            f"every {d} is listed as its own {a}",
+            up,
+            down,
+        )
+    ]
+    depth = hierarchy.depth.target if hierarchy.depth else None
+    if depth is not None and analysis.storage(depth) == "integer":
+        out.append(
+            Distance(
+                bridge,
+                f"{quoted(depth.physical)} is 0 exactly where {a} = {d}",
+                up,
+                down,
+                depth,
+            )
+        )
+    return out
+
+
 def _hierarchies(table: Table) -> list[Claim]:
     """Every claim a table's hierarchies make that rows can show.
 
@@ -382,31 +516,40 @@ def _hierarchies(table: Table) -> list[Claim]:
     category is as broken as a row. Roll-up and naming not for a type-2
     dimension. Its rows are versions, and a city moving region is history
     rather than a contradiction; checking each version alone needs the
-    current row, which only some designs mark.
+    current row, which only some designs mark. A tree's own claims hold of
+    every row, versioned or not.
     """
     versioned = table.scd == SlowlyChangingType.TYPE_2
     out: list[Claim] = []
     for hierarchy in table.hierarchies:
-        for i in range(len(hierarchy.levels)):
-            found: list[Claim | None] = []
-            if i > 0 and hierarchy.complete:
-                found.append(_covered(hierarchy, i))
-            if not versioned:
-                found.append(_roll_up(hierarchy, i) if i > 0 else None)
-                found.append(_named_once(hierarchy, i))
-            out += [c for c in found if c is not None]
+        match hierarchy.kind:
+            case HierarchyKind.LEVELS:
+                out += _levels(hierarchy, versioned=versioned)
+            case HierarchyKind.PARENT_CHILD:
+                out += _parent_child(hierarchy)
+            case HierarchyKind.BRIDGED:
+                out += _bridged(hierarchy)
+            case None:
+                pass  # V007 reports a kind that is not one
+            case _:
+                assert_never(hierarchy.kind)
     return out
 
 
 def implied(model: Model) -> tuple[Claim, ...]:
     """Every claim Varda reads a model as making, table by table.
 
-    In creation order, so the queries read in the order the DDL creates the
-    tables they are about; within a table, its history before its
-    hierarchies.
+    In creation order of the table each claim is about, so the queries read
+    in the order the DDL creates the tables; within a table, its history
+    before its hierarchies. A bridged hierarchy's claims are about its
+    bridge, and sit with the bridge's.
     """
-    return tuple(
+    tables = analysis.creation_order(model)
+    order = {t.name: i for i, t in enumerate(tables)}
+    made = [
         claim
-        for table in analysis.creation_order(model)
+        for table in tables
         for claim in (*_history(table), *_hierarchies(table))
-    )
+    ]
+    made.sort(key=lambda claim: order[table_of(claim.subject).name])
+    return tuple(made)

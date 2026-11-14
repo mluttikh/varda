@@ -2353,7 +2353,8 @@ def test_v007_a_structure_written_as_a_bare_name(
     assert wrong == [
         (
             "varda:hierarchies[0] is 'geography'; a Hierarchy is written as a "
-            "mapping of complete, description, levels, name, strict"
+            "mapping of ancestor, bridge, complete, depth, descendant, "
+            "description, kind, levels, name, parent, strict"
         )
     ]
 
@@ -2439,19 +2440,6 @@ _SKIPPED: list[tuple[str, str, dict[str, Any]]] = [
             )
         },
     ),
-    (
-        "varda:Hierarchy.levels",
-        "V603",
-        {
-            "DimThing": dimension(
-                annotations={
-                    "varda:role": "DIMENSION",
-                    "varda:scd": "TYPE_1",
-                    "varda:hierarchies": [{"name": "path"}],
-                }
-            )
-        },
-    ),
 ]
 
 
@@ -2519,12 +2507,16 @@ def test_the_vocabulary_reads_what_a_profile_declares() -> None:
     role = declared.declaration("column", "varda:role")
     assert role is not None
     assert (role.kind, role.base) == ("enum", None)
-    levels = declared.fields("varda", "Hierarchy")["levels"]
+    # Not required: a parent-child path has none. V603 asks for two on a
+    # path of levels, and V608 refuses them on any other kind.
+    hierarchy = declared.fields("varda", "Hierarchy")
+    levels = hierarchy["levels"]
     assert (levels.kind, levels.range, levels.required) == (
         "class",
         "Level",
-        True,
+        False,
     )
+    assert hierarchy["name"].required
     assert declared.shorthand("varda", "Level") == "column"
     assert declared.shorthand("varda", "Hierarchy") is None
     assert declared.fields("varda", "Nothing") == {}
@@ -6483,12 +6475,16 @@ def test_varda_reads_its_examples_as_claiming_these() -> None:
     ]
     snowflake = varda_claims.implied(load(SNOWFLAKE))
     assert [(type(c).__name__, str(c.subject)) for c in snowflake] == [
+        ("Differs", "DimEmployee.reporting_line"),
         ("AtMostOneFlagged", "DimProduct"),
         ("FlaggedIsLatest", "DimProduct"),
         ("AtMostOneFlagged", "DimProduct"),
         ("FlaggedIsLatest", "DimProduct"),
         # Type 2: complete, but no roll-up across versions.
         ("Requires", "DimProduct.merchandise"),
+        # The closure's claims are about the bridge, and sit with it.
+        ("Reflexive", "BridgeReporting"),
+        ("Distance", "BridgeReporting"),
         ("Determines", "DimCity.geography"),
     ]
 
@@ -6708,6 +6704,322 @@ def test_a_requires_claim_over_several_columns(tmp_path: pathlib.Path) -> None:
     assert isinstance(claim, ext_module.Requires)
     empty = ext_module.Requires(claim.subject, "nothing", claim.given, ())
     assert varda_claims.fault(empty, model) == "requires nothing, or of nothing"
+
+
+# --- trees: hierarchies of any depth ----------------------------------------
+
+
+def _fk(target: str, *, required: bool = True) -> dict[str, Any]:
+    """Build an integer foreign key to ``target``."""
+    return {
+        "range": "integer",
+        "required": required,
+        "annotations": {
+            "varda:role": "FOREIGN_KEY",
+            "varda:references": target,
+        },
+    }
+
+
+def _written(fields: dict[str, Any]) -> dict[str, Any]:
+    """Drop the fields set to ``None``: a test writing a path without them."""
+    return {k: v for k, v in fields.items() if v is not None}
+
+
+def _org(
+    tmp_path: pathlib.Path,
+    *,
+    chart: dict[str, Any] | None = None,
+    closure: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+    bridged: dict[str, Any] | None = None,
+    **tables: Any,
+) -> Model:
+    """Build a staff dimension drilled as a tree and as its closure.
+
+    ``chart`` and ``closure`` override the two hierarchies' fields, a
+    ``None`` dropping one; ``staff`` and ``bridged`` add or replace columns
+    of the dimension and of its bridge.
+    """
+    dim = dimension(
+        annotations={
+            "varda:role": "DIMENSION",
+            "varda:scd": "TYPE_1",
+            "varda:hierarchies": [
+                _written(
+                    {
+                        "name": "chart",
+                        "kind": "PARENT_CHILD",
+                        "parent": "boss_key",
+                        **(chart or {}),
+                    }
+                ),
+                _written(
+                    {
+                        "name": "closure",
+                        "kind": "BRIDGED",
+                        "bridge": "BridgeOrg",
+                        "ancestor": "up_key",
+                        "descendant": "down_key",
+                        "depth": "depth",
+                        **(closure or {}),
+                    }
+                ),
+            ],
+        }
+    )
+    dim["attributes"]["boss_key"] = _fk("DimStaff", required=False)
+    dim["attributes"].update(staff or {})
+    bridge = {
+        "annotations": {"varda:role": "BRIDGE"},
+        "attributes": {
+            "up_key": _fk("DimStaff"),
+            "down_key": _fk("DimStaff"),
+            "depth": {
+                "range": "integer",
+                "required": True,
+                "annotations": {"varda:role": "ATTRIBUTE"},
+            },
+            **(bridged or {}),
+        },
+    }
+    return build(tmp_path, {"DimStaff": dim, "BridgeOrg": bridge, **tables})
+
+
+def _said(model: Model, code: str) -> list[str]:
+    """Return the messages one rule produced."""
+    return [f.message for f in findings(model) if f.code == code]
+
+
+def test_a_tree_and_its_closure_are_read(tmp_path: pathlib.Path) -> None:
+    """Each kind through its own fields, and nothing it does not use."""
+    model = _org(tmp_path)
+    assert findings(model) == []
+    staff, bridge = model.table("DimStaff"), model.table("BridgeOrg")
+    assert staff is not None
+    assert bridge is not None
+    chart, closure = staff.hierarchies
+    assert chart.kind == "PARENT_CHILD"
+    assert chart.levels == ()
+    assert chart.parent is not None
+    assert chart.parent.target is staff.column("boss_key")
+    assert closure.kind == "BRIDGED"
+    assert closure.bridge is not None
+    assert closure.bridge.target is bridge
+    parts = (closure.ancestor, closure.descendant, closure.depth)
+    assert [p.target for p in parts if p is not None] == [
+        bridge.column("up_key"),
+        bridge.column("down_key"),
+        bridge.column("depth"),
+    ]
+    page = generate_docs(model)
+    assert "(chart): a tree, each row's parent named by `boss_key`" in page
+    assert (
+        "(closure): a tree, flattened into `BridgeOrg` (`up_key` → "
+        "`down_key`, `depth` steps)"
+    ) in page
+    source = gen_sqlalchemy.generate(model)
+    assert '"kind": "PARENT_CHILD"' in source
+    assert '"parent": "boss_key"' in source
+    assert '"bridge": "BridgeOrg"' in source
+    assert '"strict"' not in source
+
+
+def test_a_tree_and_its_closure_are_checked_against_the_data(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A member its own boss, a closure missing a member, a depth wrong."""
+    model = _org(tmp_path)
+    sql = generate_expectations(model)
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    con.execute(
+        'INSERT INTO "mart"."dim_staff" ("d_key", "d_id", "boss_key") '
+        "VALUES (1, 'a', NULL), (2, 'b', 1)"
+    )
+    closure = 'INSERT INTO "mart"."bridge_org" ("up_key", "down_key", "depth") '
+    con.execute(closure + "VALUES (1, 1, 0), (2, 2, 0), (1, 2, 1)")
+    assert _fired(con, sql) == []
+    con.execute(
+        'UPDATE "mart"."dim_staff" SET "boss_key" = 2 WHERE "d_key" = 2'
+    )
+    con.execute(closure + "VALUES (1, 3, 0)")
+    assert _fired(con, sql) == [
+        (
+            "-- dim_staff.chart: no member is its own parent "
+            '("boss_key" <> "d_key")'
+        ),
+        '-- bridge_org: every "down_key" is listed as its own "up_key"',
+        '-- bridge_org: "depth" is 0 exactly where "up_key" = "down_key"',
+    ]
+
+
+@pytest.mark.parametrize(
+    ("chart", "closure", "messages"),
+    [
+        (
+            {"parent": None},
+            {},
+            [
+                (
+                    "a PARENT_CHILD hierarchy with no parent; it says which "
+                    "column holds the tree"
+                )
+            ],
+        ),
+        (
+            {},
+            {"ancestor": None},
+            [
+                (
+                    "a BRIDGED hierarchy with no ancestor; it says which "
+                    "column holds the tree"
+                )
+            ],
+        ),
+        (
+            {"levels": ["d_id", "d_key"]},
+            {"strict": True},
+            [
+                "levels on a PARENT_CHILD hierarchy, which uses parent",
+                (
+                    "strict on a BRIDGED hierarchy, which uses ancestor, "
+                    "bridge, depth, descendant"
+                ),
+            ],
+        ),
+    ],
+)
+def test_v608_a_hierarchy_carries_what_its_kind_uses(
+    tmp_path: pathlib.Path,
+    chart: dict[str, Any],
+    closure: dict[str, Any],
+    messages: list[str],
+) -> None:
+    """And a tree has no levels for V603 to count."""
+    model = _org(tmp_path, chart=chart, closure=closure)
+    assert _said(model, "V608") == messages
+    assert "V603" not in codes(model)
+
+
+def test_v608_a_path_of_levels_carrying_a_trees_field(
+    tmp_path: pathlib.Path,
+) -> None:
+    model = _products(tmp_path, parent="d_key")
+    assert _said(model, "V608") == [
+        "parent on a LEVELS hierarchy, which uses complete, levels, strict"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("parent", "message"),
+    [
+        ("nobody", "parent names 'nobody', which is not a column there"),
+        (
+            "d_id",
+            (
+                "parent names 'd_id', a NATURAL_KEY; it must be a FOREIGN_KEY "
+                "into DimStaff"
+            ),
+        ),
+        (
+            "other_key",
+            (
+                "parent names 'other_key', which references DimThing; it must "
+                "reference DimStaff, the table the hierarchy is on"
+            ),
+        ),
+    ],
+)
+def test_v609_a_parent_that_names_no_row_of_its_table(
+    tmp_path: pathlib.Path, parent: str, message: str
+) -> None:
+    model = _org(
+        tmp_path,
+        chart={"parent": parent},
+        staff={"other_key": _fk("DimThing", required=False)},
+        DimThing=dimension(),
+    )
+    assert _said(model, "V609") == [message]
+
+
+@pytest.mark.parametrize(
+    ("closure", "bridged", "messages"),
+    [
+        (
+            {"bridge": "DimThing"},
+            {},
+            ["bridge names 'DimThing', a DIMENSION; it must be a BRIDGE"],
+        ),
+        (
+            {"ancestor": "thing_key"},
+            {"thing_key": _fk("DimThing")},
+            [
+                (
+                    "ancestor names 'thing_key', which references DimThing; it "
+                    "must reference DimStaff, the table the hierarchy is on"
+                )
+            ],
+        ),
+        (
+            {"ancestor": "down_key"},
+            {},
+            ["ancestor and descendant name one column; they are two"],
+        ),
+        (
+            {"depth": "steps"},
+            {},
+            ["depth names 'steps', which is not a column of BridgeOrg"],
+        ),
+        (
+            {},
+            {
+                "depth": {
+                    "range": "string",
+                    "annotations": {"varda:role": "ATTRIBUTE"},
+                }
+            },
+            [
+                (
+                    "depth names 'depth', whose range is 'string'; a depth "
+                    "is a whole number of steps"
+                )
+            ],
+        ),
+    ],
+)
+def test_v610_a_bridge_that_cannot_hold_the_tree(
+    tmp_path: pathlib.Path,
+    closure: dict[str, Any],
+    bridged: dict[str, Any],
+    messages: list[str],
+) -> None:
+    model = _org(
+        tmp_path, closure=closure, bridged=bridged, DimThing=dimension()
+    )
+    assert _said(model, "V610") == messages
+
+
+def test_a_kind_that_is_not_one_is_reported_once(
+    tmp_path: pathlib.Path,
+) -> None:
+    """V007's alone: nothing else guesses what the path was meant to be.
+
+    A field of a structured annotation reached no rule before: `kind` was
+    the first enum-ranged one.
+    """
+    model = _org(tmp_path, chart={"kind": "TREE"})
+    assert [(f.code, f.message) for f in findings(model)] == [
+        (
+            "V007",
+            (
+                "varda:hierarchies[0].kind is 'TREE', which is not a value of "
+                "HierarchyKind; expected one of LEVELS, PARENT_CHILD, BRIDGED"
+            ),
+        )
+    ]
+    chart, _ = model.table("DimStaff").hierarchies  # type: ignore[union-attr]
+    assert chart.kind is None
 
 
 def _claiming(*made: ext_module.Claim, name: str = "b") -> Extension:
