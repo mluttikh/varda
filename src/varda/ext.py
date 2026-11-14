@@ -40,6 +40,7 @@ from .claims import (
     FlaggedIsLatest,
     PeriodNonEmpty,
     PeriodsDisjoint,
+    Requires,
 )
 from .snapshot import (
     Additivity,
@@ -100,6 +101,7 @@ __all__ = [
     "Ref",
     "ReferencedKey",
     "Report",
+    "Requires",
     "Rule",
     "RuleError",
     "RuleSet",

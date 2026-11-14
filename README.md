@@ -142,7 +142,8 @@ instead of aborting a transaction.
 
 **Expectations** — what the model says about its data that no constraint
 can: a type-2 dimension's versions do not overlap and only the latest is
-current, and a level reached through a foreign key rolls up into one parent.
+current, every member of a hierarchy has a parent, and — where the hierarchy
+says `strict: true` — only one.
 Each is a query in `sql/expectations.sql` returning the rows that break it.
 
 **Four dialects** — `varda generate mart.yaml --dialect sqlserver`. Named

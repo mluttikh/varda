@@ -807,14 +807,22 @@ column identifies a member only under its parent — Springfield is a city in
 several states, and the path names one of them — so a brand appearing under
 two categories is two brands, not a fault, and the file says nothing about
 it. Only an identity that stands alone can be held to one parent: a foreign
-key, which names one row of another dimension. A flat dimension whose
-levels are meant to roll up strictly needs a declaration saying so, and that
-is a vocabulary change rather than a query.
+key, which names one row of another dimension, or a level in a hierarchy
+declared `strict: true`, which says its values stand alone. Strict is off
+by default because the Springfield reading is the one the path itself
+implies; a default the other way would report sound models as broken.
 
-A type-2 dimension's hierarchies are not checked at all yet. Its rows are
-versions, and a city moving region is history rather than a contradiction.
-Checking each version alone needs the current row, which only some designs
-mark, and the history checks themselves are as narrow: the current row is
+Completeness is the opposite case, on by default. A row holding a brand and
+no category drops out of every roll-up by category, under any reading of
+what a brand is, so the hierarchy claims it unless it says
+`complete: false`. Not where the parent column is required, which the DDL
+already states.
+
+A type-2 dimension's hierarchies are checked for completeness and nothing
+more. Its rows are versions, and a city moving region is history rather
+than a contradiction. Checking roll-up for each version alone needs the
+current row, which only some designs mark, and the history checks
+themselves are as narrow: the current row is
 checked only where a flag names it, because a window closed by a far-future
 sentinel has no current row a query could find without guessing the
 sentinel. The overlap check still catches two open versions, sentinel or

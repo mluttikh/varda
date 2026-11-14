@@ -2353,7 +2353,7 @@ def test_v007_a_structure_written_as_a_bare_name(
     assert wrong == [
         (
             "varda:hierarchies[0] is 'geography'; a Hierarchy is written as a "
-            "mapping of description, levels, name"
+            "mapping of complete, description, levels, name, strict"
         )
     ]
 
@@ -6365,18 +6365,26 @@ def test_what_identifies_only_under_a_parent_claims_nothing(
     `brand` under two categories is two brands under Varda's reading of a
     level, so a query reporting it would report a model's own semantics as
     a fault. A type-2 dimension's rows are versions, and a level moving is
-    history.
+    history. Unless a hierarchy is declared strict, which retail's date
+    paths are.
     """
-    retail = generate_expectations(load(RETAIL))
-    assert ".calendar:" not in retail
-    assert ".merchandise:" not in retail
-    assert ".geography:" not in retail
-    assert "dim_product.merchandise" not in generate_expectations(
-        load(SNOWFLAKE)
-    )
-    assert "dim_day.calendar" not in generate_expectations(
-        _calendar(tmp_path, "TYPE_2")
-    )
+
+    def roll_ups(sql: str) -> list[str]:
+        return [
+            line
+            for line in sql.splitlines()
+            if line.startswith("-- ") and " is in one " in line
+        ]
+
+    retail = roll_ups(generate_expectations(load(RETAIL)))
+    assert retail
+    assert all(line.startswith("-- dim_date.") for line in retail)
+    # Snowflake's only roll-up is a level reached through a foreign key.
+    assert [
+        line.split(":")[0]
+        for line in roll_ups(generate_expectations(load(SNOWFLAKE)))
+    ] == ["-- dim_city.geography"]
+    assert not roll_ups(generate_expectations(_calendar(tmp_path, "TYPE_2")))
 
 
 def test_every_business_key_of_a_type_2_dimension_is_checked() -> None:
@@ -6452,11 +6460,26 @@ def test_varda_reads_its_examples_as_claiming_these() -> None:
     parents or names.
     """
     retail = varda_claims.implied(load(RETAIL))
-    assert [type(c).__name__ for c in retail] == [
-        "PeriodNonEmpty",
+    assert [(type(c).__name__, str(c.subject)) for c in retail] == [
+        ("PeriodNonEmpty", "DimCustomer"),
         # Once by `customer_id`, once by `customer_durable_key`: two
         # identities of one customer, each with a history of its own.
-        *("PeriodsDisjoint", "AtMostOneFlagged", "FlaggedIsLatest") * 2,
+        *(
+            (name, "DimCustomer")
+            for name in (
+                "PeriodsDisjoint",
+                "AtMostOneFlagged",
+                "FlaggedIsLatest",
+            )
+            * 2
+        ),
+        # Strict, so each level is in one parent as well as in some parent.
+        *(("Requires", "DimDate.calendar"), ("Determines", "DimDate.calendar"))
+        * 2,
+        *(("Requires", "DimDate.fiscal"), ("Determines", "DimDate.fiscal")) * 2,
+        ("Requires", "DimProduct.merchandise"),
+        ("Requires", "DimProduct.merchandise"),
+        # `geography` may skip a level, and says so.
     ]
     snowflake = varda_claims.implied(load(SNOWFLAKE))
     assert [(type(c).__name__, str(c.subject)) for c in snowflake] == [
@@ -6464,6 +6487,8 @@ def test_varda_reads_its_examples_as_claiming_these() -> None:
         ("FlaggedIsLatest", "DimProduct"),
         ("AtMostOneFlagged", "DimProduct"),
         ("FlaggedIsLatest", "DimProduct"),
+        # Type 2: complete, but no roll-up across versions.
+        ("Requires", "DimProduct.merchandise"),
         ("Determines", "DimCity.geography"),
     ]
 
@@ -6518,6 +6543,171 @@ def test_an_extensions_claim_is_rendered_and_says_who_made_it(
     )
     assert _fired(con, sql) == [label]
     assert "claimed by" not in generate_expectations(_merchandise(tmp_path))
+
+
+def _products(
+    tmp_path: pathlib.Path, *extensions: Extension, **flags: Any
+) -> Model:
+    """Build a type-1 product dimension drilled category, brand, product."""
+    table = dimension(
+        annotations={
+            "varda:role": "DIMENSION",
+            "varda:scd": "TYPE_1",
+            "varda:hierarchies": [
+                {
+                    "name": "merchandise",
+                    "levels": ["category", "brand", "d_id"],
+                    **flags,
+                }
+            ],
+        }
+    )
+    for name in ("category", "brand"):
+        table["attributes"][name] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    return build(tmp_path, {"DimProduct": table}, extensions=extensions)
+
+
+def _load_products(model: Model, rows: str) -> duckdb.DuckDBPyConnection:
+    """Build ``model``'s mart and load ``rows`` into its products."""
+    con = duckdb.connect()
+    con.execute(generate_sql(model, "mart", "duckdb", "none"))
+    # The rows are this file's own literals, not input from anywhere.
+    con.execute(
+        'INSERT INTO "mart"."dim_product" ("d_key", "d_id", "category", '  # noqa: S608
+        f'"brand") VALUES {rows}'
+    )
+    return con
+
+
+def test_a_strict_hierarchy_holds_each_member_to_one_parent(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Declared strict, brand "Acme" is one brand, so in one category.
+
+    What the worked extension claims through the seam, now said by the
+    model itself; undeclared, a brand under two categories is two brands.
+    """
+    model = _products(tmp_path, strict=True)
+    assert findings(model) == []
+    hierarchy = model.table("DimProduct").hierarchies[0]  # type: ignore[union-attr]
+    assert (hierarchy.strict, hierarchy.complete) == (True, True)
+    assert [[c.name for c in i] for i in analysis.identities(hierarchy)] == [
+        ["category"],
+        ["brand"],
+        ["d_id"],
+    ]
+    sql = generate_expectations(model)
+    label = "-- dim_product.merchandise: each brand is in one category"
+    con = _load_products(
+        model, "(1, 'p1', 'Food', 'Acme'), (2, 'p2', 'Toys', 'Acme')"
+    )
+    assert _fired(con, sql) == [label]
+    loose = _products(tmp_path)
+    assert "is in one" not in generate_expectations(loose)
+    assert _fired(con, generate_expectations(loose)) == []
+
+
+def test_a_complete_hierarchy_finds_a_member_with_no_parent(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A brand with no category drops out of every roll-up by category."""
+    model = _products(tmp_path)
+    sql = generate_expectations(model)
+    label = "-- dim_product.merchandise: every brand has a category"
+    assert label in sql
+    con = _load_products(model, "(1, 'p1', 'Food', 'Acme')")
+    assert _fired(con, sql) == []
+    con.execute(
+        'INSERT INTO "mart"."dim_product" ("d_key", "d_id", "category", '
+        "\"brand\") VALUES (3, 'p3', NULL, 'Acme')"
+    )
+    assert _fired(con, sql) == [label]
+
+
+def test_a_hierarchy_that_may_skip_levels_says_so(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Declared incomplete, nothing is claimed of it, and the docs say why."""
+    model = _products(tmp_path, complete=False)
+    assert findings(model) == []
+    assert "merchandise" not in generate_expectations(model)
+    assert "(may skip levels)" in generate_docs(model)
+    assert "(strict)" in generate_docs(_products(tmp_path, strict=True))
+    source = gen_sqlalchemy.generate(model)
+    assert '"strict": False' in source
+    assert '"complete": False' in source
+
+
+def test_a_required_parent_needs_no_completeness_check(
+    tmp_path: pathlib.Path,
+) -> None:
+    """`NOT NULL` already says it, and the DDL is the better place."""
+    raw = dimension(
+        annotations={
+            "varda:role": "DIMENSION",
+            "varda:scd": "TYPE_1",
+            "varda:hierarchies": [
+                {"name": "merchandise", "levels": ["category", "brand", "d_id"]}
+            ],
+        }
+    )
+    raw["attributes"]["category"] = {
+        "required": True,
+        "annotations": {"varda:role": "ATTRIBUTE"},
+    }
+    raw["attributes"]["brand"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    sql = generate_expectations(build(tmp_path, {"DimProduct": raw}))
+    assert "every brand has a category" not in sql
+    assert "every d_id has a brand" in sql
+
+
+def test_hierarchy_guarantees_are_true_or_false(tmp_path: pathlib.Path) -> None:
+    """Anything else is V007's, and reads as the default meanwhile."""
+    model = _products(tmp_path, strict="yes")
+    assert [f.code for f in findings(model)] == ["V007"]
+    hierarchy = model.table("DimProduct").hierarchies[0]  # type: ignore[union-attr]
+    assert hierarchy.strict is False
+
+
+def _placed(model: Model) -> list[ext_module.Claim]:
+    """Claim, as an extension would, that a branded product is placed."""
+    table = model.table("DimProduct")
+    assert table is not None
+    brand, category, d_id = (
+        table.column(n) for n in ("brand", "category", "d_id")
+    )
+    assert brand is not None
+    assert category is not None
+    assert d_id is not None
+    return [
+        ext_module.Requires(
+            table, "a branded product is placed", (brand,), (category, d_id)
+        )
+    ]
+
+
+def test_a_requires_claim_over_several_columns(tmp_path: pathlib.Path) -> None:
+    """An extension's own completeness claim, rendered as Varda's are."""
+    placing = Extension(name="b", prefix="b", claims=_placed)
+    model = _products(tmp_path, placing, complete=False)
+    (claim,) = _placed(model)
+    assert [c.name for c in varda_claims.columns(claim)] == [
+        "brand",
+        "category",
+        "d_id",
+    ]
+    sql = generate_expectations(model)
+    label = "-- dim_product: a branded product is placed (claimed by b)"
+    (block,) = [b for b in sql.split("\n\n") if b.startswith(label)]
+    assert block.splitlines()[1:] == [
+        'SELECT count(*) AS "missing"',
+        'FROM "mart"."dim_product"',
+        'WHERE "brand" IS NOT NULL',
+        '  AND ("category" IS NULL OR "d_id" IS NULL);',
+    ]
+    assert isinstance(claim, ext_module.Requires)
+    empty = ext_module.Requires(claim.subject, "nothing", claim.given, ())
+    assert varda_claims.fault(empty, model) == "requires nothing, or of nothing"
 
 
 def _claiming(*made: ext_module.Claim, name: str = "b") -> Extension:

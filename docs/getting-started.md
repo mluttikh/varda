@@ -177,9 +177,11 @@ Regenerate, and `out/docs/model.md` gains a line:
 ```
 
 Varda checks that the levels are real columns, distinct, at least two of
-them, and the kind of column a reader can drill. It cannot check the part
-that matters most — that each level rolls up into exactly one member above
-it — because that is a claim about data, the same way the grain sentence is.
+them, and the kind of column a reader can drill. The part that matters most —
+that every member has a parent, and only one — is a claim about data, so it
+is checked against the data: `sql/expectations.sql` reports a row holding a
+level without the one above it, and, where the hierarchy says `strict: true`,
+a member found under two parents.
 
 Optional, and there is more to it than a list of columns: weeks do not nest
 inside months, a level's name is not always what tells its members apart, and

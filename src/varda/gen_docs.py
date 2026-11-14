@@ -192,6 +192,12 @@ def _table(table: Table) -> str:
     for hierarchy in table.hierarchies:
         path = " → ".join(_level(lv) for lv in hierarchy.levels)
         line = f"**Drill path** ({hierarchy.name}): {path}"
+        guarantees = [
+            *(["strict"] if hierarchy.strict else []),
+            *([] if hierarchy.complete else ["may skip levels"]),
+        ]
+        if guarantees:
+            line = f"{line} ({', '.join(guarantees)})"
         if hierarchy.description:
             line = f"{line} — {hierarchy.description}"
         facts.append(line)

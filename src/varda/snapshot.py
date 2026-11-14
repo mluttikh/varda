@@ -507,6 +507,13 @@ class Hierarchy:
     name: str
     description: str
     levels: tuple[Level, ...]
+    #: Whether each level's own key tells its members apart, so every member
+    #: has one parent. ``False`` unless declared: a plain level's column
+    #: identifies a member only under its parent by default.
+    strict: bool
+    #: Whether every row holding a level holds the one above it. ``True``
+    #: unless declared otherwise, for a path whose rows may skip levels.
+    complete: bool
     table: Table = field(init=False, repr=False)
 
     @property

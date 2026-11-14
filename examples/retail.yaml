@@ -27,14 +27,17 @@ classes:
       varda:scd: TYPE_0
       # Two paths, sharing their finest level. They are separate rather than
       # one chain because a fiscal quarter is not a calendar quarter, and
-      # neither contains the other.
+      # neither contains the other. Both strict: every level is written
+      # year-qualified, so `2024-03` is one month, in one year.
       varda:hierarchies:
         - name: calendar
           description: How the business reports externally.
           levels: [calendar_year, calendar_month, calendar_date]
+          strict: true
         - name: fiscal
           description: How the business plans and closes its books.
           levels: [fiscal_year, fiscal_quarter, calendar_date]
+          strict: true
     attributes:
       date_key:
         description: Surrogate key, conventionally YYYYMMDD.
@@ -182,7 +185,11 @@ classes:
       varda:scd: TYPE_1
       varda:hierarchies:
         - name: geography
+          description: >-
+            Where a store sells. An online store sells to its country as a
+            whole, with no region.
           levels: [country, region, store_code]
+          complete: false
     attributes:
       store_key:
         range: integer
