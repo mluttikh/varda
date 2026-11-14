@@ -520,6 +520,7 @@ def v103(model: Model) -> Iterator[Finding]:
     misplaced: dict[str, tuple[str, ...]] = {
         "SURROGATE_KEY": ("DIMENSION",),
         "NATURAL_KEY": ("DIMENSION",),
+        "DURABLE_KEY": ("DIMENSION",),
         "DEGENERATE_DIMENSION": ("FACT",),
         # Versioning columns describe a dimension row's history. A fact
         # records events that already happened and does not revise them, so
@@ -793,14 +794,15 @@ def v304(model: Model) -> Iterator[Finding]:
     not, which is false about the table and would reject the second version
     of every row.
 
-    Only keys carrying a natural key are checked: one over the surrogate key
-    is unique already and needs nothing added.
+    Only keys carrying a natural or durable key are checked: one over the
+    surrogate key is unique already and needs nothing added, and the
+    durable key repeats once per version exactly as the natural key does.
     """
     for table in model.dimensions:
         if table.scd != "TYPE_2":
             continue
         marks = {*table.version_starts, *table.version_numbers}
-        natural = set(table.natural_keys)
+        natural = {*table.natural_keys, *table.durable_keys}
         for unique in table.unique_keys:
             columns = set(unique.columns)
             if not columns & natural:
@@ -816,7 +818,7 @@ def v304(model: Model) -> Iterator[Finding]:
 
 @RULES.rule("V305", "warning", "Natural keys are covered by a unique key")
 def v305(model: Model) -> Iterator[Finding]:
-    """Flag a natural key no declared unique key covers.
+    """Flag a natural or durable key no declared unique key covers.
 
     Only where a table declares its own ``unique_keys``, because a declared
     key replaces the derived one: a natural key named in none of them is a
@@ -836,6 +838,15 @@ def v305(model: Model) -> Iterator[Finding]:
                 column,
                 "a natural key in none of this table's unique keys; the "
                 "identity a loader matches on is not enforced",
+            )
+        for column in table.durable_keys:
+            if column in covered:
+                continue
+            yield Finding(
+                column,
+                "a durable key in none of this table's unique keys; nothing "
+                "stops two entities sharing it, and every fact reaching "
+                "this table by it then reaches both",
             )
 
 
@@ -908,6 +919,50 @@ def v307(model: Model) -> Iterator[Finding]:
             "as distinct, so the uniqueness over it does not hold for a row "
             "that has none",
         )
+
+
+@RULES.rule("V308", "error", "A dimension has at most one durable key")
+def v308(model: Model) -> Iterator[Finding]:
+    """Flag a dimension naming two columns its durable key.
+
+    The durable key is the one identity of an entity that outlives every
+    change to it, and a reference with ``varda:lands_on: DURABLE_KEY`` has
+    to know which column that is. Two are two answers to the question, and
+    a reference resolving to the first by declaration order is a join
+    decided by where a slot was written.
+    """
+    for table in model.dimensions:
+        keys = table.durable_keys
+        if len(keys) <= ONE_IDENTITY:
+            continue
+        named = ", ".join(c.name for c in keys)
+        yield Finding(
+            table,
+            f"{len(keys)} columns claim role 'DURABLE_KEY' ({named}); an "
+            f"entity has one identity that outlives its versions",
+        )
+
+
+@RULES.rule("V309", "warning", "A durable key is required")
+def v309(model: Model) -> Iterator[Finding]:
+    """Flag a durable key that may be absent.
+
+    A version with no durable key belongs to no entity: no fact can reach
+    it as-is, and no claim about one entity's history covers it. SQL counts
+    NULLs as distinct, so the uniqueness over the key holds for every row
+    but the ones a broken load produces. V307 asks the same of a lone
+    natural key.
+    """
+    for table in model.dimensions:
+        for column in table.durable_keys:
+            if column.required:
+                continue
+            yield Finding(
+                column,
+                "a durable key that is not required; a version with none "
+                "belongs to no entity, and nothing reaching the dimension "
+                "by its durable key finds it",
+            )
 
 
 # -------------------------------------------------------------------------
@@ -1096,6 +1151,44 @@ def v408(model: Model) -> Iterator[Finding]:
             )
 
 
+@RULES.rule("V409", "error", "A foreign key lands on a key its target has")
+def v409(model: Model) -> Iterator[Finding]:
+    """Flag ``varda:lands_on`` that names no key a reference can reach.
+
+    On a column that is not a foreign key it says where a reference lands
+    on a column that makes none. On a foreign key whose target has no
+    durable key it names a key that is not there, and every generator would
+    drop the reference, the orphan check with it — a stated join that
+    nothing enforces and nothing tests, which is what V406 refuses for a
+    bridge.
+
+    A target that is not a dimension is V403's, V404's or V406's to report.
+    """
+    for table in model.tables:
+        for column in table.columns:
+            if column.lands_on is None:
+                continue
+            if column.role != "FOREIGN_KEY":
+                what = column.role or "column with no role"
+                yield Finding(
+                    column,
+                    f"varda:lands_on on a {what}; it says which key of its "
+                    "target a FOREIGN_KEY holds",
+                )
+                continue
+            ref = column.references
+            target = ref.target if ref is not None else None
+            if target is None or not target.is_dimension:
+                continue
+            if column.lands_on == "DURABLE_KEY" and not target.durable_keys:
+                yield Finding(
+                    column,
+                    f"lands on the durable key of {target.name}, which has "
+                    f"no DURABLE_KEY column; no reference or orphan check "
+                    f"can be generated for it",
+                )
+
+
 # -------------------------------------------------------------------------
 # V5xx — time
 #
@@ -1232,11 +1325,13 @@ def v506(model: Model) -> Iterator[Finding]:
 #: A level names what someone drilling the dimension sees, so this is a
 #: question about display and not about identity. A surrogate key and a
 #: foreign key are both fine identities and neither is readable — nobody
-#: drills into `4718`. A measure is what gets aggregated rather than what it
+#: drills into `4718`, and a durable key is no more readable for lasting
+#: longer. A measure is what gets aggregated rather than what it
 #: is grouped by, and a versioning column separates versions of one row
 #: rather than placing it in a hierarchy.
 _NOT_A_LEVEL = (
-    frozenset({"SURROGATE_KEY", "FOREIGN_KEY", "MEASURE"}) | VERSIONING_ROLES
+    frozenset({"SURROGATE_KEY", "DURABLE_KEY", "FOREIGN_KEY", "MEASURE"})
+    | VERSIONING_ROLES
 )
 
 

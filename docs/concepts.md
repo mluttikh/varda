@@ -37,7 +37,8 @@ generators and validators can reason about.
 | --- | --- | --- |
 | `SURROGATE_KEY` | dimension | The meaningless key facts join to. Exactly one. |
 | `NATURAL_KEY` | dimension | The business identity a loader matches on. |
-| `FOREIGN_KEY` | fact, bridge, dimension | A reference to another table's surrogate key. |
+| `DURABLE_KEY` | dimension | One entity across all its versions. At most one. |
+| `FOREIGN_KEY` | fact, bridge, dimension | A reference to another table's surrogate key, or its durable key. |
 | `DEGENERATE_DIMENSION` | fact | An identifier with no dimension table of its own. |
 | `MEASURE` | fact, bridge | A numeric quantity that is aggregated. |
 | `ATTRIBUTE` | any | Descriptive context, grouped and filtered on. |
@@ -52,8 +53,8 @@ A **degenerate dimension** is an identifier living on the fact with no
 dimension table of its own — an order number, a ticket reference. It groups
 the lines of one transaction and has no attributes worth a table.
 
-The versioning roles belong to [history](#history-what-happens-when-a-value-changes),
-below.
+The versioning roles and the **durable key** belong to
+[history](#history-what-happens-when-a-value-changes), below.
 
 ## Grain: what one row is
 
@@ -181,6 +182,58 @@ what stops consecutive versions overlapping at their boundary.
     change was true. dbt's `dbt_valid_from` and Data Vault's `LOAD_DATE` are
     both this, whatever they are called. Keeping both would be bitemporality,
     which this core does not model.
+
+### Reporting as it was, and as it is now
+
+A fact's foreign key to a type-2 dimension names one version: the customer
+as they were when the sale happened. That is usually the right answer, and
+sometimes the wrong question — "sales by the region each customer is in
+*today*" needs every version of a customer to lead to the same row.
+
+The `DURABLE_KEY` role is the column that makes this possible: one value per
+entity across all its versions, assigned by the warehouse and kept when the
+natural key itself changes. A fact carries it beside the surrogate key, as a
+second foreign key saying `varda:lands_on: DURABLE_KEY` — Kimball's type 7:
+
+```yaml
+DimCustomer:
+  annotations: {varda:role: DIMENSION, varda:scd: TYPE_2}
+  attributes:
+    customer_key:         {annotations: {varda:role: SURROGATE_KEY}}
+    customer_id:          {annotations: {varda:role: NATURAL_KEY}}
+    customer_durable_key: {annotations: {varda:role: DURABLE_KEY}}
+    # ... the versioning columns
+
+FctSale:
+  attributes:
+    customer_key:          # the customer as they were
+      annotations: {varda:role: FOREIGN_KEY, varda:references: DimCustomer}
+    customer_durable_key:  # the customer as they are now
+      annotations:
+        varda:role: FOREIGN_KEY
+        varda:references: DimCustomer
+        varda:lands_on: DURABLE_KEY
+```
+
+Join on the first for history, and on the second plus the current flag for
+today's attributes.
+
+A durable key repeats once per version, exactly as the natural key does, so
+Varda derives its uniqueness the same way — `UNIQUE (customer_durable_key,
+valid_from)` — and the history expectations are checked per durable key as
+well as per natural key. For the same reason no `FOREIGN KEY` can land on
+it: there is no single row to point at. The DDL says so in a comment, the
+SQLAlchemy module carries no `ForeignKey` for it, and the orphan check in
+`assertions.sql` still runs, because every value must name *some* version.
+[`V308`](reference/rules.md#v308) allows one durable key per dimension,
+[`V309`](reference/rules.md#v309) asks for it to be required, and
+[`V409`](reference/rules.md#v409) refuses a reference landing on a durable
+key its target does not have.
+
+History stays a property of the table. A dimension whose columns change in
+different ways — some overwritten, some versioned — is still split in two or
+handled in an extension; the durable key is what lets the two halves, or the
+fact, find the same entity.
 
 ## When one thing has two identities
 

@@ -62,6 +62,7 @@ class ColumnRole(StrEnum):
 
     SURROGATE_KEY = "SURROGATE_KEY"
     NATURAL_KEY = "NATURAL_KEY"
+    DURABLE_KEY = "DURABLE_KEY"
     FOREIGN_KEY = "FOREIGN_KEY"
     MEASURE = "MEASURE"
     ATTRIBUTE = "ATTRIBUTE"
@@ -70,6 +71,13 @@ class ColumnRole(StrEnum):
     VERSION_END = "VERSION_END"
     IS_CURRENT = "IS_CURRENT"
     VERSION_NUMBER = "VERSION_NUMBER"
+
+
+class ReferencedKey(StrEnum):
+    """Which key of its target a foreign key holds the value of."""
+
+    SURROGATE_KEY = "SURROGATE_KEY"
+    DURABLE_KEY = "DURABLE_KEY"
 
 
 class Additivity(StrEnum):
@@ -388,6 +396,10 @@ class Column:
     type_chain: tuple[str, ...]
     required: bool
     references: Ref[Table] | None
+    #: Which key of :attr:`references` this column holds, as declared, or
+    #: ``None`` when it declared none — the surrogate key. Read the
+    #: resolved answer from :func:`varda.analysis.reference`.
+    lands_on: ReferencedKey | None
     additivity: Additivity | None
     #: The foreign keys ``varda:semi_additive_over`` names, in the order
     #: written; one name written alone is one of them.
@@ -596,6 +608,10 @@ class Table:
     @property
     def natural_keys(self) -> tuple[Column, ...]:
         return self.by_role(ColumnRole.NATURAL_KEY)
+
+    @property
+    def durable_keys(self) -> tuple[Column, ...]:
+        return self.by_role(ColumnRole.DURABLE_KEY)
 
     @property
     def foreign_keys(self) -> tuple[Column, ...]:

@@ -47,7 +47,7 @@ description: >-
   here would otherwise appear in every generator's output as though it were
   part of the model.
 
-  **Scope.** This is the deliberately small core: sixteen annotations that
+  **Scope.** This is the deliberately small core: seventeen annotations that
   describe a standard star schema and nothing else. Anything specific to one
   organization — cost centers, retention, data classification, ownership —
   belongs in an extension under that organization's own prefix. See
@@ -128,9 +128,24 @@ enums:
           A column carrying the business identity of a dimension row. Together
           the natural key columns — plus, for a type-2 dimension, the validity
           window — must be unique.
+      DURABLE_KEY:
+        description: >-
+          The identity of an entity that outlives every version of it: one
+          value per customer however many rows a type-2 dimension holds for
+          them, assigned by the warehouse and kept when the natural key
+          itself changes. Dimensions only, at most one each.
+
+          What lets a fact reach the dimension as it is now rather than as it
+          was — Kimball's type 7. A fact carries the surrogate key for the
+          version in force when the event happened, and, beside it, a foreign
+          key with `varda:lands_on: DURABLE_KEY`; joining on the second and
+          the current flag gives every event today's attributes. Unique
+          version for version, as a natural key is, and Varda derives that
+          uniqueness the same way.
       FOREIGN_KEY:
         description: >-
-          A reference to the surrogate key of a dimension. Must declare
+          A reference to the surrogate key of a dimension, or to its durable
+          key where `varda:lands_on` says so. Must declare
           `varda:references`, and must store the same type as the key it
           names.
 
@@ -205,6 +220,22 @@ enums:
           A monotonic counter distinguishing versions of one natural key,
           for dimensions that version without timestamps at all. The current
           version is the highest. Dimensions with `varda:scd: TYPE_2` only.
+
+  ReferencedKey:
+    description: >-
+      Which key of its target a foreign key holds the value of.
+    permissible_values:
+      SURROGATE_KEY:
+        description: >-
+          The target's surrogate key: one row, the version in force when the
+          referencing row was written. What every foreign key lands on unless
+          it says otherwise.
+      DURABLE_KEY:
+        description: >-
+          The target's durable key: one entity, whichever of its versions
+          is asked for. Repeated once per version of a type-2 dimension, so
+          no `FOREIGN KEY` constraint can name it; the assertions check that
+          every value names some row.
 
   Additivity:
     description: >-
@@ -458,6 +489,17 @@ classes:
           class that exists and that is a dimension. The table holding the
           key may be any of the three.
         range: string
+
+      lands_on:
+        description: >-
+          Which key of its target this foreign key holds: the surrogate key,
+          which is the default, or the durable key. Foreign keys only, and
+          `DURABLE_KEY` only where the target declares one.
+
+          The durable key reaches an entity rather than one version of it,
+          so a fact carrying both kinds of key can report every event by
+          the attributes in force when it happened or by those in force now.
+        range: ReferencedKey
 
       additivity:
         description: >-

@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .snapshot import SlowlyChangingType
+from .snapshot import ColumnRole, ReferencedKey, SlowlyChangingType
 
 if TYPE_CHECKING:
     from .snapshot import Column, Hierarchy, Level, Model, Table
@@ -56,20 +56,42 @@ class Reference:
     table: Table
     key: Column
 
+    @property
+    def enforceable(self) -> bool:
+        """Flag whether a `FOREIGN KEY` constraint can name this key.
+
+        A surrogate key can: it is the target's primary key. A durable key
+        cannot, because it repeats once per version of a type-2 dimension
+        and a reference must land on something unique. Not on a dimension
+        keeping one row per entity either, where it happens to be unique:
+        whether a reference is constrained should not change the day its
+        target starts keeping history. Such a reference is still a claim —
+        every value names some row — and the assertions check it; only the
+        constraint has nowhere to point.
+        """
+        return self.key.role == ColumnRole.SURROGATE_KEY
+
 
 def reference(column: Column) -> Reference | None:
     """Resolve a foreign key to the table and key it lands on.
 
-    ``None`` when there is nothing to land on — no target named, a target
-    that is not a table, or one with no surrogate key. Each is a rule's
-    finding (V402, V403, V301), and a generator emits no reference for it
-    rather than inventing one.
+    The target's surrogate key, or its durable key where the column says
+    ``varda:lands_on: DURABLE_KEY``. ``None`` when there is nothing to land
+    on — no target named, a target that is not a table, or one without the
+    key asked for. Each is a rule's finding (V402, V403, V301, V409), and a
+    generator emits no reference for it rather than inventing one.
     """
     ref = column.references
     target = ref.target if ref is not None else None
-    if target is None or not target.surrogate_keys:
+    if target is None:
         return None
-    return Reference(table=target, key=target.surrogate_keys[0])
+    if column.lands_on == ReferencedKey.DURABLE_KEY:
+        keys = target.durable_keys
+    else:
+        keys = target.surrogate_keys
+    if not keys:
+        return None
+    return Reference(table=target, key=keys[0])
 
 
 def type_params(column: Column) -> tuple[int, ...]:
@@ -185,7 +207,8 @@ def unique_claims(table: Table) -> tuple[tuple[Column, ...], ...]:
     weaker than either. Then, for a dimension that declares no keys, the
     uniqueness its natural key implies — V302 requires that key and calls it
     what a loader matches on, and leaving it unstated makes it a claim
-    nobody checks.
+    nobody checks — and the uniqueness its durable key implies, which is a
+    second identity of the same entity and not part of the first.
 
     Each combination once. A grain and a declared key may name the same
     columns, and every database accepts the doubled constraint by building a
@@ -200,6 +223,9 @@ def unique_claims(table: Table) -> tuple[tuple[Column, ...], ...]:
         derived = _derived_key(table)
         if derived:
             claims.append(derived)
+        durable = _durable_key(table)
+        if durable:
+            claims.append(durable)
 
     out: list[tuple[Column, ...]] = []
     seen: set[tuple[str, ...]] = set()
@@ -210,6 +236,38 @@ def unique_claims(table: Table) -> tuple[tuple[Column, ...], ...]:
         seen.add(names)
         out.append(columns)
     return tuple(out)
+
+
+def _versioned(table: Table, key: tuple[Column, ...]) -> tuple[Column, ...]:
+    """Extend a key naming one entity to one naming one row of ``table``.
+
+    Unchanged for a dimension keeping one row per entity. A type-2 one
+    repeats the key once per version, so the row is the key plus one column
+    marking versions apart. One, not both: `(nk, start, number)` permits
+    two rows sharing a key and a start that differ only in their counter,
+    which either alone forbids. The start wins, being the more specific
+    claim, and `is_current` is no discriminator at all — it is true of one
+    row. Empty where nothing marks versions (V506), and where no type is
+    declared (V502): guessing costs rows.
+    """
+    if table.scd in {SlowlyChangingType.TYPE_0, SlowlyChangingType.TYPE_1}:
+        return key
+    if table.scd == SlowlyChangingType.TYPE_2:
+        marks = table.version_starts or table.version_numbers
+        return (*key, marks[0]) if marks else ()
+    return ()
+
+
+def _durable_key(table: Table) -> tuple[Column, ...]:
+    """Derive the uniqueness a dimension's durable key implies, or none.
+
+    The durable key names one entity across all its versions, so it is
+    unique in exactly the way a natural key is, version for version. Empty
+    for several durable keys, which V308 refuses.
+    """
+    if len(table.durable_keys) != ONE_IDENTITY:
+        return ()
+    return _versioned(table, table.durable_keys)
 
 
 def _derived_key(table: Table) -> tuple[Column, ...]:
@@ -229,20 +287,7 @@ def _derived_key(table: Table) -> tuple[Column, ...]:
         return ()  # V302 reports it
     if len(table.natural_keys) > ONE_IDENTITY:
         return ()  # V306 reports it
-    if table.scd in {SlowlyChangingType.TYPE_0, SlowlyChangingType.TYPE_1}:
-        # Neither keeps a second row for one business entity, so the
-        # natural key is the whole of it.
-        return table.natural_keys
-    if table.scd == SlowlyChangingType.TYPE_2:
-        # The natural key repeats once per version, so the uniqueness is
-        # the natural key plus one column marking versions apart. One, not
-        # both: `(nk, start, number)` permits two rows sharing a natural key
-        # and a start that differ only in their counter, which either alone
-        # forbids. The start wins, being the more specific claim, and
-        # `is_current` is no discriminator at all — it is true of one row.
-        marks = table.version_starts or table.version_numbers
-        return (*table.natural_keys, marks[0]) if marks else ()  # V506
-    return ()  # no varda:scd — V502 reports it, and guessing costs rows
+    return _versioned(table, table.natural_keys)
 
 
 def creation_order(model: Model) -> tuple[Table, ...]:

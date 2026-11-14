@@ -37,6 +37,7 @@ from .snapshot import (
     Model,
     PermissibleValue,
     Ref,
+    ReferencedKey,
     SemiAdditiveAggregate,
     SlowlyChangingType,
     Table,
@@ -377,6 +378,7 @@ def _column(view: SchemaView, name: str, slot: Any, table: Table) -> Column:
         type_chain=chain,
         required=bool(slot.required),
         references=None,
+        lands_on=_member(ReferencedKey, text(slot, "varda:lands_on")),
         additivity=_member(Additivity, text(slot, "varda:additivity")),
         semi_additive_keys=(),
         semi_additive_aggregate=_member(

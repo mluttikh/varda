@@ -55,16 +55,16 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~520 | Six commands, each a call into `api` and the printing around it. |
 
-**8,200 lines of source**: 4,559 of code, 1,770 of docstrings, 587 of
-comment, 1,284 blank. The prose share is deliberate and is house style —
+**8,398 lines of source**: 4,674 of code, 1,830 of docstrings, 583 of
+comment, 1,311 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus two schemas. `profile/varda.yaml` is the vocabulary — 16 annotations,
-6 enums — which the registry reads off disk and no model imports.
+Plus two schemas. `profile/varda.yaml` is the vocabulary — 17 annotations,
+7 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 489 tests in 8,086 lines.
+importable is kept to what is meant to be imported. And 505 tests in 8,372 lines.
 
 ### The five seams
 
@@ -399,6 +399,22 @@ aggregate; the SQLAlchemy `info` mapping carries `semi_additive_over` as a
 list of names, always, and `semi_additive_aggregate` beside it. The retail
 example's stock on hand takes `LAST`.
 *`test_a_measure_may_be_semi_additive_over_several_keys`*
+
+**Unreleased — reporting as it is now.** A fact could reach a type-2
+dimension only as it was when the fact happened. A `DURABLE_KEY` column
+names one entity across all its versions, and a foreign key saying
+`varda:lands_on: DURABLE_KEY` reaches it, so a fact carrying both kinds of
+key reports by the attributes then or the attributes now — Kimball's type
+7, with history still declared per table. The durable key's uniqueness is
+derived as the natural key's is, and the history expectations are checked
+per durable key as well. No `FOREIGN KEY` can land on a key that repeats
+per version, so the DDL says why in a comment, the SQLAlchemy module emits
+no `ForeignKey` and carries `lands_on` in `info`, and the orphan check
+still runs; `analysis.Reference.enforceable` is the one place that decides
+it. V308 refuses two durable keys, V309 warns on one that is not required,
+V409 refuses `lands_on` off a foreign key or onto a durable key the target
+lacks, and V103, V304, V305 and V605 cover the new role. The retail example
+carries one. *`test_a_durable_reference_has_no_foreign_key_and_says_why`*
 
 ### Next, in the order it is worth doing
 

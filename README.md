@@ -63,7 +63,7 @@ FctSale:
 
 ```console
 $ varda check model.yaml
-8 tables checked against 58 rules (varda 0.4.0): 0 errors, 0 warnings
+8 tables checked against 61 rules (varda 0.4.0): 0 errors, 0 warnings
 
 $ varda generate model.yaml --out out/
 wrote out/docs/model.md
@@ -83,15 +83,15 @@ Python 3.11+. The only runtime dependency is `linkml-runtime`.
 
 ## What it gives you
 
-**Sixteen annotations.** Seven on tables — `role`, `grain`,
-`grain_statement`, `hierarchies`, `fact_type`, `scd`, `physical_name`. Nine
-on columns — `role`, `references`, `additivity`, `semi_additive_over`,
-`semi_additive_aggregate`, `physical_name`, `max_length`, `precision`,
-`scale`. That is the whole core
+**Seventeen annotations.** Seven on tables — `role`, `grain`,
+`grain_statement`, `hierarchies`, `fact_type`, `scd`, `physical_name`. Ten
+on columns — `role`, `references`, `lands_on`, `additivity`,
+`semi_additive_over`, `semi_additive_aggregate`, `physical_name`,
+`max_length`, `precision`, `scale`. That is the whole core
 vocabulary, and it is deliberately the whole core vocabulary. Units are
 LinkML's own `unit`, which Varda reads rather than restates.
 
-**Fifty-eight rules** that catch the mistakes worth catching. A code names
+**Sixty-one rules** that catch the mistakes worth catching. A code names
 its concern, so the band tells you where to look:
 
 | | |
@@ -99,8 +99,8 @@ its concern, so the band tells you where to look:
 | `V001`–`V007` | the annotations themselves — typos, bad enum values, unknown prefixes, unknown fields, missing or mistyped values |
 | `V101`–`V104` | roles — what a table is, what a column is, and where each role is legal |
 | `V201`–`V207` | grain — a fact with no grain, a grain naming a column that does not exist, or one that may be absent |
-| `V301`–`V307` | identity — a dimension with no natural key, a business key that repeats, two identities with nothing to tell them apart |
-| `V401`–`V408` | references — a foreign key pointing at a fact, one naming no target, one typed unlike the key it names |
+| `V301`–`V309` | identity — a dimension with no natural key, a business key that repeats, two identities with nothing to tell them apart, two durable keys |
+| `V401`–`V409` | references — a foreign key pointing at a fact, one naming no target, one typed unlike the key it names, one landing on a durable key its target lacks |
 | `V501`–`V506` | time — a version period on a dimension that keeps no versions |
 | `V601`–`V607` | hierarchies — a level that is not a column, a path of one level |
 | `V701`–`V710` | measures — an unclassified measure, a semi-additive one that never says what it cannot cross or what it takes instead, a decimal one that never says what it keeps |
