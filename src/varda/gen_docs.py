@@ -11,7 +11,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from . import analysis
-from .snapshot import Additivity, ReferencedKey, SemiAdditiveAggregate
+from .snapshot import (
+    Additivity,
+    HierarchyKind,
+    ReferencedKey,
+    SemiAdditiveAggregate,
+)
 
 if TYPE_CHECKING:
     from .ext import Context
@@ -165,6 +170,29 @@ def _identity_note(hierarchy: Hierarchy) -> str | None:
     )
 
 
+def _path(hierarchy: Hierarchy) -> str:
+    """Render how a hierarchy is drilled, by the kind of path it is."""
+    match hierarchy.kind:
+        case HierarchyKind.PARENT_CHILD:
+            return f"a tree, each row's parent named by `{hierarchy.parent}`"
+        case HierarchyKind.BRIDGED:
+            path = (
+                f"a tree, flattened into `{hierarchy.bridge}` "
+                f"(`{hierarchy.ancestor}` → `{hierarchy.descendant}`"
+            )
+            depth = f", `{hierarchy.depth}` steps" if hierarchy.depth else ""
+            return f"{path}{depth})"
+        case _:
+            path = " → ".join(_level(lv) for lv in hierarchy.levels)
+            guarantees = [
+                *(["strict"] if hierarchy.strict else []),
+                *([] if hierarchy.complete else ["may skip levels"]),
+            ]
+            if guarantees:
+                path = f"{path} ({', '.join(guarantees)})"
+            return path
+
+
 def _table(table: Table) -> str:
     lines = [f"### {table.name}", ""]
     if table.description:
@@ -190,14 +218,7 @@ def _table(table: Table) -> str:
     # it came from, because `country_name` alone leaves a reader looking for
     # a column this table does not have.
     for hierarchy in table.hierarchies:
-        path = " → ".join(_level(lv) for lv in hierarchy.levels)
-        line = f"**Drill path** ({hierarchy.name}): {path}"
-        guarantees = [
-            *(["strict"] if hierarchy.strict else []),
-            *([] if hierarchy.complete else ["may skip levels"]),
-        ]
-        if guarantees:
-            line = f"{line} ({', '.join(guarantees)})"
+        line = f"**Drill path** ({hierarchy.name}): {_path(hierarchy)}"
         if hierarchy.description:
             line = f"{line} — {hierarchy.description}"
         facts.append(line)

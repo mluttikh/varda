@@ -32,6 +32,7 @@ from .snapshot import (
     Enumeration,
     FactType,
     Hierarchy,
+    HierarchyKind,
     Level,
     Mappings,
     Model,
@@ -534,10 +535,19 @@ def _hierarchies(model: Model, table: Table) -> tuple[Hierarchy, ...]:
         specs = entry.get("levels")
         if isinstance(specs, (str, bytes, Mapping)):
             specs = [specs]
+        bridge = _named(entry, "bridge")
+        found = model.table(bridge) if bridge else None
         hierarchy = Hierarchy(
             name=str(entry.get("name") or ""),
             description=str(entry.get("description") or "").strip(),
+            kind=_member(HierarchyKind, _named(entry, "kind") or "LEVELS"),
             levels=tuple(_level(model, table, v) for v in specs or ()),
+            parent=_within(entry, "parent", table),
+            bridge=Ref(bridge, found) if bridge else None,
+            ancestor=_within(entry, "ancestor", found),
+            descendant=_within(entry, "descendant", found),
+            depth=_within(entry, "depth", found),
+            written=frozenset(str(k) for k in entry),
             # Anything but a boolean is V007's, and reads as the default.
             strict=entry.get("strict") is True,
             complete=entry.get("complete") is not False,
@@ -547,6 +557,22 @@ def _hierarchies(model: Model, table: Table) -> tuple[Hierarchy, ...]:
             _set(level, hierarchy=hierarchy)
         out.append(hierarchy)
     return tuple(out)
+
+
+def _named(entry: Mapping[str, Any], field: str) -> str:
+    """Read one field of a structured annotation as text, empty if absent."""
+    value = entry.get(field)
+    return "" if value is None else str(value).strip()
+
+
+def _within(
+    entry: Mapping[str, Any], field: str, owner: Table | None
+) -> Ref[Column] | None:
+    """Resolve one field naming a column of ``owner``, or ``None`` if absent."""
+    name = _named(entry, field)
+    if not name:
+        return None
+    return Ref(name, owner.column(name) if owner is not None else None)
 
 
 def _level(model: Model, table: Table, entry: Any) -> Level:

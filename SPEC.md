@@ -38,33 +38,33 @@ reason the core can stay small enough to be correct.
 
 | Module | Lines | Responsibility |
 | --- | --- | --- |
-| `snapshot.py` | ~710 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, what a model says an element means (`Mappings`, `Unit`, `Enumeration`), and the closed vocabularies as `StrEnum`s. **The public read API.** |
-| `analysis.py` | ~305 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, what a column stores, creation order, level identity. Public, on a weaker promise. |
-| `_linkml.py` | ~565 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
-| `ext.py` | ~510 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
+| `snapshot.py` | ~790 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, what a model says an element means (`Mappings`, `Unit`, `Enumeration`), and the closed vocabularies as `StrEnum`s. **The public read API.** |
+| `analysis.py` | ~355 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, what a column stores, creation order, level identity. Public, on a weaker promise. |
+| `_linkml.py` | ~610 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
+| `ext.py` | ~525 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
 | `vocabulary.py` | ~260 | What the active profiles declare, read once: each annotation's range, `required` and `multivalued`, as V006 and V007 enforce them. |
 | `registry.py` | ~810 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
 | `api.py` | ~410 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
-| `rules.py` | ~1940 | The 58 core rules. |
-| `gen_sql.py` | ~525 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
-| `gen_docs.py` | ~190 | Markdown reference. |
-| `gen_sqlalchemy.py` | ~430 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
+| `rules.py` | ~2340 | The 67 core rules. |
+| `gen_sql.py` | ~555 | SQL DDL, the dialects it is spelled in, and how much of it the database is asked to police. |
+| `gen_docs.py` | ~255 | Markdown reference. |
+| `gen_sqlalchemy.py` | ~460 | SQLAlchemy Core tables, database-neutral, carrying the annotations to runtime. |
 | `gen_assertions.py` | ~180 | The model's claims as queries over the data, for where a constraint cannot or should not run. |
-| `claims.py` | ~410 | What a model says about its data, as data: the closed claim shapes, and `implied`, what Varda reads a model as claiming. Public; `implied` on `analysis`'s weaker promise. |
-| `gen_expectations.py` | ~330 | Renders every active extension's claims, Varda's included, as queries over the data. |
-| `generators.py` | ~45 | Varda's generators, registered through the public interface. |
+| `claims.py` | ~555 | What a model says about its data, as data: the closed claim shapes, and `implied`, what Varda reads a model as claiming. Public; `implied` on `analysis`'s weaker promise. |
+| `gen_expectations.py` | ~380 | Renders every active extension's claims, Varda's included, as queries over the data. |
+| `generators.py` | ~60 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~520 | Six commands, each a call into `api` and the printing around it. |
 
-**8,670 lines of source**: 4,850 of code, 1,886 of docstrings, 591 of
-comment, 1,343 blank. The prose share is deliberate and is house style —
+**9,136 lines of source**: 5,180 of code, 1,956 of docstrings, 601 of
+comment, 1,399 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
 Plus two schemas. `profile/varda.yaml` is the vocabulary — 18 annotations,
-7 enums — which the registry reads off disk and no model imports.
+8 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 521 tests in 8,747 lines.
+importable is kept to what is meant to be imported. And 535 tests in 9,059 lines.
 
 ### The five seams
 
@@ -449,6 +449,31 @@ and the SQLAlchemy `info` mapping carries both for every hierarchy, which
 committed output will show as drift. Retail's date paths are strict and its
 store geography may skip a region; its expectations gain ten queries.
 *`test_a_strict_hierarchy_holds_each_member_to_one_parent`*
+
+**Unreleased — trees of any depth.** A hierarchy declares its `kind`:
+`LEVELS`, the default and everything before this; `PARENT_CHILD`, a tree
+each row places itself in through `parent`, a foreign key into its own
+table; or `BRIDGED`, the same tree flattened into a bridge naming its
+`ancestor`, `descendant` and `depth`, so a query reaches a whole
+organization with one join. Each kind is read through its own fields: V608
+refuses a hierarchy missing what its kind needs or carrying another kind's,
+V609 a parent that is not a foreign key into the hierarchy's own table, and
+V610 a bridge that is not a BRIDGE, ends that do not both reference the
+dimension or are one column, and a depth that is not a whole number; V603
+counts levels only on a path of levels, and `levels` is no longer required.
+`sql/expectations.sql` gains three claim shapes and checks with them that no
+member is its own parent (`Differs`), that the closure lists every
+descendant as its own ancestor (`Reflexive`), and that the depth is zero
+exactly there (`Distance`) — the last two about the bridge, which holds
+every column they name. A longer cycle needs a recursive query and is not
+checked. `claims.implied` now orders claims by the table each is about.
+Found on the way: an enum-ranged field of a structured annotation reached
+no rule, so `kind: TREE` passed; V007 now reads it against its enum. The
+snapshot's `Hierarchy` gains `kind`, `parent`, `bridge`, `ancestor`,
+`descendant`, `depth` and `written`; the docs page renders each kind, and
+the SQLAlchemy `info` mapping carries `kind` and the fields that kind uses.
+The snowflake example's salespeople report up a line held both ways.
+*`test_a_tree_and_its_closure_are_checked_against_the_data`*
 
 ### Next, in the order it is worth doing
 

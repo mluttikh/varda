@@ -446,10 +446,40 @@ historical reporting is type 2, and the reasoning is the same one in
 [History](#history-what-happens-when-a-value-changes) — the choice is cheap to
 make now and expensive to discover later.
 
-Only fixed-depth paths are modeled. A hierarchy whose branches end at
-different depths, whose levels can be skipped, or where a child has more than
-one parent is not a list of columns — it is a bridge table, and the many-to-many
-it resolves is what [`BRIDGE`](#tables-have-a-role) is for.
+**Not every path is a list of levels.** A reporting line is as deep as the
+organization is, and its branches end at different depths, so it is no fixed
+set of columns. Two relational forms hold it, and a hierarchy says which one
+with `kind`:
+
+```yaml
+DimEmployee:
+  annotations:
+    varda:hierarchies:
+      - name: reporting_line
+        kind: PARENT_CHILD      # each row names its manager
+        parent: manager_key     # a FOREIGN_KEY into DimEmployee
+      - name: organization
+        kind: BRIDGED           # the same tree, flattened
+        bridge: BridgeReporting
+        ancestor: manager_key   # the bridge's two keys into DimEmployee
+        descendant: employee_key
+        depth: depth            # 0 for a salesperson and themselves
+```
+
+The parent-child form is what a source system holds; the bridged one is what
+a query wants, because "every sale in this manager's organization" is then
+one join rather than a recursion. Each kind uses its own fields and no
+other's ([`V608`](reference/rules.md#v608)): a parent is a foreign key into
+the dimension's own table ([`V609`](reference/rules.md#v609)), and the
+bridge is a `BRIDGE` whose ancestor and descendant both reference the
+dimension ([`V610`](reference/rules.md#v610)). The expectations check that no
+member is its own parent, that the bridge lists every member as its own
+ancestor, and that the depth is zero there and nowhere else. A longer cycle
+— A reports to B reports to A — needs a recursive query, which every engine
+spells differently, and is not checked.
+
+A child with more than one parent is not a tree at all. That many-to-many is
+what a plain [`BRIDGE`](#tables-have-a-role) resolves.
 
 ## What Varda does not model
 
