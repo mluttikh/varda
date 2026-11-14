@@ -40,9 +40,9 @@ reason the core can stay small enough to be correct.
 | --- | --- | --- |
 | `snapshot.py` | ~790 | The model as frozen data: `Model`, `Table`, `Column`, `Hierarchy`, `Level`, `UniqueKey`, `Ref`, `Annotations`, what a model says an element means (`Mappings`, `Unit`, `Enumeration`), and the closed vocabularies as `StrEnum`s. **The public read API.** |
 | `analysis.py` | ~355 | What Varda concludes from a snapshot: uniqueness claims, the key a foreign key lands on, what a column stores, creation order, level identity. Public, on a weaker promise. |
-| `_linkml.py` | ~610 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
+| `_linkml.py` | ~660 | Reads a LinkML schema into a snapshot. Internal, and the only module that knows LinkML exists. |
 | `ext.py` | ~525 | `Extension`, `Rule`, `RuleSet`, `Finding`, `Issue`, `Report`, `Generator`, `Context`, `Options`, and re-exports of the snapshot and `analysis`. **The module a third party imports.** |
-| `vocabulary.py` | ~260 | What the active profiles declare, read once: each annotation's range, `required` and `multivalued`, as V006 and V007 enforce them. |
+| `vocabulary.py` | ~270 | What the active profiles declare, read once: each annotation's range, `required` and `multivalued`, as V006 and V007 enforce them, and what each enum value means. |
 | `registry.py` | ~810 | `Registry`: discovery, validation, and everything derived from one extension set. Where colliding extensions and malformed generator settings are refused. |
 | `api.py` | ~410 | Varda as a library: `load`, `check`, `generate`, `write`, `compare`. The rule engine and fail-closed generation live here. |
 | `rules.py` | ~2340 | The 67 core rules. |
@@ -55,8 +55,8 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~60 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~520 | Six commands, each a call into `api` and the printing around it. |
 
-**9,136 lines of source**: 5,180 of code, 1,956 of docstrings, 601 of
-comment, 1,399 blank. The prose share is deliberate and is house style —
+**9,199 lines of source**: 5,218 of code, 1,969 of docstrings, 601 of
+comment, 1,411 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
@@ -64,7 +64,7 @@ Plus two schemas. `profile/varda.yaml` is the vocabulary — 18 annotations,
 8 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 535 tests in 9,059 lines.
+importable is kept to what is meant to be imported. And 554 tests in 9,128 lines.
 
 ### The five seams
 
@@ -474,6 +474,24 @@ snapshot's `Hierarchy` gains `kind`, `parent`, `bridge`, `ancestor`,
 the SQLAlchemy `info` mapping carries `kind` and the fields that kind uses.
 The snowflake example's salespeople report up a line held both ways.
 *`test_a_tree_and_its_closure_are_checked_against_the_data`*
+
+**Unreleased — every value is a term.** Each value of each of Varda's enums
+now has a `meaning` of its own, `varda:<Enum>/<VALUE>` —
+`https://w3id.org/varda/ColumnRole/MEASURE` — keyed by the enum as well as
+the value, because `SURROGATE_KEY` is a role in one and the key a reference
+lands on in another. What an outside vocabulary says about the same thing
+moved into the mappings, graded: `MEASURE` is close to `qb:MeasureProperty`,
+a semi-additive `MIN` is exactly `qb4o:Min`, and `VERSION_START`, which
+until now *meant* `time:hasBeginning`, is related to it — the column is
+where the beginning is written down, not the beginning. The profile declares
+`qb` and `qb4o` for them. `Vocabulary.meaning` answers Varda's own IRI, and
+`Vocabulary.enumeration` reads an enum whole with every IRI expanded, so an
+exporter has the terms without knowing the profile's prefixes. The
+vocabulary reference states the convention once per enum and lists each
+alignment on its value's row. Found on the way: `HierarchyKind` was missing
+from the test that holds each enum to its Python mirror, which now fails if
+the profile adds an enum the list does not name.
+*`test_every_value_of_the_profile_is_a_term_of_its_own`*
 
 ### Next, in the order it is worth doing
 

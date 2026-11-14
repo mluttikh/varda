@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from .ext import Extension
+    from .snapshot import Enumeration
 
 Target = Literal["table", "column"]
 TARGETS: tuple[Target, ...] = get_args(Target)
@@ -216,6 +217,18 @@ class Vocabulary:
             if found is None or not found.meaning:
                 return None
             return _linkml.expand(view, str(found.meaning))
+        return None
+
+    def enumeration(self, enum_name: str) -> Enumeration | None:
+        """Read one of a profile's enums whole, its IRIs expanded.
+
+        Every value with its ``meaning`` and its mappings, each a full IRI
+        for the reason :meth:`meaning` gives. ``None`` where no active
+        profile declares the enum.
+        """
+        for _, view in self._profiles.values():
+            if view is not None and enum_name in view.schema.enums:
+                return _linkml.enumeration(view, enum_name)
         return None
 
     def profile_filename(self, prefix: str) -> str:

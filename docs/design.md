@@ -179,6 +179,31 @@ and a lapsed domain baked into published schemas is unrecoverable.
 Group, separates the identifier — permanent — from the redirect target, which
 is a one-line change. LinkML itself works this way.
 
+## Why every value is Varda's own term, and the rest are mappings
+
+Each value of each enum has a `meaning` of its own:
+`varda:ColumnRole/MEASURE`, which is `https://w3id.org/varda/ColumnRole/MEASURE`
+once expanded. The enum is part of the path because a value's text is not
+unique across enums. `SURROGATE_KEY` is a role a column plays in one enum
+and, in another, the key a foreign key lands on. Those are two different
+claims, so they get two different IRIs.
+
+The obvious alternative is to make `meaning` the nearest outside term:
+`MEASURE` means `qb:MeasureProperty`, `VERSION_START` means
+`time:hasBeginning`. Up to 0.4 the versioning roles did exactly that, and it
+said more than was true. A `qb:MeasureProperty` carries no additivity, and a
+Varda measure without one fails V701. And a version's start column is where
+an interval's beginning is written down, not the beginning itself. LinkML's
+`meaning` is an identity claim, and none of these terms is the same thing.
+
+What an outside vocabulary does say goes into the mappings, graded by SKOS:
+`exact_mappings` only where the two terms do coincide, such as a
+semi-additive `MIN` and `qb4o:Min`; `close_mappings` where the concepts
+match but the commitments differ; and `related_mappings` for a connection
+that is real but is not likeness. The grading is the part a consumer can act
+on. A graph can follow an exact match blindly. A close or related match it
+has to decide about.
+
 ## Why the profile is split, and which half a model imports
 
 Varda ships two schemas. `varda.yaml` is the vocabulary — the annotation

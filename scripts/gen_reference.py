@@ -191,22 +191,56 @@ def _annotation_rows(ext: Any, target: str) -> list[str]:
     return sorted(rows)
 
 
+#: How each LinkML mapping slot reads on the page, closest first.
+ALIGNMENTS = (
+    ("exact_mappings", "Exactly"),
+    ("close_mappings", "Close to"),
+    ("narrow_mappings", "Narrower than"),
+    ("broad_mappings", "Broader than"),
+    ("related_mappings", "Related to"),
+)
+
+
+def _own_term(view: Any, name: str, value: str) -> str:
+    """Name the term a profile's value is when it follows the convention."""
+    return f"{view.schema.default_prefix}:{name}/{value}"
+
+
 def _enum_section(view: Any, name: str) -> list[str]:
     """Render one enumeration and its permissible values."""
     enum = view.schema.enums[name]
+    values = enum.permissible_values or {}
     out = [f"### `{name}`", ""]
     if enum.description:
         out += [_clean(enum.description), ""]
+    # Every value is a term of the profile's own, and a column repeating
+    # the same pattern on every row says nothing a sentence cannot. A value
+    # that breaks the pattern is shown on its row instead.
+    conventional = {
+        str(v)
+        for v, meta in values.items()
+        if getattr(meta, "meaning", None) == _own_term(view, name, str(v))
+    }
+    if conventional:
+        out += [
+            (
+                f"Each value is a term of its own, "
+                f"`{_own_term(view, name, '<VALUE>')}`."
+            ),
+            "",
+        ]
     out += ["| Value | Meaning |", "| --- | --- |"]
-    for value, meta in (enum.permissible_values or {}).items():
+    for value, meta in values.items():
         desc = _clean(getattr(meta, "description", ""))
-        # A permissible value bound to an ontology term through LinkML's
-        # `meaning:` is the one place a Varda model reaches outside itself.
-        # Rendering the CURIE puts that on the page instead of leaving it in
-        # the schema for whoever thinks to look.
         term = getattr(meta, "meaning", None)
-        if term:
-            desc = f"{desc} <br>Ontology term: `{term}`".strip()
+        if term and str(value) not in conventional:
+            desc = f"{desc} <br>Term: `{term}`".strip()
+        # What an outside vocabulary says about the same thing, graded.
+        # This is where a model reaches outside itself, so it goes on the
+        # page instead of staying in the schema for whoever thinks to look.
+        for slot, phrase in ALIGNMENTS:
+            for target in getattr(meta, slot, None) or ():
+                desc = f"{desc} <br>{phrase} `{target}`".strip()
         out.append(f"| `{value}` | {desc} |")
     out.append("")
     return out
