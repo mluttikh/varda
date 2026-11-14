@@ -47,7 +47,7 @@ description: >-
   here would otherwise appear in every generator's output as though it were
   part of the model.
 
-  **Scope.** This is the deliberately small core: seventeen annotations that
+  **Scope.** This is the deliberately small core: eighteen annotations that
   describe a standard star schema and nothing else. Anything specific to one
   organization — cost centers, retention, data classification, ownership —
   belongs in an extension under that organization's own prefix. See
@@ -500,6 +500,21 @@ classes:
           so a fact carrying both kinds of key can report every event by
           the attributes in force when it happened or by those in force now.
         range: ReferencedKey
+
+      previous_of:
+        description: >-
+          The attribute of this table whose value before its last change this
+          column holds: `prior_category` beside `category`, so a report can
+          show either the new grouping or the one it replaced. Kimball's
+          type 3 — one step of history, in a column rather than a row.
+
+          An attribute naming another attribute of the same dimension,
+          storing the same type at least as wide. Not on a fact or a bridge,
+          whose rows are not revised, nor on a `TYPE_0` dimension, which
+          keeps every original value. Several may chain —
+          `prior_prior_category` naming `prior_category` — but not in a
+          cycle.
+        range: string
 
       additivity:
         description: >-

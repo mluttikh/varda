@@ -55,16 +55,16 @@ reason the core can stay small enough to be correct.
 | `generators.py` | ~45 | Varda's generators, registered through the public interface. |
 | `cli.py` | ~520 | Six commands, each a call into `api` and the printing around it. |
 
-**8,398 lines of source**: 4,674 of code, 1,830 of docstrings, 583 of
-comment, 1,311 blank. The prose share is deliberate and is house style —
+**8,546 lines of source**: 4,780 of code, 1,855 of docstrings, 585 of
+comment, 1,326 blank. The prose share is deliberate and is house style —
 this is a package other people extend, and the reasoning behind a
 constraint is worth more to them than the constraint itself.
 
-Plus two schemas. `profile/varda.yaml` is the vocabulary — 17 annotations,
+Plus two schemas. `profile/varda.yaml` is the vocabulary — 18 annotations,
 7 enums — which the registry reads off disk and no model imports.
 `profile/types.yaml` holds the one type a model may need to name, and is all
 that `imports: - varda` resolves to; a LinkML import is a union, so what is
-importable is kept to what is meant to be imported. And 505 tests in 8,372 lines.
+importable is kept to what is meant to be imported. And 515 tests in 8,557 lines.
 
 ### The five seams
 
@@ -415,6 +415,21 @@ it. V308 refuses two durable keys, V309 warns on one that is not required,
 V409 refuses `lands_on` off a foreign key or onto a durable key the target
 lacks, and V103, V304, V305 and V605 cover the new role. The retail example
 carries one. *`test_a_durable_reference_has_no_foreign_key_and_says_why`*
+
+**Unreleased — one step of history, in a column.** Kimball's type 3:
+`varda:previous_of: category` on `prior_category` says the column holds
+what `category` was before its last change, so a report can group by the
+new value or the one it replaced. V507 refuses one that names no attribute
+of its own table, names itself, sits on anything but an attribute, or
+chains round in a cycle — a chain that ends is legal; V508 one that stores
+another type or is narrower than its current value, which would cut the
+longest values on the first change; and V509 one on a fact or a bridge,
+whose rows are not revised, or on a `TYPE_0` dimension, which keeps every
+original value. The snapshot gains `Column.previous_of`; the docs page and
+the SQLAlchemy `info` mapping carry it. History is still declared per
+table: this names a column's meaning, not a second slowly-changing type.
+The retail example's products keep their prior category.
+*`test_v507_a_chain_of_previous_values_that_comes_back`*
 
 ### Next, in the order it is worth doing
 

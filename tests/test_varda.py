@@ -1356,6 +1356,191 @@ def test_v605_a_durable_key_is_not_a_level(tmp_path: pathlib.Path) -> None:
     ]
 
 
+# --- previous values: one step of history, in a column ----------------------
+
+
+def _graded(**prior: Any) -> dict[str, Any]:
+    """Build a type-1 dimension whose `prior_grade` is `grade` before."""
+    table = dimension()
+    table["attributes"]["grade"] = {
+        "annotations": {"varda:role": "ATTRIBUTE", "varda:max_length": 10}
+    }
+    table["attributes"]["prior_grade"] = {
+        "annotations": {
+            "varda:role": "ATTRIBUTE",
+            "varda:previous_of": "grade",
+            "varda:max_length": 10,
+            **prior,
+        }
+    }
+    return table
+
+
+def _previous(model: Model, code: str) -> list[tuple[str, str]]:
+    """Return what one rule found, as subject and message."""
+    return [
+        (str(f.subject), f.message) for f in findings(model) if f.code == code
+    ]
+
+
+def test_a_previous_value_reaches_the_snapshot(tmp_path: pathlib.Path) -> None:
+    model = build(tmp_path, {"DimThing": _graded()})
+    assert findings(model) == []
+    dim = model.table("DimThing")
+    assert dim is not None
+    prior, grade = dim.column("prior_grade"), dim.column("grade")
+    assert prior is not None
+    assert prior.previous_of is not None
+    assert prior.previous_of.target is grade
+    assert grade is not None
+    assert grade.previous_of is None
+    source = gen_sqlalchemy.generate(model)
+    assert '"previous_of": "grade"' in source
+    assert "`grade` before its last change" in generate_docs(model)
+
+
+@pytest.mark.parametrize(
+    ("previous", "message"),
+    [
+        (
+            "nothing",
+            "previous_of names 'nothing', which is not a column of DimThing",
+        ),
+        ("prior_grade", "previous_of names this column itself"),
+        (
+            "d_id",
+            (
+                "previous_of names 'd_id', a NATURAL_KEY; only an attribute "
+                "changes in place"
+            ),
+        ),
+    ],
+)
+def test_v507_a_previous_value_of_nothing(
+    tmp_path: pathlib.Path, previous: str, message: str
+) -> None:
+    model = build(
+        tmp_path, {"DimThing": _graded(**{"varda:previous_of": previous})}
+    )
+    assert _previous(model, "V507") == [("DimThing.prior_grade", message)]
+
+
+def test_v507_a_previous_value_on_a_key(tmp_path: pathlib.Path) -> None:
+    table = _graded()
+    table["attributes"]["d_id"]["annotations"]["varda:previous_of"] = "grade"
+    model = build(tmp_path, {"DimThing": table})
+    assert _previous(model, "V507") == [
+        (
+            "DimThing.d_id",
+            (
+                "varda:previous_of on a NATURAL_KEY; a previous value is an "
+                "ATTRIBUTE"
+            ),
+        )
+    ]
+
+
+def test_v507_a_chain_of_previous_values_that_comes_back(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A chain is legal; one going round is the previous value of nothing."""
+    table = _graded()
+    table["attributes"]["grade"]["annotations"]["varda:previous_of"] = (
+        "prior_grade"
+    )
+    model = build(tmp_path, {"DimThing": table})
+    assert _previous(model, "V507") == [
+        (
+            "DimThing.grade",
+            "previous_of goes round in a cycle (grade -> prior_grade -> grade)",
+        ),
+        (
+            "DimThing.prior_grade",
+            (
+                "previous_of goes round in a cycle (prior_grade -> grade -> "
+                "prior_grade)"
+            ),
+        ),
+    ]
+    chained = _graded()
+    chained["attributes"]["prior_prior_grade"] = {
+        "annotations": {
+            "varda:role": "ATTRIBUTE",
+            "varda:previous_of": "prior_grade",
+            "varda:max_length": 10,
+        }
+    }
+    assert findings(build(tmp_path, {"DimThing": chained})) == []
+
+
+def test_v508_a_previous_value_of_another_type(tmp_path: pathlib.Path) -> None:
+    table = _graded()
+    table["attributes"]["prior_grade"]["range"] = "integer"
+    del table["attributes"]["prior_grade"]["annotations"]["varda:max_length"]
+    model = build(tmp_path, {"DimThing": table})
+    assert _previous(model, "V508") == [
+        (
+            "DimThing.prior_grade",
+            (
+                "range 'integer' holds the previous value of grade, whose "
+                "range is 'string'; declare it with the same range"
+            ),
+        )
+    ]
+
+
+def test_v508_a_previous_value_too_narrow(tmp_path: pathlib.Path) -> None:
+    """The longest values are the ones cut, on the first change."""
+    model = build(tmp_path, {"DimThing": _graded(**{"varda:max_length": 4})})
+    assert _previous(model, "V508") == [
+        (
+            "DimThing.prior_grade",
+            (
+                "max_length 4 holds the previous value of grade, whose "
+                "max_length is 10; the longest values would be cut on the "
+                "first change"
+            ),
+        )
+    ]
+    wider = build(tmp_path, {"DimThing": _graded(**{"varda:max_length": 20})})
+    assert _previous(wider, "V508") == []
+
+
+def test_v509_a_previous_value_on_a_fact(tmp_path: pathlib.Path) -> None:
+    fact = _referring("DimThing")
+    fact["attributes"]["note"] = {"annotations": {"varda:role": "ATTRIBUTE"}}
+    fact["attributes"]["prior_note"] = {
+        "annotations": {"varda:role": "ATTRIBUTE", "varda:previous_of": "note"}
+    }
+    model = build(tmp_path, {"FctX": fact, "DimThing": dimension()})
+    assert _previous(model, "V509") == [
+        (
+            "FctX.prior_note",
+            (
+                "varda:previous_of on a FACT, whose rows are not revised; a "
+                "previous value belongs to a dimension"
+            ),
+        )
+    ]
+
+
+def test_v509_a_previous_value_on_a_type_0_dimension(
+    tmp_path: pathlib.Path,
+) -> None:
+    table = _graded()
+    table["annotations"]["varda:scd"] = "TYPE_0"
+    model = build(tmp_path, {"DimThing": table})
+    assert _previous(model, "V509") == [
+        (
+            "DimThing.prior_grade",
+            (
+                "varda:previous_of on DimThing, which is TYPE_0 and keeps "
+                "every original value; nothing here has a previous one"
+            ),
+        )
+    ]
+
+
 def test_v111_fact_without_type(tmp_path: pathlib.Path) -> None:
     model = build(
         tmp_path,

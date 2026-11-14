@@ -165,6 +165,15 @@ classes:
         annotations:
           varda:role: ATTRIBUTE
           varda:max_length: 60
+      prior_category:
+        description: >-
+          The category this product was in before it was last reassigned,
+          so a sales report can group by either. Null for a product never
+          reassigned.
+        annotations:
+          varda:role: ATTRIBUTE
+          varda:previous_of: category
+          varda:max_length: 60
 
   DimStore:
     description: A physical or online point of sale.

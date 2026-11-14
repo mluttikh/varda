@@ -100,6 +100,7 @@ COLUMN_INFO = (
     "role",
     "references",
     "lands_on",
+    "previous_of",
     "additivity",
     "semi_additive_over",
     "semi_additive_aggregate",
@@ -118,6 +119,7 @@ def _column_info(column: Column) -> list[tuple[str, object]]:
         "role": column.role,
         "references": _name(column.references),
         "lands_on": column.lands_on,
+        "previous_of": _name(column.previous_of),
         "additivity": column.additivity,
         # Always a list, one name or several, so a consumer reads one type.
         "semi_additive_over": [
