@@ -379,6 +379,7 @@ def _column(view: SchemaView, name: str, slot: Any, table: Table) -> Column:
         required=bool(slot.required),
         references=None,
         lands_on=_member(ReferencedKey, text(slot, "varda:lands_on")),
+        previous_of=None,
         additivity=_member(Additivity, text(slot, "varda:additivity")),
         semi_additive_keys=(),
         semi_additive_aggregate=_member(
@@ -407,6 +408,10 @@ def _resolve_references(model: Model, table: Table, column: Column) -> None:
     if target is not None:
         name = target.strip()
         _set(column, references=Ref(name, model.table(name)))
+    previous = column.annotations.text("varda:previous_of")
+    if previous is not None:
+        name = previous.strip()
+        _set(column, previous_of=Ref(name, table.column(name)))
     over = _strings(column.annotations.get("varda:semi_additive_over"))
     _set(
         column,

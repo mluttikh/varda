@@ -1310,6 +1310,137 @@ def v506(model: Model) -> Iterator[Finding]:
             )
 
 
+@RULES.rule(
+    "V507", "error", "A previous value names another attribute of its table"
+)
+def v507(model: Model) -> Iterator[Finding]:
+    """Flag ``varda:previous_of`` naming nothing a previous value can be of.
+
+    A type-3 column holds what one attribute was before its last change, so
+    both are attributes of one table: a key that changed is a new entity,
+    which is what the durable key is for, and a measure is a fact's. A name
+    the table does not have, the column itself, or a chain that comes back
+    to where it started is a previous value of nothing.
+    """
+    for table in model.tables:
+        for column in table.columns:
+            ref = column.previous_of
+            if ref is None:
+                continue
+            problem = _previous_problem(column, ref.target, ref.name)
+            if problem is not None:
+                yield Finding(column, problem)
+
+
+def _previous_problem(
+    column: Column, target: Column | None, name: str
+) -> str | None:
+    """Say why a previous value is of nothing, if it is."""
+    table = column.table
+    if column.role != "ATTRIBUTE":
+        what = column.role or "column with no role"
+        return (
+            f"varda:previous_of on a {what}; a previous value is an ATTRIBUTE"
+        )
+    if target is None:
+        return (
+            f"previous_of names {name!r}, which is not a column of {table.name}"
+        )
+    if target is column:
+        return "previous_of names this column itself"
+    if target.role != "ATTRIBUTE":
+        what = target.role or "column with no role"
+        return (
+            f"previous_of names {name!r}, a {what}; only an attribute "
+            "changes in place"
+        )
+    return _cycle(column)
+
+
+def _cycle(column: Column) -> str | None:
+    """Say how a chain of previous values comes back to ``column``, if it does.
+
+    A cycle that does not pass through ``column`` is left to its members,
+    each of which reports it.
+    """
+    seen = [column.name]
+    ref = column.previous_of
+    step = ref.target if ref is not None else None
+    while step is not None and step.previous_of is not None:
+        seen.append(step.name)
+        step = step.previous_of.target
+        if step is column:
+            chain = " -> ".join([*seen, column.name])
+            return f"previous_of goes round in a cycle ({chain})"
+        if step is not None and step.name in seen:
+            return None
+    return None
+
+
+@RULES.rule(
+    "V508", "error", "A previous value stores what its current value does"
+)
+def v508(model: Model) -> Iterator[Finding]:
+    """Flag a previous value that cannot hold what the current one held.
+
+    Every change copies the current value into the previous one. A
+    different type fails on the first copy, or worse converts; a narrower
+    width truncates exactly the values long enough to be worth noticing.
+    """
+    for table in model.tables:
+        for column in table.columns:
+            ref = column.previous_of
+            current = ref.target if ref is not None else None
+            if current is None or current is column:
+                continue  # V507 reports it
+            mine, theirs = analysis.storage(column), analysis.storage(current)
+            if mine is not None and theirs is not None and mine != theirs:
+                yield Finding(
+                    column,
+                    f"range {column.range!r} holds the previous value of "
+                    f"{current.name}, whose range is {current.range!r}; "
+                    f"declare it with the same range",
+                )
+                continue
+            wide, narrow = current.max_length, column.max_length
+            if wide is not None and narrow is not None and narrow < wide:
+                yield Finding(
+                    column,
+                    f"max_length {narrow} holds the previous value of "
+                    f"{current.name}, whose max_length is {wide}; the "
+                    f"longest values would be cut on the first change",
+                )
+
+
+@RULES.rule(
+    "V509", "error", "Previous values belong to a dimension that changes"
+)
+def v509(model: Model) -> Iterator[Finding]:
+    """Flag a previous value on a table whose rows are never revised.
+
+    A fact records what happened and a bridge what belongs to what; neither
+    is updated in place, so neither has a value before a change. Nor has a
+    type-0 dimension, which keeps the original value by definition.
+    """
+    for table in model.tables:
+        for column in table.columns:
+            if column.previous_of is None:
+                continue
+            if table.role is not None and not table.is_dimension:
+                yield Finding(
+                    column,
+                    f"varda:previous_of on a {table.role}, whose rows are "
+                    f"not revised; a previous value belongs to a dimension",
+                )
+            elif table.scd == "TYPE_0":
+                yield Finding(
+                    column,
+                    f"varda:previous_of on {table.name}, which is TYPE_0 "
+                    f"and keeps every original value; nothing here has a "
+                    f"previous one",
+                )
+
+
 # -------------------------------------------------------------------------
 # V6xx — hierarchies
 #

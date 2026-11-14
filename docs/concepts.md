@@ -230,10 +230,39 @@ SQLAlchemy module carries no `ForeignKey` for it, and the orphan check in
 [`V409`](reference/rules.md#v409) refuses a reference landing on a durable
 key its target does not have.
 
+### One step of history, in a column
+
+Type 3 keeps a change without adding a row: beside `category` sits
+`prior_category`, holding what `category` was before its last change, so a
+report can group sales by the new grouping or by the one it replaced.
+`varda:previous_of` names the attribute a column is the earlier value of:
+
+```yaml
+DimProduct:
+  annotations: {varda:role: DIMENSION, varda:scd: TYPE_1}
+  attributes:
+    category:
+      annotations: {varda:role: ATTRIBUTE, varda:max_length: 60}
+    prior_category:
+      annotations:
+        varda:role: ATTRIBUTE
+        varda:previous_of: category
+        varda:max_length: 60
+```
+
+Both are attributes of one dimension, and the previous value stores the same
+type at least as wide, since every change copies one into the other
+([`V507`](reference/rules.md#v507), [`V508`](reference/rules.md#v508)). Not
+on a fact or a bridge, whose rows are not revised, nor on a `TYPE_0`
+dimension, which keeps every original value
+([`V509`](reference/rules.md#v509)). Previous values may chain —
+`prior_prior_category` naming `prior_category` — but not in a cycle.
+
 History stays a property of the table. A dimension whose columns change in
 different ways — some overwritten, some versioned — is still split in two or
 handled in an extension; the durable key is what lets the two halves, or the
-fact, find the same entity.
+fact, find the same entity, and a previous value names what one column
+means rather than declaring a second slowly-changing type.
 
 ## When one thing has two identities
 

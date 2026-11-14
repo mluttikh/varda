@@ -400,6 +400,9 @@ class Column:
     #: ``None`` when it declared none — the surrogate key. Read the
     #: resolved answer from :func:`varda.analysis.reference`.
     lands_on: ReferencedKey | None
+    #: The column of this table whose value before its last change this
+    #: one holds — Kimball's type 3 — or ``None``.
+    previous_of: Ref[Column] | None
     additivity: Additivity | None
     #: The foreign keys ``varda:semi_additive_over`` names, in the order
     #: written; one name written alone is one of them.

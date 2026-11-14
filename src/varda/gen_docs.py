@@ -68,12 +68,21 @@ def _semi_additive(column: Column, phrase: str) -> str:
     return phrase
 
 
-def _target(column: Column) -> str:
-    """Name what a foreign key reaches, and by which key if not the usual."""
-    target = f"→ `{column.references}`"
-    if column.lands_on == ReferencedKey.DURABLE_KEY:
-        target = f"{target}, by its durable key"
-    return target
+def _reaches(column: Column) -> list[str]:
+    """Name the other table or column a column is defined by, if any.
+
+    What a foreign key reaches, and by which key if not the usual one; and
+    the attribute a previous value holds the earlier value of.
+    """
+    out: list[str] = []
+    if column.references is not None and column.references.name:
+        target = f"→ `{column.references}`"
+        if column.lands_on == ReferencedKey.DURABLE_KEY:
+            target = f"{target}, by its durable key"
+        out.append(target)
+    if column.previous_of is not None and column.previous_of.name:
+        out.append(f"`{column.previous_of}` before its last change")
+    return out
 
 
 def _columns(table: Table) -> list[str]:
@@ -82,9 +91,7 @@ def _columns(table: Table) -> list[str]:
         "| --- | --- | --- | --- |",
     ]
     for column in table.columns:
-        notes: list[str] = []
-        if column.references is not None and column.references.name:
-            notes.append(_target(column))
+        notes = _reaches(column)
         if column.additivity:
             phrase = ADDITIVITY[column.additivity]
             if column.additivity == Additivity.SEMI_ADDITIVE:
