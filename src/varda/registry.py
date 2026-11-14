@@ -98,7 +98,8 @@ def varda_extension() -> Extension:
     Cached because it is a constant: the same object under every extension
     set, with nothing in it that a registry could change.
     """
-    from . import __version__, generators, rules  # noqa: PLC0415 — cycle
+    # Imported here, not at the top: each imports the registry's types.
+    from . import __version__, claims, generators, rules  # noqa: PLC0415
 
     return Extension(
         name="varda",
@@ -110,6 +111,7 @@ def varda_extension() -> Extension:
         rule_tag="V",
         package="varda",
         generators=generators.BUILTIN,
+        claims=claims.implied,
         origin="built in",
     )
 

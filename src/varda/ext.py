@@ -2,16 +2,18 @@
 
 An extension is one party's contribution to Varda: a namespace prefix, a
 LinkML profile declaring the annotations that prefix permits, and optionally
-a set of conformance rules and generators. Varda itself is an instance of
-:class:`Extension` (see :mod:`varda.registry`), which is the test that this
-interface is real rather than a second-class bolt-on: if the core can be
-expressed through it, a third party is not working around anything.
+a set of conformance rules, generators and claims. Varda itself is an
+instance of :class:`Extension` (see :mod:`varda.registry`), which is the
+test that this interface is real rather than a second-class bolt-on: if
+the core can be expressed through it, a third party is not working around
+anything.
 
 Everything an extension runs on is reachable from here, types included: the
 model a rule walks (:class:`Model` and the elements under it), the
 :mod:`~varda.analysis` Varda reads into it, the :class:`Finding` a rule
-yields and the :class:`RuleSet` it registers in, and the :class:`Context` a
-generator is given. An extension imports this module and nothing else.
+yields and the :class:`RuleSet` it registers in, the :class:`Context` a
+generator is given, and the shapes of :mod:`~varda.claims` a claim is built
+from. An extension imports this module and nothing else.
 
 The governing principle is **one party, one namespace; extensions add, they
 never redefine**. An extension may introduce annotations, enumerations and
@@ -30,7 +32,15 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from . import analysis
+from . import analysis, claims
+from .claims import (
+    AtMostOneFlagged,
+    Claim,
+    Determines,
+    FlaggedIsLatest,
+    PeriodNonEmpty,
+    PeriodsDisjoint,
+)
 from .snapshot import (
     Additivity,
     Annotations,
@@ -60,16 +70,21 @@ if TYPE_CHECKING:
 __all__ = [
     "Additivity",
     "Annotations",
+    "AtMostOneFlagged",
+    "Claim",
+    "ClaimError",
     "Column",
     "ColumnRole",
     "Context",
     "Declared",
+    "Determines",
     "Element",
     "Enumeration",
     "Extension",
     "ExtensionError",
     "FactType",
     "Finding",
+    "FlaggedIsLatest",
     "Generator",
     "Hierarchy",
     "Issue",
@@ -77,6 +92,8 @@ __all__ = [
     "Mappings",
     "Model",
     "Options",
+    "PeriodNonEmpty",
+    "PeriodsDisjoint",
     "PermissibleValue",
     "Ref",
     "Report",
@@ -92,6 +109,7 @@ __all__ = [
     "Unit",
     "Vocabulary",
     "analysis",
+    "claims",
 ]
 
 #: A prefix is a namespace, and it becomes a YAML key, a Python identifier and
@@ -133,6 +151,15 @@ class ExtensionError(Exception):
     Always raised, never warned. The cost of raising is a clear error at
     startup; the cost of warning is an estate that half-works for two years
     because nobody reads startup warnings.
+    """
+
+
+class ClaimError(Exception):
+    """An extension's claims raised, or named what the model does not hold.
+
+    Raised while the expectations are generated, which fails the run: a
+    query against a column that is not there fails in the warehouse, long
+    after the run that wrote it, and far from the extension that made it.
     """
 
 
@@ -466,6 +493,13 @@ class Extension:
     package: str = ""
 
     generators: tuple[Generator, ...] = ()
+
+    #: What this extension reads a model as claiming about its data, built
+    #: from the shapes in :mod:`varda.claims` and rendered by Varda's
+    #: expectations generator beside Varda's own. Called once per run with
+    #: the model being generated from; every claim must be about one of its
+    #: tables, and name only that table's columns.
+    claims: Callable[[Model], Iterable[Claim]] | None = None
 
     #: Where this extension was found — entry point, config file, or
     #: injection. Diagnostic only.

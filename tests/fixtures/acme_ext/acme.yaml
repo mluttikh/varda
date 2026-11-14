@@ -41,6 +41,12 @@ classes:
       retention_days:
         description: How long rows are kept before deletion.
         range: integer
+      strict_hierarchies:
+        description: >-
+          Every level of this dimension's hierarchies names a member on its
+          own, so each sits under one parent — the roll-up Acme's finance
+          reports assume, and Varda does not claim for a plain level.
+        range: boolean
 
   AcmeColumnAnnotations:
     description: Annotations Acme permits on a column.

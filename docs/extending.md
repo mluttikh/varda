@@ -212,6 +212,69 @@ release — a derived key that declines to guess in one more case — while
 its signature holds. An extension that needs the model's literal statement
 reads the model.
 
+## Adding claims
+
+A rule asks whether a model is legal. A claim is what a legal model says
+about the rows it will hold that no constraint can state — that one column
+set determines another, that the versions of one entity never overlap.
+Varda renders every claim as a query in `sql/expectations.sql`, returning
+the rows that break it and nothing when it holds, and renders an
+extension's beside its own.
+
+An extension hands over a function from the model to its claims:
+
+```python
+import itertools
+from collections.abc import Iterator
+
+from varda.ext import Claim, Determines, Extension, Model
+
+
+def claims(model: Model) -> Iterator[Claim]:
+    for table in model.dimensions:
+        marked = table.annotations.of("acme").get("strict_hierarchies")
+        if str(marked).lower() != "true":
+            continue
+        for hierarchy in table.hierarchies:
+            levels = hierarchy.levels
+            for parent, child in itertools.pairwise(levels):
+                if parent.is_reference or child.is_reference:
+                    continue
+                if parent.column is None or child.column is None:
+                    continue
+                yield Determines(
+                    hierarchy,
+                    f"each {child.spec} is in one {parent.spec}",
+                    (child.column,),
+                    (parent.column,),
+                )
+
+
+EXTENSION = Extension(name="acme", prefix="acme", claims=claims, ...)
+```
+
+That is a claim Varda does not make itself. It reads a plain level's column
+as naming a member only under its parent — several states have a
+Springfield — so it holds only a level reached through a foreign key to one
+parent. Acme's marked dimensions mean more, and say so here. The query
+carries who claimed it:
+
+```sql
+-- dim_product.merchandise: each brand is in one category (claimed by acme)
+```
+
+The shapes are closed, as the vocabulary is: `Determines`,
+`PeriodNonEmpty`, `PeriodsDisjoint`, `AtMostOneFlagged` and
+`FlaggedIsLatest`, each carrying its `subject` — the table, column or
+hierarchy it is about — and a `statement`, the sentence a report shows. A
+renderer dispatches on them exhaustively, so a shape only one renderer knew
+would be a claim the others skip without a word. Every claim is about one
+table and names only its columns, and one that does not, or names a table of
+another model, stops the run with a `ClaimError` naming the extension: the
+query would otherwise fail in the warehouse, long after the run that wrote
+it. Varda's own are `claims.implied(model)`, public on the same weaker
+promise as `analysis`.
+
 ## Adding generators
 
 ```python
@@ -446,13 +509,15 @@ varda 0.4.0  [varda:]
     table       varda:fact_type, varda:grain, varda:grain_statement, ...
     column      varda:additivity, varda:physical_name, varda:references, ...
     generators  sql, assertions, expectations, docs, sqlalchemy
+    claims      rendered in sql/expectations.sql
 
 acme 1.2.0  [acme:]
     origin      varda.toml (/srv/mart/varda.toml)
     rule tag    ACME
     rules       2
-    table       acme:cost_center, acme:retention_days
+    table       acme:cost_center, acme:retention_days, acme:strict_hierarchies
     column      acme:sensitivity
+    claims      rendered in sql/expectations.sql
 ```
 
 Varda itself appears in that list because it *is* an `Extension`. If the core

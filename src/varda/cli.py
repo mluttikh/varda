@@ -314,6 +314,8 @@ def cmd_ext(args: argparse.Namespace) -> int:
         if active.generators:
             names = ", ".join(g.name for g in active.generators)
             print(f"    generators  {names}")
+        if active.claims is not None:
+            print("    claims      rendered in sql/expectations.sql")
         print()
     return EXIT_OK
 

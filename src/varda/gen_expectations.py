@@ -8,7 +8,10 @@ the model's claims and not Varda's — each follows from roles and
 hierarchies the model already declares — and they live in their own file
 so that `assertions.sql` keeps the one meaning it has.
 
-Each query returns the rows breaking its claim, and nothing when it holds.
+What the model claims is :func:`varda.claims.implied`, and what an active
+extension adds through :attr:`varda.ext.Extension.claims`; this module only
+renders. Each query returns the rows breaking its claim, and nothing when
+it holds.
 Written in the same plain SQL as the assertions, for the same reason: a
 warehouse that cannot enforce a key is exactly the one that most needs the
 check. A flag is read as `CAST(flag AS INTEGER) = 1`, the one spelling of
@@ -41,16 +44,25 @@ is not part of any claim about that key.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
-from . import analysis
+from . import analysis, claims
+from .claims import (
+    AtMostOneFlagged,
+    Determines,
+    FlaggedIsLatest,
+    PeriodNonEmpty,
+    PeriodsDisjoint,
+)
+from .ext import ClaimError
 from .gen_assertions import LABEL
 from .gen_sql import quoted
-from .snapshot import VERSIONING_ROLES, SlowlyChangingType
+from .snapshot import Column, Hierarchy, Table, UniqueKey, table_of
 
 if TYPE_CHECKING:
+    from .claims import Claim
     from .ext import Context
-    from .snapshot import Column, Hierarchy, Level, Model, Table
+    from .snapshot import Element, Model
 
 #: The artifact this generator writes.
 ARTIFACT = "sql/expectations.sql"
@@ -66,11 +78,6 @@ def _names(columns: tuple[Column, ...], alias: str = "") -> str:
     """Render columns as a select list, qualified by ``alias`` if given."""
     prefix = f"{quoted(alias)}." if alias else ""
     return ", ".join(f"{prefix}{quoted(c.physical)}" for c in columns)
-
-
-def _shown(columns: tuple[Column, ...]) -> str:
-    """Render columns the way a label names them."""
-    return f"({', '.join(quoted(c.physical) for c in columns)})"
 
 
 def _present(columns: tuple[Column, ...], alias: str = "") -> list[str]:
@@ -104,255 +111,168 @@ def _same(columns: tuple[Column, ...], left: str, right: str) -> list[str]:
     ]
 
 
+def _where(subject: Element) -> str:
+    """Name what a claim is about the way its label shows it."""
+    table = table_of(subject)
+    match subject:
+        case Table():
+            return table.physical
+        case Column():
+            return f"{table.physical}.{subject.physical}"
+        case Hierarchy() | UniqueKey():
+            return f"{table.physical}.{subject.name}"
+        case _:
+            assert_never(subject)
+
+
 # ---------------------------------------------------------------------------
-# Type 2 — the history is sound
+# One query per shape
 # ---------------------------------------------------------------------------
 
 
-def business_keys(table: Table) -> tuple[tuple[Column, ...], ...]:
-    """Name what identifies one entity across its versions, each way it is.
-
-    Read from the table's own unique claims: a type-2 dimension is unique
-    on a business key plus something marking versions apart, so each claim
-    holding a versioning column, less that column, is one business key. Two
-    sources identifying a product two ways give two keys, and each is
-    checked on its own. A claim with nothing left gives none.
-    """
-    out: list[tuple[Column, ...]] = []
-    seen: set[tuple[str, ...]] = set()
-    for claim in analysis.unique_claims(table):
-        if not any(c.role in VERSIONING_ROLES for c in claim):
-            continue
-        key = tuple(c for c in claim if c.role not in VERSIONING_ROLES)
-        names = tuple(c.physical for c in key)
-        if key and names not in seen:
-            seen.add(names)
-            out.append(key)
-    return tuple(out)
+def _empty_periods(claim: PeriodNonEmpty, relation: str) -> list[str]:
+    """Render the rows whose period holds no instant."""
+    start, end = quoted(claim.start.physical), quoted(claim.end.physical)
+    return [
+        'SELECT count(*) AS "empty_versions"',
+        f"FROM {relation}",
+        f"WHERE {end} <= {start};",
+    ]
 
 
-def _empty_periods(table: Table, schema: str) -> str:
-    """Render the versions whose period holds no instant."""
-    start, end = table.version_starts[0], table.version_ends[0]
-    return "\n".join(
-        [
-            (
-                f"{LABEL}{table.physical}: every version is in force for a "
-                f"while ({quoted(start.physical)} < {quoted(end.physical)})"
-            ),
-            'SELECT count(*) AS "empty_versions"',
-            f"FROM {_relation(table, schema)}",
-            f"WHERE {quoted(end.physical)} <= {quoted(start.physical)};",
-        ]
-    )
-
-
-def _overlaps(table: Table, schema: str, key: tuple[Column, ...]) -> str:
-    """Render the versions of one entity that are in force at once.
+def _overlaps(claim: PeriodsDisjoint, table: Table, schema: str) -> list[str]:
+    """Render the rows sharing a key whose periods are in force at once.
 
     `b` starts after `a` and before `a` ends, or `a` never ends. Strictly
-    after: two versions starting together break the table's unique key,
-    which `assertions.sql` already reports.
+    after: two starting together break a unique key, which says so plainly.
     """
-    start, end = table.version_starts[0], table.version_ends[0]
-    s, e = quoted(start.physical), quoted(end.physical)
-    join = _same(key, "a", "b")
-    return "\n".join(
-        [
-            (
-                f"{LABEL}{table.physical}: versions of {_shown(key)} do "
-                "not overlap"
-            ),
-            f'SELECT {_names(key, "a")}, count(*) AS "overlaps"',
-            f"FROM {_relation(table, schema, 'a')}",
-            f"JOIN {_relation(table, schema, 'b')}",
-            f"  ON {join[0]}",
-            *(f" AND {line}" for line in join[1:]),
-            f' AND "b".{s} > "a".{s}',
-            f' AND ("a".{e} IS NULL OR "a".{e} > "b".{s})',
-            f"GROUP BY {_names(key, 'a')};",
-        ]
-    )
+    s, e = quoted(claim.start.physical), quoted(claim.end.physical)
+    join = _same(claim.key, "a", "b")
+    return [
+        f'SELECT {_names(claim.key, "a")}, count(*) AS "overlaps"',
+        f"FROM {_relation(table, schema, 'a')}",
+        f"JOIN {_relation(table, schema, 'b')}",
+        f"  ON {join[0]}",
+        *(f" AND {line}" for line in join[1:]),
+        f' AND "b".{s} > "a".{s}',
+        f' AND ("a".{e} IS NULL OR "a".{e} > "b".{s})',
+        f"GROUP BY {_names(claim.key, 'a')};",
+    ]
 
 
-def _one_current(table: Table, schema: str, key: tuple[Column, ...]) -> str:
-    """Render the entities more than one of whose versions is current."""
-    flag = table.current_flags[0]
-    names = _names(key)
-    return "\n".join(
-        [
-            (
-                f"{LABEL}{table.physical}: at most one version of "
-                f"{_shown(key)} is current"
-            ),
-            f'SELECT {names}, count(*) AS "current_versions"',
-            f"FROM {_relation(table, schema)}",
-            f"WHERE {_flagged(flag)}",
-            *(line.replace("WHERE", "  AND", 1) for line in _present(key)),
-            f"GROUP BY {names}",
-            "HAVING count(*) > 1;",
-        ]
-    )
+def _one_flagged(claim: AtMostOneFlagged, relation: str) -> list[str]:
+    """Render the keys more than one of whose rows is flagged."""
+    names = _names(claim.key)
+    return [
+        f'SELECT {names}, count(*) AS "current_versions"',
+        f"FROM {relation}",
+        f"WHERE {_flagged(claim.flag)}",
+        *(line.replace("WHERE", "  AND", 1) for line in _present(claim.key)),
+        f"GROUP BY {names}",
+        "HAVING count(*) > 1;",
+    ]
 
 
-def _latest_current(
-    table: Table, schema: str, key: tuple[Column, ...], mark: Column
-) -> str:
-    """Render the current versions that a later version supersedes."""
-    flag = table.current_flags[0]
-    m = quoted(mark.physical)
-    join = _same(key, "cur", "later")
-    return "\n".join(
-        [
-            (
-                f"{LABEL}{table.physical}: the current version of "
-                f"{_shown(key)} is its latest"
-            ),
-            'SELECT count(*) AS "superseded_current"',
-            f"FROM {_relation(table, schema, 'cur')}",
-            f"WHERE {_flagged(flag, 'cur')}",
-            "  AND EXISTS (",
-            "    SELECT 1",
-            f"    FROM {_relation(table, schema, 'later')}",
-            f"    WHERE {join[0]}",
-            *(f"      AND {line}" for line in join[1:]),
-            f'      AND "later".{m} > "cur".{m}',
-            "  );",
-        ]
-    )
+def _latest(claim: FlaggedIsLatest, table: Table, schema: str) -> list[str]:
+    """Render the flagged rows that a later row sharing their key follows."""
+    m = quoted(claim.order.physical)
+    join = _same(claim.key, "cur", "later")
+    return [
+        'SELECT count(*) AS "superseded_current"',
+        f"FROM {_relation(table, schema, 'cur')}",
+        f"WHERE {_flagged(claim.flag, 'cur')}",
+        "  AND EXISTS (",
+        "    SELECT 1",
+        f"    FROM {_relation(table, schema, 'later')}",
+        f"    WHERE {join[0]}",
+        *(f"      AND {line}" for line in join[1:]),
+        f'      AND "later".{m} > "cur".{m}',
+        "  );",
+    ]
 
 
-def _history(table: Table, schema: str) -> list[str]:
-    """Every claim a type-2 dimension's versioning columns make."""
-    if table.scd != SlowlyChangingType.TYPE_2:
-        return []
-    window = bool(table.version_starts and table.version_ends)
-    out = [_empty_periods(table, schema)] if window else []
-    marks = table.version_starts or table.version_numbers
-    for key in business_keys(table):
-        if window:
-            out.append(_overlaps(table, schema, key))
-        if table.current_flags:
-            out.append(_one_current(table, schema, key))
-            if marks:
-                out.append(_latest_current(table, schema, key, marks[0]))
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Hierarchies — each member rolls up into one parent
-# ---------------------------------------------------------------------------
-
-
-def _functional(
-    relation: str,
-    label: str,
-    determinant: tuple[Column, ...],
-    dependent: tuple[Column, ...],
-    count_as: str,
-) -> str:
-    """Render the values of ``determinant`` seen with several ``dependent``.
+def _determines(claim: Determines, relation: str) -> list[str]:
+    """Render the values of the determinant seen with several dependents.
 
     Counted over distinct pairs rather than with `count(DISTINCT ...)`,
     which takes one column in most engines and a tuple in few.
     """
-    both = (*determinant, *dependent)
-    names = _names(determinant)
-    return "\n".join(
-        [
-            f"{LABEL}{label}",
-            f'SELECT {names}, count(*) AS "{count_as}"',
-            "FROM (",
-            f"  SELECT DISTINCT {_names(both)}",
-            f"  FROM {relation}",
-            *(f"  {line}" for line in _present(both)),
-            ') AS "pairs"',
-            f"GROUP BY {names}",
-            "HAVING count(*) > 1;",
-        ]
-    )
+    both = (*claim.determinant, *claim.dependent)
+    names = _names(claim.determinant)
+    return [
+        f'SELECT {names}, count(*) AS "dependents"',
+        "FROM (",
+        f"  SELECT DISTINCT {_names(both)}",
+        f"  FROM {relation}",
+        *(f"  {line}" for line in _present(both)),
+        ') AS "pairs"',
+        f"GROUP BY {names}",
+        "HAVING count(*) > 1;",
+    ]
 
 
-def _own(table: Table, columns: tuple[Column, ...]) -> bool:
-    """Flag whether every column is one of ``table``'s own."""
-    return bool(columns) and all(c.table is table for c in columns)
+def render(claim: Claim, schema: str = "mart", claimant: str = "") -> str:
+    """Render one claim as a labelled query for the rows that break it.
 
-
-def _roll_up(
-    table: Table, schema: str, hierarchy: Hierarchy, i: int
-) -> str | None:
-    """Render one level reached through a foreign key rolling up, or nothing.
-
-    The foreign key names one row of another dimension, so it is a whole
-    identity on its own and can sit under one parent only. A level that
-    declares its own key is identified in the table it reaches, which this
-    table's rows cannot see, and is left alone.
+    ``claimant`` names the extension that made the claim, shown on the
+    label so a violation found by running the file can be traced to who
+    asserted it. Empty for Varda's own, which every file is full of.
     """
-    level: Level = hierarchy.levels[i]
-    via = level.via
-    if not level.is_reference or level.key is not None or via is None:
-        return None
-    if analysis.reference(via) is None:
-        return None  # V402, V403 or V406 says why
-    parent = analysis.identities(hierarchy)[i - 1]
-    if not _own(table, parent):
-        return None
-    above = hierarchy.levels[i - 1]
-    label = (
-        f"{table.physical}.{hierarchy.name}: each {level.spec} is in one "
-        f"{above.spec}"
-    )
+    table = table_of(claim.subject)
     relation = _relation(table, schema)
-    return _functional(relation, label, (via,), parent, "parents")
-
-
-def _named_once(
-    table: Table, schema: str, hierarchy: Hierarchy, i: int
-) -> str | None:
-    """Render one level whose key is not its name, named one way, or nothing.
-
-    The key says which member a row belongs to, and the column what that
-    member is called; one member with two names is two members that the key
-    cannot tell apart.
-    """
-    level: Level = hierarchy.levels[i]
-    column = level.column
-    key = analysis.level_key(level)
-    if level.is_reference or level.key is None or column is None:
-        return None
-    if key is None or key is column:
-        return None
-    identity = analysis.identities(hierarchy)[i]
-    if not _own(table, (*identity, column)):
-        return None
-    label = (
-        f"{table.physical}.{hierarchy.name}: each {_shown(identity)} is "
-        f"named one {quoted(column.physical)}"
-    )
-    relation = _relation(table, schema)
-    return _functional(relation, label, identity, (column,), "names")
-
-
-def _hierarchies(table: Table, schema: str) -> list[str]:
-    """Every roll-up claim a table's hierarchies make that rows can show."""
-    if table.scd == SlowlyChangingType.TYPE_2:
-        return []
-    out: list[str] = []
-    for hierarchy in table.hierarchies:
-        for i in range(len(hierarchy.levels)):
-            if i > 0:
-                found = _roll_up(table, schema, hierarchy, i)
-                if found is not None:
-                    out.append(found)
-            named = _named_once(table, schema, hierarchy, i)
-            if named is not None:
-                out.append(named)
-    return out
+    match claim:
+        case PeriodNonEmpty():
+            query = _empty_periods(claim, relation)
+        case PeriodsDisjoint():
+            query = _overlaps(claim, table, schema)
+        case AtMostOneFlagged():
+            query = _one_flagged(claim, relation)
+        case FlaggedIsLatest():
+            query = _latest(claim, table, schema)
+        case Determines():
+            query = _determines(claim, relation)
+        case _:
+            assert_never(claim)
+    by = f" (claimed by {claimant})" if claimant else ""
+    label = f"{LABEL}{_where(claim.subject)}: {claim.statement}{by}"
+    return "\n".join([label, *query])
 
 
 # ---------------------------------------------------------------------------
 # The file
 # ---------------------------------------------------------------------------
+
+
+def collected(model: Model) -> tuple[tuple[str, Claim], ...]:
+    """Gather every claim the active extensions make, with who made each.
+
+    Varda's first, then each extension's in registry order, then ordered by
+    the table each is about — the order the DDL creates them — so a table's
+    claims read together whoever made them. A claim an extension hands over
+    is checked before it is rendered, and one that cannot be is refused
+    naming the extension, because a query against a column that is not
+    there fails in the warehouse, long after the run that wrote it.
+    """
+    found: list[tuple[str, Claim]] = []
+    for ext in model.registry.extensions:
+        if ext.claims is None:
+            continue
+        try:
+            made = tuple(ext.claims(model))
+        except Exception as exc:
+            # Deliberately broad, as for a rule: the job is to name whose
+            # code failed rather than to show a traceback through it.
+            msg = f"{ext.name}'s claims raised {type(exc).__name__}: {exc}"
+            raise ClaimError(msg) from exc
+        for claim in made:
+            problem = claims.fault(claim, model)
+            if problem is not None:
+                msg = f"{ext.name} made a claim that {problem}: {claim!r}"
+                raise ClaimError(msg)
+            found.append(("" if ext.name == "varda" else ext.name, claim))
+    order = {t.name: i for i, t in enumerate(analysis.creation_order(model))}
+    found.sort(key=lambda pair: order[table_of(pair[1].subject).name])
+    return tuple(found)
 
 
 def generate(model: Model, schema: str = "mart") -> str:
@@ -370,11 +290,7 @@ def generate(model: Model, schema: str = "mart") -> str:
         "",
         "",
     ]
-    blocks = [
-        block
-        for table in analysis.creation_order(model)
-        for block in (*_history(table, schema), *_hierarchies(table, schema))
-    ]
+    blocks = [render(c, schema, who) for who, c in collected(model)]
     if not blocks:
         blocks = [NOTHING_CLAIMED]
     return "\n".join(header) + "\n\n".join(blocks) + "\n"
